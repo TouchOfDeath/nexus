@@ -55,38 +55,31 @@ This document systematically logs the findings, friction points, edge cases, and
 
 ---
 
-#### 2. Float Infix Expressions Lack Parenthesis Precedence
+#### 2. Float Infix Expressions Lack Parenthesis Precedence [RESOLVED]
 - **Severity**: Medium (Ergonomic / Readability Friction)
-- **Symptom**:
-  Floating-point infix expressions (`+.`, `-.`, `*.`, `/.`) in `nexprep` do not support parenthetical grouping `(...)`. The desugarer splits tokens on whitespace, causing expressions like:
-  ```nex
-  let v1 = v1 -. (lr *. d_zo *. ah1)
-  ```
-  to fail compilation due to tokens `(lr` and `ah1)`.
-- **Workaround**:
-  Decompose all composite formulas into individual sequential binary operations:
-  ```nex
-  let delta_v1 = lr *. d_zo *. ah1
-  let v1 = v1 -. delta_v1
-  ```
-- **Proposed Enhancement**:
-  Extend `desugar_float` in `nexprep` with a standard shunting-yard or tree rewrite to support arbitrary parenthesis nesting.
+- **Status**: **RESOLVED** (Implemented in `tools/nexprep.c` via Shunting-Yard AST desugaring)
+- **Previous Limitation**:
+  Expressions like `let v1 = v1 -. (lr *. d_zo *. ah1)` failed compilation because tokens were split on whitespace without parenthesis grouping or operator precedence.
+- **Resolution**:
+  Implemented an expression tokenizer and Dijkstra Shunting-Yard parser supporting arbitrary parenthesis nesting `(...)` and standard mathematical operator precedence (`*.`, `/.` have higher precedence than `+.`, `-.`). Emits optimized sequential `fmul`/`fdiv`/`fadd`/`fsub` instructions.
+- **Verified**:
+  - `let d_zo = err *. y_hat *. (1.0 -. y_hat)`
+  - `let v1 = v1 -. (lr *. d_zo *. ah1)`
+  - Verified by foundation test `Float Infix Parentheses & Precedence`.
 
 ---
 
-#### 3. Immediate Float Literals in `store64` Parsed as Integers
+#### 3. Immediate Float Literals in `store64` Parsed as Integers [RESOLVED]
 - **Severity**: Medium (Silent Data Corruption)
-- **Symptom**:
-  Writing `store64 [ptr + 0] 1.0` parses `1` as an integer literal and emits `mov qword [ptr], 1`. The integer `1` loaded into an SSE register represents a denormalized/subnormal float ($0.00000000000...$), and the trailing `.0` is either dropped or rejected.
-- **Workaround**:
-  Always bind float literals to a variable first before storing:
-  ```nex
-  let val = 1.0
-  store64 [ptr] val
-  ```
-  Or use array literal syntax (`let Y = [0.0, 1.0]`), which generates intermediate `_arr_el_N` variables.
-- **Proposed Enhancement**:
-  Have the compiler or preprocessor detect floating-point constants in `store64` arguments and allocate 64-bit IEEE-754 constant pool entries or load via XMM register.
+- **Status**: **RESOLVED** (Implemented in `tools/nexprep.c` via `desugar_store_float`)
+- **Previous Limitation**:
+  Writing `store64 [ptr + 0] 1.5` parsed `1` as an integer literal and stored `1`, corrupting the IEEE-754 64-bit float representation.
+- **Resolution**:
+  Added `desugar_store_float()` to detect immediate float literals in `store64` / `store` destination instructions, automatically hoisting them to 64-bit IEEE float variables (`let _f_sval_N = <literal>; store64 [ptr] _f_sval_N`) preserving exact float bit patterns.
+- **Verified**:
+  - `store64 [arr + 0] 1.5`
+  - `store64 [arr + 8] -2.5`
+  - Verified by foundation test `Store64 Float Literal Support`.
 
 ---
 

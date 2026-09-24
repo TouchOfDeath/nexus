@@ -556,6 +556,252 @@ static int is_relop_f(const char *s, int *len, const char **clean_op) {
     return 0;
 }
 
+static int is_float_literal(const char *s) {
+    if (!*s) return 0;
+    const char *p = s;
+    if (*p == '+' || *p == '-') p++;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    if (*p != '.') return 0;
+    p++;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return *p == '\0';
+}
+
+static int desugar_store_float(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int is_store64 = 0;
+    if (!strncmp(p, "store64 ", 8) || !strncmp(p, "store64\t", 8)) {
+        is_store64 = 1;
+        p += 8;
+    } else if (!strncmp(p, "store ", 6) || !strncmp(p, "store\t", 6)) {
+        is_store64 = 0;
+        p += 6;
+    } else {
+        return 0;
+    }
+
+    int indent_len = (int)(p - clean - (is_store64 ? 8 : 6));
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof indent, "%.*s", indent_len, clean);
+    }
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '[') return 0;
+    char *close_bracket = strchr(p, ']');
+    if (!close_bracket) return 0;
+
+    char addr[128];
+    int addr_len = (int)(close_bracket - p + 1);
+    snprintf(addr, sizeof addr, "%.*s", addr_len, p);
+
+    char *val = close_bracket + 1;
+    while (*val == ' ' || *val == '\t') val++;
+    char val_buf[128];
+    snprintf(val_buf, sizeof val_buf, "%s", val);
+    char *cm = strchr(val_buf, '#');
+    if (cm) *cm = '\0';
+    char *sc = strchr(val_buf, ';');
+    if (sc) *sc = '\0';
+    int vlen = (int)strlen(val_buf);
+    while (vlen > 0 && (val_buf[vlen-1] == ' ' || val_buf[vlen-1] == '\t' ||
+                        val_buf[vlen-1] == '\n' || val_buf[vlen-1] == '\r')) {
+        val_buf[--vlen] = '\0';
+    }
+
+    if (is_float_literal(val_buf)) {
+        static int fstore_counter = 0;
+        int cid = fstore_counter++;
+        snprintf(out, cap, "%slet _f_sval_%d = %s\n%sstore64 %s _f_sval_%d\n",
+                 indent, cid, val_buf, indent, addr, cid);
+        return 1;
+    }
+    return 0;
+}
+
+static int op_prec(const char *op) {
+    if (!strcmp(op, "+.") || !strcmp(op, "-.")) return 1;
+    if (!strcmp(op, "*.") || !strcmp(op, "/.")) return 2;
+    return 0;
+}
+
+typedef enum {
+    TOK_F_END,
+    TOK_F_OPERAND,
+    TOK_F_OP,
+    TOK_F_LPAREN,
+    TOK_F_RPAREN
+} FTokType;
+
+typedef struct {
+    FTokType type;
+    char text[128];
+} FToken;
+
+static int tokenize_fexpr(const char *s, FToken *tokens, int max_tokens) {
+    int ntok = 0;
+    const char *p = s;
+    while (*p && ntok < max_tokens) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p || *p == '#' || *p == ';' || *p == '\n' || *p == '\r') break;
+
+        if (*p == '(') {
+            tokens[ntok].type = TOK_F_LPAREN;
+            strcpy(tokens[ntok].text, "(");
+            ntok++;
+            p++;
+            continue;
+        }
+        if (*p == ')') {
+            tokens[ntok].type = TOK_F_RPAREN;
+            strcpy(tokens[ntok].text, ")");
+            ntok++;
+            p++;
+            continue;
+        }
+
+        /* Check float operators: +., -., *., /. */
+        if ((*p == '+' || *p == '-' || *p == '*' || *p == '/') && *(p + 1) == '.') {
+            tokens[ntok].type = TOK_F_OP;
+            tokens[ntok].text[0] = *p;
+            tokens[ntok].text[1] = '.';
+            tokens[ntok].text[2] = '\0';
+            ntok++;
+            p += 2;
+            continue;
+        }
+
+        /* General operand: identifier or literal number */
+        int len = 0;
+        char buf[128];
+        while (*p && *p != ' ' && *p != '\t' && *p != '(' && *p != ')' &&
+               *p != '#' && *p != ';' && *p != '\n' && *p != '\r') {
+            if ((*p == '+' || *p == '-' || *p == '*' || *p == '/') && *(p + 1) == '.') {
+                break;
+            }
+            if (len < 127) buf[len++] = *p;
+            p++;
+        }
+        buf[len] = '\0';
+        if (len > 0) {
+            tokens[ntok].type = TOK_F_OPERAND;
+            strcpy(tokens[ntok].text, buf);
+            ntok++;
+        }
+    }
+    return ntok;
+}
+
+static int desugar_float_expr(const char *indent, const char *dest, const char *rhs, char *out, size_t cap) {
+    FToken tokens[128];
+    int ntok = tokenize_fexpr(rhs, tokens, 128);
+    if (ntok == 0) return 0;
+
+    int has_fop = 0;
+    for (int i = 0; i < ntok; i++) {
+        if (tokens[i].type == TOK_F_OP) { has_fop = 1; break; }
+    }
+    if (!has_fop) return 0;
+
+    char op_stack[128][16];
+    int op_top = 0;
+
+    char val_stack[128][128];
+    int val_top = 0;
+
+    out[0] = '\0';
+
+    for (int i = 0; i < ntok; i++) {
+        if (tokens[i].type == TOK_F_OPERAND) {
+            if (val_top >= 128) return 0;
+            strcpy(val_stack[val_top++], tokens[i].text);
+        } else if (tokens[i].type == TOK_F_LPAREN) {
+            if (op_top >= 128) return 0;
+            strcpy(op_stack[op_top++], "(");
+        } else if (tokens[i].type == TOK_F_RPAREN) {
+            while (op_top > 0 && strcmp(op_stack[op_top - 1], "(") != 0) {
+                if (val_top < 2) return 0;
+                char op[16];
+                strcpy(op, op_stack[--op_top]);
+                char r[128], l[128];
+                strcpy(r, val_stack[--val_top]);
+                strcpy(l, val_stack[--val_top]);
+
+                char tmp[128];
+                snprintf(tmp, sizeof tmp, "_f_tmp_%d", ftmp_counter++);
+                char line[MAXLINE];
+                snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, tmp, get_fop(op), l, r);
+                strncat(out, line, cap - strlen(out) - 1);
+                strcpy(val_stack[val_top++], tmp);
+            }
+            if (op_top > 0 && strcmp(op_stack[op_top - 1], "(") == 0) {
+                op_top--;
+            } else {
+                return 0;
+            }
+        } else if (tokens[i].type == TOK_F_OP) {
+            int prec = op_prec(tokens[i].text);
+            while (op_top > 0 && strcmp(op_stack[op_top - 1], "(") != 0 &&
+                   op_prec(op_stack[op_top - 1]) >= prec) {
+                if (val_top < 2) return 0;
+                char op[16];
+                strcpy(op, op_stack[--op_top]);
+                char r[128], l[128];
+                strcpy(r, val_stack[--val_top]);
+                strcpy(l, val_stack[--val_top]);
+
+                char tmp[128];
+                snprintf(tmp, sizeof tmp, "_f_tmp_%d", ftmp_counter++);
+                char line[MAXLINE];
+                snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, tmp, get_fop(op), l, r);
+                strncat(out, line, cap - strlen(out) - 1);
+                strcpy(val_stack[val_top++], tmp);
+            }
+            strcpy(op_stack[op_top++], tokens[i].text);
+        }
+    }
+
+    while (op_top > 0) {
+        if (strcmp(op_stack[op_top - 1], "(") == 0) return 0;
+        if (val_top < 2) return 0;
+        char op[16];
+        strcpy(op, op_stack[--op_top]);
+        char r[128], l[128];
+        strcpy(r, val_stack[--val_top]);
+        strcpy(l, val_stack[--val_top]);
+
+        int is_final = (op_top == 0 && val_top == 0);
+        char target[128];
+        if (is_final) {
+            strcpy(target, dest);
+        } else {
+            snprintf(target, sizeof target, "_f_tmp_%d", ftmp_counter++);
+        }
+
+        char line[MAXLINE];
+        snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, target, get_fop(op), l, r);
+        strncat(out, line, cap - strlen(out) - 1);
+        strcpy(val_stack[val_top++], target);
+    }
+
+    if (val_top == 1 && strcmp(val_stack[0], dest) != 0) {
+        char line[MAXLINE];
+        snprintf(line, sizeof line, "%slet %s = %s\n", indent, dest, val_stack[0]);
+        strncat(out, line, cap - strlen(out) - 1);
+    }
+
+    return 1;
+}
+
 static int desugar_float(const char *in, char *out, size_t cap) {
     char clean[MAXLINE];
     snprintf(clean, sizeof clean, "%s", in);
@@ -622,7 +868,7 @@ static int desugar_float(const char *in, char *out, size_t cap) {
         return 0;
     }
 
-    /* 2. Let assignments: let <dest> = <op1> <op.> <op2> ... */
+    /* 2. Let assignments: let <dest> = <rhs> */
     if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
         char *eq = strchr(p, '=');
         if (eq) {
@@ -630,62 +876,22 @@ static int desugar_float(const char *in, char *out, size_t cap) {
             while (*rhs == ' ' || *rhs == '\t') rhs++;
             if (*rhs == '"') return 0;
 
-            char rhs_copy[MAXLINE];
-            snprintf(rhs_copy, sizeof rhs_copy, "%s", rhs);
-            char *nl = strchr(rhs_copy, '\n');
-            if (nl) *nl = '\0';
-            char *cr = strchr(rhs_copy, '\r');
-            if (cr) *cr = '\0';
-            char *cm = strchr(rhs_copy, '#');
+            char dest[128];
+            int dlen = (int)(eq - (p + 4));
+            snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
+            char *dstart = dest;
+            while (*dstart == ' ' || *dstart == '\t') dstart++;
+            char *dend = dstart + strlen(dstart);
+            while (dend > dstart && (dend[-1] == ' ' || dend[-1] == '\t')) *--dend = '\0';
+
+            char rhs_clean[MAXLINE];
+            snprintf(rhs_clean, sizeof rhs_clean, "%s", rhs);
+            char *cm = strchr(rhs_clean, '#');
             if (cm) *cm = '\0';
-            char *sc = strchr(rhs_copy, ';');
+            char *sc = strchr(rhs_clean, ';');
             if (sc) *sc = '\0';
 
-            char tokens[32][128];
-            int ntokens = 0;
-            char *tok = strtok(rhs_copy, " \t");
-            while (tok && ntokens < 32) {
-                snprintf(tokens[ntokens++], 128, "%s", tok);
-                tok = strtok(NULL, " \t");
-            }
-
-            int has_fop = 0;
-            for (int i = 0; i < ntokens; i++) {
-                if (get_fop(tokens[i])) { has_fop = 1; break; }
-            }
-
-            if (has_fop && ntokens >= 3) {
-                char dest[128];
-                int dlen = (int)(eq - (p + 4));
-                snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
-                char *dstart = dest;
-                while (*dstart == ' ' || *dstart == '\t') dstart++;
-                char *dend = dstart + strlen(dstart);
-                while (dend > dstart && (dend[-1] == ' ' || dend[-1] == '\t')) *--dend = '\0';
-
-                char cur_res[128];
-                out[0] = '\0';
-                snprintf(cur_res, sizeof cur_res, "%s", tokens[0]);
-                int cur_tok = 1;
-
-                while (cur_tok + 1 < ntokens) {
-                    const char *fop = get_fop(tokens[cur_tok]);
-                    if (!fop) break;
-                    const char *next_op = tokens[cur_tok + 1];
-                    int is_last = (cur_tok + 2 >= ntokens);
-                    char target_dest[128];
-                    if (is_last) {
-                        snprintf(target_dest, sizeof target_dest, "%s", dstart);
-                    } else {
-                        snprintf(target_dest, sizeof target_dest, "_f_tmp_%d", ftmp_counter++);
-                    }
-                    char line_buf[512];
-                    snprintf(line_buf, sizeof line_buf, "%slet %s = %s %s %s\n",
-                             indent, target_dest, fop, cur_res, next_op);
-                    strncat(out, line_buf, cap - strlen(out) - 1);
-                    snprintf(cur_res, sizeof cur_res, "%s", target_dest);
-                    cur_tok += 2;
-                }
+            if (desugar_float_expr(indent, dstart, rhs_clean, out, cap)) {
                 return 1;
             }
         }
@@ -2236,6 +2442,19 @@ static void emit_line(const char *raw, FILE *out) {
     char f_desugared[MAXLINE];
     if (desugar_float(raw, f_desugared, sizeof f_desugared)) {
         char *p = f_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char fstore_desugared[MAXLINE];
+    if (desugar_store_float(raw, fstore_desugared, sizeof fstore_desugared)) {
+        char *p = fstore_desugared;
         while (*p) {
             char *next = strchr(p, '\n');
             if (next) *next = '\0';

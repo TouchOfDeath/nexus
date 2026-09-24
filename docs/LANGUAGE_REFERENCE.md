@@ -133,13 +133,22 @@ let i_val = ftoi f_val      # float -> integer truncate (42)
 ```
 
 #### Infix Syntax Sugar (via `nexprep`)
-The multi-file preprocessor (`nexprep`) transparently desugars infix float operators:
+The multi-file preprocessor (`nexprep`) transparently desugars infix float operators with standard operator precedence (`*.`, `/.` over `+.`, `-.`) and arbitrary parenthesis nesting:
 ```nex
-let c = a +. b              # desugars to: let c = fadd a b
-let d = a -. b              # desugars to: let d = fsub a b
-let e = a *. b              # desugars to: let e = fmul a b
-let f = a /. b              # desugars to: let f = fdiv a b
-let z = a +. b *. c         # chained: hoists intermediate temps
+let c = a +. b                     # desugars to: let c = fadd a b
+let d = a -. b                     # desugars to: let d = fsub a b
+let e = a *. b                     # desugars to: let e = fmul a b
+let f = a /. b                     # desugars to: let f = fdiv a b
+let z = a +. b *. c                # precedence: evaluates b *. c first
+let w = (a +. b) *. (c -. d)       # parenthesized subexpressions
+let inv = 1.0 /. (1.0 +. e)        # complex nested expressions
+```
+
+#### Memory Stores with Float Literals
+`store64` and `store` automatically accept immediate 64-bit IEEE float literals:
+```nex
+store64 [ptr + 0] 1.5              # hoists to 64-bit float temp & stores
+store64 [arr + idx * 8] -0.25      # preserves IEEE-754 bit pattern
 ```
 
 ### 3.5 Compound Assignment Operators (v5.6)
