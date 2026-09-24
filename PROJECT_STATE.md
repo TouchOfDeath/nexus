@@ -12,12 +12,21 @@
   - **Compiler Diagnostics**: 13/13 passing
   - **Foundation Tests**: 39/39 passing
   - **Stdlib Assertions**: 94/94 passing
+  - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)
   - **Interactive Demos**: 3/3 passing
 - **Determinism**: Gen 2 == Gen 3 == Gen 4 bit-for-bit self-hosting parity verified (`./nexus self-host`).
 
 ---
 
 ## 2. Recent Milestones Completed
+- **Compiler Optimizer & Truthiness Conditions (`tests/optimizer_test.nex`)**:
+  - **Truthiness**: `if flag {`, `while 1 {`, `for i = 0, 1, i = i + 1 {` (bare identifier/literal desugared to non-zero check).
+  - **Compile-time Constant Predicates**: `if 1 == 1 {`, `if 2 < 1 {`, `else if 2 == 2 {` folded via injected `_TRUE_ != 0` and `_FALSE_ != 0`.
+  - **Constant Folding**: Integer chain compile-time evaluation (`2 + 3 * 4 -> 20`, `100 - 30 - 5 -> 65`, wrapping `+ - *`, truncating `/ %`).
+  - **64-bit Integer Literal Decomposition**: Large constants ($> 2^{31}-1$) decomposed into Horner base-65536 chains (`p3 * 65536 + p2 * 65536 + p1 * 65536 + p0`), allowing arbitrary 64-bit integer values without compiler truncation.
+  - **Unary Builtin Folds**: `abs <lit>` and `len "<lit>"` compile-time folded.
+  - **Memory Addressing Folds**: `[ptr + 0 * 8]` and `[ptr + 1 * 8]` constant-folded to `[ptr + 0]` and `[ptr + 8]`.
+  - **Universal Assert Pipeline**: `assert_line` expansion routes through `emit_line`, guaranteeing all expression desugarers apply to test assertions.
 - **Mathematics & Simulation Ecosystem**:
   - `stdlib/combinatorics.nex`: Permutations, combinations, multinomials, factorials.
   - `stdlib/sets.nex`: Bitset/hash set operations (union, intersection, difference, Cartesian).
@@ -35,21 +44,10 @@
 
 ---
 
-## 3. Work In Progress
-- **Feature**: Compiler Optimizer & Truthiness Conditions (`tests/optimizer_test.nex`)
-  - **Truthiness**: `if flag {`, `while 1 {`, `for i = 0, 1, i += 1 {` (bare identifier/literal as non-zero condition).
-  - **Constant Folding**: Integer chain compile-time evaluation (`2 + 3 * 4 -> 20`).
-  - **Strength Reduction**: Multiply/divide by powers of 2 converted to `shl` / `sar`.
-  - **64-bit Integer Literal Handling**: Decomposing large constants (> 32-bit) cleanly.
-  - **Target Suite**: `tests/optimizer_test.nex` (52 assertions).
-
----
-
-## 4. Next Roadmap Goals
-1. **Pass `tests/optimizer_test.nex`**: Wire truthiness desugaring and folding into `tools/nexprep.c` and test cleanly.
-2. **Quiet Test Runner**: Add `--quiet` / `-q` flag to `./nexus test` for fast, low-token verification.
-3. **2D Matrix Literals & Native Neural Net**: Build a pure NEXUS 2-layer perceptron demo (`examples/neural_network.nex`).
-4. **String Interpolation**: Implement `print_fmt "Epoch {e}: Loss = {l}"`.
+## 3. Work In Progress / Next Roadmap Goals
+1. **Quiet Test Runner**: Add `--quiet` / `-q` flag to `./nexus test` for fast, low-token verification.
+2. **2D Matrix Literals & Native Neural Net**: Build a pure NEXUS 2-layer perceptron demo (`examples/neural_network.nex`).
+3. **String Interpolation**: Implement `print_fmt "Epoch {e}: Loss = {l}"`.
 
 ---
 

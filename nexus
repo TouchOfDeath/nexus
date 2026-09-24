@@ -380,6 +380,24 @@ if os.path.exists(stdlib_src):
     else:
         print("[-] Stdlib suite: FAIL")
 
+# Compiler Optimizer test suite (52 assertions)
+optimizer_ok = False
+optimizer_src = os.path.join(base_dir, "tests", "optimizer_test.nex")
+if os.path.exists(optimizer_src):
+    subprocess.run([nexprep, optimizer_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
+    if "[SUCCESS] ALL OPTIMIZER TESTS PASSED!" in r.stdout:
+        print("[+] Optimizer suite: 52 assertions               PASS")
+        optimizer_ok = True
+    else:
+        print("[-] Optimizer suite: FAIL")
+
 # Interactive Console Input test suite (read <var>)
 interactive_tests = [
     ("examples/interactive_calc.nex", "45\n15\n", ["60", "30", "675", "3", "0"], "Interactive Calc (read a, b)"),
@@ -403,7 +421,7 @@ for ex_rel, user_in, expected_list, tname in interactive_tests:
     else:
         print(f"[-] Interactive: {tname:27} FAIL")
 
-print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={"PASS" if stdlib_ok else "FAIL"}")
+print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={"PASS" if stdlib_ok else "FAIL"}, optimizer={"PASS" if optimizer_ok else "FAIL"}")
 '
         ;;
     self-host)

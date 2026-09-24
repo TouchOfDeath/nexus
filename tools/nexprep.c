@@ -41,6 +41,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <inttypes.h>
+
+static void emit_line(const char *raw, FILE *out);
 
 #define MAXLINE    8192
 #define MAXSTRUCTS 128
@@ -341,22 +345,39 @@ static int assert_line(const char *raw, FILE *out) {
     transform_seg(rhs, b, M_INLINE);
 
     int id = assert_counter++;
-    fprintf(out, "# assert %d: %s %s %s\n", id, a, is_eq ? "==" : "!=", b);
-    fprintf(out, "let _as_l_%d = %s\n", id, lhs);
-    fprintf(out, "let _as_r_%d = %s\n", id, rhs);
-    fprintf(out, "let _as_ok_%d = 0\n", id);
-    fprintf(out, "if _as_l_%d %s _as_r_%d {\n", id, is_eq ? "==" : "!=", id);
-    fprintf(out, "    let _as_ok_%d = 1\n", id);
-    fprintf(out, "}\n");
-    fprintf(out, "if _as_ok_%d == 1 {\n", id);
-    fprintf(out, "    let nx_assert_passes = nx_assert_passes + 1\n");
-    fprintf(out, "} else {\n");
-    fprintf(out, "    let nx_assert_fails = nx_assert_fails + 1\n");
-    fprintf(out, "    print \"[FAIL] assert %s: got\"\n", is_eq ? "eq" : "ne");
-    fprintf(out, "    print _as_l_%d\n", id);
-    fprintf(out, "    print \"[FAIL] expected %s\"\n", is_eq ? "equal" : "different");
-    fprintf(out, "    print _as_r_%d\n", id);
-    fprintf(out, "}\n");
+    char linebuf[MAXLINE * 2];
+    snprintf(linebuf, sizeof linebuf, "# assert %d: %s %s %s", id, a, is_eq ? "==" : "!=", b);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "let _as_l_%d = %s", id, lhs);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "let _as_r_%d = %s", id, rhs);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "let _as_ok_%d = 0", id);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "if _as_l_%d %s _as_r_%d {", id, is_eq ? "==" : "!=", id);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    let _as_ok_%d = 1", id);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "}");
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "if _as_ok_%d == 1 {", id);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    let nx_assert_passes = nx_assert_passes + 1");
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "} else {");
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    let nx_assert_fails = nx_assert_fails + 1");
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    print \"[FAIL] assert %s: got\"", is_eq ? "eq" : "ne");
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    print _as_l_%d", id);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    print \"[FAIL] expected %s\"", is_eq ? "equal" : "different");
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "    print _as_r_%d", id);
+    emit_line(linebuf, out);
+    snprintf(linebuf, sizeof linebuf, "}");
+    emit_line(linebuf, out);
     return 1;
 }
 
@@ -1622,12 +1643,498 @@ static int desugar_power(const char *in, char *out, size_t cap) {
 }
 
 /* --------------------------------------------------------------------------
+ * Compiler Optimizer & Truthiness Desugaring
+ * -------------------------------------------------------------------------- */
+static void trim_ws(char *s) {
+    char *p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    size_t len = strlen(s);
+    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' || s[len - 1] == '\n')) {
+        s[--len] = '\0';
+    }
+}
+
+static void decompose_int64(int64_t v, char *out, size_t cap) {
+    if (v >= -2147483647LL && v <= 2147483647LL) {
+        if (v < 0) {
+            snprintf(out, cap, "0 - %" PRId64, -v);
+        } else {
+            snprintf(out, cap, "%" PRId64, v);
+        }
+        return;
+    }
+    uint64_t uv = (uint64_t)v;
+    uint32_t p0 = uv & 0xFFFF;
+    uint32_t p1 = (uv >> 16) & 0xFFFF;
+    uint32_t p2 = (uv >> 32) & 0xFFFF;
+    uint32_t p3 = (uv >> 48) & 0xFFFF;
+    if (p3 != 0) {
+        snprintf(out, cap, "%u * 65536 + %u * 65536 + %u * 65536 + %u", p3, p2, p1, p0);
+    } else if (p2 != 0) {
+        snprintf(out, cap, "%u * 65536 + %u * 65536 + %u", p2, p1, p0);
+    } else {
+        snprintf(out, cap, "%u * 65536 + %u", p1, p0);
+    }
+}
+
+/* Parse a single int64 literal (optional leading negative sign) */
+static int parse_int64_tok(const char *s, const char **endptr, int64_t *val) {
+    while (*s == ' ' || *s == '\t') s++;
+    if (!*s) return 0;
+    int is_neg = 0;
+    if (*s == '-' && isdigit((unsigned char)s[1])) {
+        is_neg = 1;
+        s++;
+    }
+    if (!isdigit((unsigned char)*s)) return 0;
+    char *ep = NULL;
+    uint64_t uv = strtoull(s, &ep, 10);
+    if (ep == s) return 0;
+    if (*ep == '.') return 0; /* Float literal */
+    int64_t v = is_neg ? -(int64_t)uv : (int64_t)uv;
+    if (val) *val = v;
+    if (endptr) *endptr = ep;
+    return 1;
+}
+
+/* Evaluate a chain of integer literals with operators: + - * / % (left-to-right) */
+static int eval_int_chain(const char *s, const char **endptr, int64_t *result) {
+    const char *p = s;
+    int64_t acc = 0;
+    if (!parse_int64_tok(p, &p, &acc)) return 0;
+    int op_count = 0;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '+' && *p != '-' && *p != '*' && *p != '/' && *p != '%') break;
+        char op = *p;
+        const char *next_p = p + 1;
+        int64_t rhs = 0;
+        if (!parse_int64_tok(next_p, &next_p, &rhs)) break;
+        if (op == '/' && rhs == 0) break;
+        if (op == '%' && rhs == 0) break;
+        if (op == '+') acc = (int64_t)((uint64_t)acc + (uint64_t)rhs);
+        else if (op == '-') acc = (int64_t)((uint64_t)acc - (uint64_t)rhs);
+        else if (op == '*') acc = (int64_t)((uint64_t)acc * (uint64_t)rhs);
+        else if (op == '/') {
+            if (acc == INT64_MIN && rhs == -1) break;
+            acc = acc / rhs;
+        }
+        else if (op == '%') acc = acc % rhs;
+        p = next_p;
+        op_count++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (op_count == 0) {
+        /* Single literal: check if it needs 64-bit decomposition */
+        if (acc > 2147483647LL || acc < -2147483647LL) {
+            if (result) *result = acc;
+            if (endptr) *endptr = p;
+            return 1;
+        }
+        return 0;
+    }
+    if (result) *result = acc;
+    if (endptr) *endptr = p;
+    return 1;
+}
+
+/* Fold unary builtins: abs <lit> and len "<lit>" */
+static void fold_unary_builtins(char *line) {
+    char buf[MAXLINE];
+    char *p = line;
+    buf[0] = '\0';
+    int changed = 0;
+
+    while (*p) {
+        if (*p == '"') {
+            size_t blen = strlen(buf);
+            if (blen < MAXLINE - 1) buf[blen++] = *p++;
+            while (*p && *p != '"' && blen < MAXLINE - 1) {
+                buf[blen++] = *p++;
+            }
+            if (*p == '"' && blen < MAXLINE - 1) buf[blen++] = *p++;
+            buf[blen] = '\0';
+            continue;
+        }
+        if (*p == '#' || *p == ';') {
+            strncat(buf, p, MAXLINE - strlen(buf) - 1);
+            break;
+        }
+
+        /* Check for "abs " */
+        if ((p == line || !is_ident1((unsigned char)p[-1])) &&
+            !strncmp(p, "abs", 3) && (p[3] == ' ' || p[3] == '\t' || p[3] == '(')) {
+            const char *arg = p + 3;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            int has_paren = (*arg == '(');
+            if (has_paren) {
+                arg++;
+                while (*arg == ' ' || *arg == '\t') arg++;
+            }
+            int64_t val = 0;
+            const char *end = NULL;
+            if (parse_int64_tok(arg, &end, &val)) {
+                if (has_paren) {
+                    while (*end == ' ' || *end == '\t') end++;
+                    if (*end == ')') end++;
+                }
+                int64_t abs_val = (val < 0) ? -val : val;
+                char val_str[64];
+                decompose_int64(abs_val, val_str, sizeof val_str);
+                strncat(buf, val_str, MAXLINE - strlen(buf) - 1);
+                p = (char *)end;
+                changed = 1;
+                continue;
+            }
+        }
+
+        /* Check for "len " */
+        if ((p == line || !is_ident1((unsigned char)p[-1])) &&
+            !strncmp(p, "len", 3) && (p[3] == ' ' || p[3] == '\t' || p[3] == '(')) {
+            const char *arg = p + 3;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            int has_paren = (*arg == '(');
+            if (has_paren) {
+                arg++;
+                while (*arg == ' ' || *arg == '\t') arg++;
+            }
+            if (*arg == '"') {
+                const char *s = arg + 1;
+                size_t slen = 0;
+                while (*s && *s != '"') {
+                    slen++;
+                    s++;
+                }
+                if (*s == '"') {
+                    s++;
+                    if (has_paren) {
+                        while (*s == ' ' || *s == '\t') s++;
+                        if (*s == ')') s++;
+                    }
+                    char val_str[32];
+                    snprintf(val_str, sizeof val_str, "%zu", slen);
+                    strncat(buf, val_str, MAXLINE - strlen(buf) - 1);
+                    p = (char *)s;
+                    changed = 1;
+                    continue;
+                }
+            }
+        }
+
+        size_t blen = strlen(buf);
+        if (blen < MAXLINE - 1) {
+            buf[blen++] = *p++;
+            buf[blen] = '\0';
+        } else {
+            break;
+        }
+    }
+    if (changed) snprintf(line, MAXLINE, "%s", buf);
+}
+
+/* Fold expressions inside memory brackets: [ptr + 0 * 8] -> [ptr + 0] */
+static void fold_mem_offsets(char *line) {
+    char buf[MAXLINE];
+    char *p = line;
+    buf[0] = '\0';
+    int changed = 0;
+
+    while (*p) {
+        if (*p == '"') {
+            size_t blen = strlen(buf);
+            if (blen < MAXLINE - 1) buf[blen++] = *p++;
+            while (*p && *p != '"' && blen < MAXLINE - 1) buf[blen++] = *p++;
+            if (*p == '"' && blen < MAXLINE - 1) buf[blen++] = *p++;
+            buf[blen] = '\0';
+            continue;
+        }
+        if (*p == '#' || *p == ';') {
+            strncat(buf, p, MAXLINE - strlen(buf) - 1);
+            break;
+        }
+        if (*p == '[') {
+            char *close = strchr(p, ']');
+            if (close) {
+                char inner[MAXLINE];
+                size_t n = close - (p + 1);
+                if (n < sizeof(inner) - 1) {
+                    strncpy(inner, p + 1, n);
+                    inner[n] = '\0';
+                    char *plus = strchr(inner, '+');
+                    if (plus) {
+                        char base[128];
+                        size_t b_len = plus - inner;
+                        if (b_len < sizeof(base) - 1) {
+                            strncpy(base, inner, b_len);
+                            base[b_len] = '\0';
+                            trim_ws(base);
+                            const char *expr = plus + 1;
+                            while (*expr == ' ' || *expr == '\t') expr++;
+                            int64_t val = 0;
+                            const char *end = NULL;
+                            if (eval_int_chain(expr, &end, &val) && (*end == '\0' || *end == ' ' || *end == '\t')) {
+                                char folded[MAXLINE];
+                                snprintf(folded, sizeof folded, "[%s + %" PRId64 "]", base, val);
+                                strncat(buf, folded, MAXLINE - strlen(buf) - 1);
+                                p = close + 1;
+                                changed = 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        size_t blen = strlen(buf);
+        if (blen < MAXLINE - 1) {
+            buf[blen++] = *p++;
+            buf[blen] = '\0';
+        } else {
+            break;
+        }
+    }
+    if (changed) snprintf(line, MAXLINE, "%s", buf);
+}
+
+/* Desugar truthiness and constant conditions */
+static void transform_cond_str(const char *in_cond, char *out_cond, size_t cap) {
+    char cond[MAXLINE];
+    snprintf(cond, sizeof cond, "%s", in_cond);
+    trim_ws(cond);
+
+    /* Strip outer parentheses if present */
+    if (cond[0] == '(' && cond[strlen(cond) - 1] == ')') {
+        cond[strlen(cond) - 1] = '\0';
+        memmove(cond, cond + 1, strlen(cond));
+        trim_ws(cond);
+    }
+
+    /* Check for relational operators: ==, !=, <=, >=, <, > */
+    char *op = NULL;
+    int op_len = 0;
+    char *p = cond;
+    int in_str = 0;
+    while (*p) {
+        if (*p == '"') in_str = !in_str;
+        if (!in_str) {
+            if (!strncmp(p, "==", 2) || !strncmp(p, "!=", 2) ||
+                !strncmp(p, "<=", 2) || !strncmp(p, ">=", 2)) {
+                op = p;
+                op_len = 2;
+                break;
+            }
+            if (*p == '<' || *p == '>') {
+                op = p;
+                op_len = 1;
+                break;
+            }
+        }
+        p++;
+    }
+
+    if (op) {
+        char lhs[MAXLINE], rhs[MAXLINE];
+        size_t nlhs = op - cond;
+        strncpy(lhs, cond, nlhs);
+        lhs[nlhs] = '\0';
+        trim_ws(lhs);
+        snprintf(rhs, sizeof rhs, "%s", op + op_len);
+        trim_ws(rhs);
+
+        int64_t v1 = 0, v2 = 0;
+        const char *ep1 = NULL, *ep2 = NULL;
+        int is_c1 = eval_int_chain(lhs, &ep1, &v1) || parse_int64_tok(lhs, &ep1, &v1);
+        int is_c2 = eval_int_chain(rhs, &ep2, &v2) || parse_int64_tok(rhs, &ep2, &v2);
+        if (is_c1 && ep1 && *ep1 == '\0' && is_c2 && ep2 && *ep2 == '\0') {
+            int true_val = 0;
+            if (op_len == 2) {
+                if (!strncmp(op, "==", 2)) true_val = (v1 == v2);
+                else if (!strncmp(op, "!=", 2)) true_val = (v1 != v2);
+                else if (!strncmp(op, "<=", 2)) true_val = (v1 <= v2);
+                else if (!strncmp(op, ">=", 2)) true_val = (v1 >= v2);
+            } else {
+                if (*op == '<') true_val = (v1 < v2);
+                else if (*op == '>') true_val = (v1 > v2);
+            }
+            if (true_val) snprintf(out_cond, cap, "_TRUE_ != 0");
+            else snprintf(out_cond, cap, "_FALSE_ != 0");
+            return;
+        }
+        snprintf(out_cond, cap, "%s", cond);
+        return;
+    }
+
+    /* No relational operator: truthiness */
+    int64_t val = 0;
+    const char *ep = NULL;
+    if ((eval_int_chain(cond, &ep, &val) || parse_int64_tok(cond, &ep, &val)) && ep && *ep == '\0') {
+        if (val != 0) snprintf(out_cond, cap, "_TRUE_ != 0");
+        else snprintf(out_cond, cap, "_FALSE_ != 0");
+        return;
+    }
+
+    /* Variable truthiness */
+    snprintf(out_cond, cap, "%s != 0", cond);
+}
+
+static int desugar_truthiness_and_conditions(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    /* Skip float conditions */
+    if (!strncmp(p, "if_f ", 5) || !strncmp(p, "if_f\t", 5) ||
+        !strncmp(p, "while_f ", 8) || !strncmp(p, "while_f\t", 8) ||
+        strstr(p, "else if_f ") || strstr(p, "else if_f\t")) {
+        return 0;
+    }
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    /* 1. for loop header: for <init>, <cond>, <update> { */
+    if (!strncmp(p, "for ", 4) || !strncmp(p, "for\t", 4)) {
+        char *c1 = strchr(p, ',');
+        if (c1) {
+            char *c2 = strchr(c1 + 1, ',');
+            if (c2) {
+                char cond_part[MAXLINE];
+                size_t n = c2 - (c1 + 1);
+                if (n < sizeof(cond_part) - 1) {
+                    strncpy(cond_part, c1 + 1, n);
+                    cond_part[n] = '\0';
+                    char new_cond[MAXLINE];
+                    transform_cond_str(cond_part, new_cond, sizeof new_cond);
+                    if (strcmp(cond_part, new_cond) != 0) {
+                        snprintf(out, cap, "%s%.*s, %s,%s", indent, (int)(c1 - p), p, new_cond, c2 + 1);
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+
+    /* 2. if, while, else if */
+    const char *kw = NULL;
+    char *cond_start = NULL;
+    char prefix[256] = "";
+
+    if (!strncmp(p, "if ", 3) || !strncmp(p, "if\t", 3)) {
+        kw = "if ";
+        cond_start = p + 3;
+    } else if (!strncmp(p, "while ", 6) || !strncmp(p, "while\t", 6)) {
+        kw = "while ";
+        cond_start = p + 6;
+    } else {
+        char *eif = strstr(p, "else if ");
+        if (!eif) eif = strstr(p, "else if\t");
+        if (eif) {
+            int pre_len = (int)(eif - p);
+            snprintf(prefix, sizeof prefix, "%.*selse if ", pre_len, p);
+            kw = prefix;
+            cond_start = eif + 8;
+        }
+    }
+
+    if (!kw || !cond_start) return 0;
+
+    char *brace = strchr(cond_start, '{');
+    if (!brace) return 0;
+
+    char cond[MAXLINE];
+    size_t clen = brace - cond_start;
+    if (clen >= sizeof(cond)) clen = sizeof(cond) - 1;
+    strncpy(cond, cond_start, clen);
+    cond[clen] = '\0';
+
+    char new_cond[MAXLINE];
+    transform_cond_str(cond, new_cond, sizeof new_cond);
+    if (!strcmp(cond, new_cond)) return 0;
+    snprintf(out, cap, "%s%s%s %s", indent, kw, new_cond, brace);
+    return 1;
+}
+
+/* Constant folding & 64-bit decomposition for 'let <dest> = <expr>' */
+static int desugar_constant_folding(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    if (strncmp(p, "let ", 4) && strncmp(p, "let\t", 4)) return 0;
+
+    char *eq = strchr(p, '=');
+    if (!eq) return 0;
+
+    char *rhs = eq + 1;
+    while (*rhs == ' ' || *rhs == '\t') rhs++;
+    if (*rhs == '"') return 0; /* String literal */
+
+    /* Skip already decomposed Horner expressions */
+    if (strstr(rhs, "* 65536")) return 0;
+
+    /* Skip float operations and memory/system operations */
+    if (!strncmp(rhs, "fadd", 4) || !strncmp(rhs, "fsub", 4) ||
+        !strncmp(rhs, "fmul", 4) || !strncmp(rhs, "fdiv", 4) ||
+        !strncmp(rhs, "fsqrt", 5) || !strncmp(rhs, "fneg", 4) ||
+        !strncmp(rhs, "ftoi", 4) || !strncmp(rhs, "itof", 4) ||
+        !strncmp(rhs, "load", 4) || !strncmp(rhs, "alloc", 5) ||
+        !strncmp(rhs, "file_", 5) || !strncmp(rhs, "syscall", 7)) {
+        return 0;
+    }
+
+    char rhs_copy[MAXLINE];
+    snprintf(rhs_copy, sizeof rhs_copy, "%s", rhs);
+    char *cm = strchr(rhs_copy, '#');
+    char trailing[MAXLINE] = "";
+    if (cm) {
+        snprintf(trailing, sizeof trailing, " %s", cm);
+        *cm = '\0';
+    }
+    char *sc = strchr(rhs_copy, ';');
+    if (sc) {
+        if (!trailing[0]) snprintf(trailing, sizeof trailing, " %s", sc);
+        *sc = '\0';
+    }
+    trim_ws(rhs_copy);
+
+    int64_t res = 0;
+    const char *end = NULL;
+    if (eval_int_chain(rhs_copy, &end, &res)) {
+        while (*end == ' ' || *end == '\t') end++;
+        if (*end == '\0') {
+            char dec[256];
+            decompose_int64(res, dec, sizeof dec);
+            if (!strcmp(rhs_copy, dec)) return 0;
+            int head_len = (int)(eq - clean) + 1;
+            snprintf(out, cap, "%.*s %s%s", head_len, clean, dec, trailing);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* --------------------------------------------------------------------------
  * per-line transform
  * -------------------------------------------------------------------------- */
 static void emit_line(const char *raw, FILE *out) {
     reset_hoist();
 
-    if (assert_line(raw, out)) return;
+    char u_buf[MAXLINE];
+    snprintf(u_buf, sizeof u_buf, "%s", raw);
+    fold_unary_builtins(u_buf);
+    fold_mem_offsets(u_buf);
+
+    if (assert_line(u_buf, out)) return;
 
     char pow_desugared[MAXLINE * 4];
     if (desugar_power(raw, pow_desugared, sizeof pow_desugared)) {
@@ -1741,7 +2248,7 @@ static void emit_line(const char *raw, FILE *out) {
 
     /* work on a newline-stripped copy; exactly one '\n' is printed per line */
     char clean[MAXLINE];
-    snprintf(clean, MAXLINE, "%s", raw);
+    snprintf(clean, MAXLINE, "%s", u_buf);
     char *ce = clean + strlen(clean);
     while (ce > clean && (ce[-1] == '\n' || ce[-1] == '\r')) *--ce = '\0';
 
@@ -1750,6 +2257,15 @@ static void emit_line(const char *raw, FILE *out) {
     if (*cp == '#' || *cp == ';' || *cp == '\0') {
         fprintf(out, "%s\n", clean);
         return;
+    }
+
+    char c_buf[MAXLINE];
+    if (desugar_truthiness_and_conditions(clean, c_buf, sizeof c_buf)) {
+        snprintf(clean, sizeof clean, "%s", c_buf);
+    }
+    char opt_buf[MAXLINE];
+    if (desugar_constant_folding(clean, opt_buf, sizeof opt_buf)) {
+        snprintf(clean, sizeof clean, "%s", opt_buf);
     }
 
     update_fn_depth(clean);
@@ -1962,9 +2478,11 @@ int main(int argc, char **argv) {
     if (out_path) {
         FILE *out = fopen(out_path, "w");
         if (!out) die("Cannot write", out_path);
+        fprintf(out, "let _TRUE_ = 1\nlet _FALSE_ = 0\n");
         process_file(canon, out);
         fclose(out);
     } else {
+        fprintf(stdout, "let _TRUE_ = 1\nlet _FALSE_ = 0\n");
         process_file(canon, stdout);
     }
     return 0;

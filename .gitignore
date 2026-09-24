@@ -17,3 +17,5 @@ compiler/code.nex
 compiler/output.txt
 compiler/test_io_out.txt
 compiler/vars_test.dat
+compiler/app.exe
+compiler/app.elf
