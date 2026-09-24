@@ -1,0 +1,61 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: assert.nex
+#      Assertion counters and summary reporting for the test conventions
+# ==============================================================================
+#
+# This module backs the assert_eq / assert_ne preprocessor macros
+# (tools/nexprep.c). The macros expand to compare-and-report blocks that
+# increment these counters. Include it with:
+#
+#   include "stdlib/nstdlib.nex"     (already includes assert.nex)
+#
+# Conventions:
+#   nx_assert_passes : incremented by every passing assert_eq/assert_ne
+#   nx_assert_fails  : incremented by every failing assert_eq/assert_ne,
+#                      which also prints one "[FAIL] ..." line per failure
+#
+# call nx_assert_summary at the end of a test to print the single line:
+#   ASSERTIONS: <passes> passed, <fails> failed
+#
+# Test runners (bin/nextest) parse that line and fail the test when
+# <fails> is not zero or no assertions ran.
+#
+# NOTE: this fn uses _as_* variables (beyond the stdlib s0..s7 pool) as
+#       its working set, and clobbers nx_i0..nx_i2 as usual.
+
+# ------------------------------------------------------------------------------
+# fn nx_assert_summary : prints the ASSERTIONS summary line
+# ------------------------------------------------------------------------------
+fn nx_assert_summary {
+    let _as_p = nx_assert_passes
+    let _as_f = nx_assert_fails
+    let _as_buf = alloc 96
+    let _as_buf2 = alloc 96
+    let _as_tmp = alloc 24
+    let nx_i0 = "ASSERTIONS: "
+    let nx_i1 = _as_buf
+    call nx_str_copy
+    let nx_i0 = _as_p
+    let nx_i1 = _as_tmp
+    call nx_int_to_str
+    let nx_i0 = _as_buf
+    let nx_i1 = _as_tmp
+    let nx_i2 = _as_buf2
+    call nx_str_concat
+    let nx_i0 = _as_buf2
+    let nx_i1 = " passed, "
+    let nx_i2 = _as_buf
+    call nx_str_concat
+    let nx_i0 = _as_f
+    let nx_i1 = _as_tmp
+    call nx_int_to_str
+    let nx_i0 = _as_buf
+    let nx_i1 = _as_tmp
+    let nx_i2 = _as_buf2
+    call nx_str_concat
+    let nx_i0 = _as_buf2
+    let nx_i1 = " failed"
+    let nx_i2 = _as_buf
+    call nx_str_concat
+    print_str _as_buf
+}

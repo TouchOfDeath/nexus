@@ -1,0 +1,62 @@
+# ==============================================================================
+#                 NEXUS String Variables & Pointers Demo
+# ==============================================================================
+
+fn greet {
+    print_str greeting
+}
+
+print "--- Testing String Variables & Pointers ---"
+
+# 1. String variable declaration & print_str
+let msg = "Hello from NEXUS String Variables!"
+print_str msg
+
+# 2. String literal via print_str
+print_str "String literal printed via print_str!"
+
+# 3. String passing to subroutine
+let greeting = "Greetings from a shared-stack subroutine!"
+call greet
+
+# 4. Dynamic pointer assignment
+let str_a = "Item Alpha"
+let str_b = "Item Beta"
+let current = str_a
+print_str current
+let current = str_b
+print_str current
+
+# 5. Character reading / indexing via load [msg + idx]
+let word = "NEXUS"
+let c0 = load [word + 0]
+let c1 = load [word + 1]
+let c2 = load [word + 2]
+let c3 = load [word + 3]
+let c4 = load [word + 4]
+print c0
+print c1
+print c2
+print c3
+print c4
+
+# 6. String length calculation loop
+let sample = "Antigravity"
+let slen = 0
+let stop = 0
+while stop == 0 {
+    let ch = load [sample + slen]
+    if ch == 0 {
+        let stop = 1
+    } else {
+        let slen = slen + 1
+    }
+}
+print slen
+
+# 7. Empty string handling
+let empty = ""
+print_str empty
+print "Empty string test passed."
+
+print "=== STRING DEMO COMPLETED ==="

@@ -1,0 +1,89 @@
+# ==============================================================================
+#           NEXUS TEST: FUNCTION PARAMETERS & RETURN VALUES
+# ==============================================================================
+
+# 1. Multi-argument function with return value
+fn add(a, b) {
+    return a + b
+}
+
+# 2. Multi-argument function with arithmetic expression in return
+fn calc_hypot_sq(x, y) {
+    let x2 = x * x
+    let y2 = y * y
+    return x2 + y2
+}
+
+# 3. Function with multiple early returns (if-else branching)
+fn clamp_val(val, min_v, max_v) {
+    if val < min_v {
+        return min_v
+    }
+    if val > max_v {
+        return max_v
+    }
+    return val
+}
+
+# 4. Zero-parameter function with return
+fn get_answer() {
+    return 42
+}
+
+# 5. Function calling another function
+fn double_val(n) {
+    let res = call add(n, n)
+    return res
+}
+
+# 6. Void subroutine with parameters
+fn print_coords(cx, cy) {
+    print "COORDINATES:"
+    print cx
+    print cy
+}
+
+# 7. Floating-point parameters and return
+fn f_midpoint(f1, f2) {
+    let sum = f1 +. f2
+    let mid = sum /. 2.0
+    return mid
+}
+
+# ----------------- EXECUTION & ASSERTIONS -----------------
+print "--- 1. Testing add(15, 27) ---"
+let sum1 = call add(15, 27)
+print sum1
+
+print "--- 2. Testing calc_hypot_sq(3, 4) ---"
+let h = call calc_hypot_sq(3, 4)
+print h
+
+print "--- 3. Testing clamp_val ---"
+let c1 = call clamp_val(50, 100, 200)
+print c1
+let c2 = call clamp_val(150, 100, 200)
+print c2
+let c3 = call clamp_val(250, 100, 200)
+print c3
+
+print "--- 4. Testing get_answer() ---"
+let ans = call get_answer()
+print ans
+
+print "--- 5. Testing nested calls: double_val(21) ---"
+let d = call double_val(21)
+print d
+
+print "--- 6. Testing deep nested calls: add(add(1, 2), add(3, 4)) ---"
+let nested = call add(call add(1, 2), call add(3, 4))
+print nested
+
+print "--- 7. Testing void call with params ---"
+call print_coords(77, 88)
+
+print "--- 8. Testing float params & return: f_midpoint(10.0, 30.0) ---"
+let mid = call f_midpoint(10.0, 30.0)
+print_float mid
+
+print "=== ALL FUNCTION PARAMETER TESTS PASSED ==="

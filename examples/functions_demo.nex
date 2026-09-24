@@ -1,0 +1,40 @@
+# ==============================================================================
+#                  NEXUS EXAMPLE: FUNCTIONS & SUBROUTINES
+#       Demonstrating fn definition, execution with call, and early return
+# ==============================================================================
+
+fn square {
+    let s = x * x
+}
+
+fn cube {
+    call square
+    let c = s * x
+}
+
+fn clamp_100 {
+    if x > 100 {
+        let x = 100
+        return
+    }
+}
+
+print "--- Subroutines & Function Calls ---"
+let x = 6
+call square
+print "6 squared (expected 36):"
+print s
+
+call cube
+print "6 cubed (expected 216):"
+print c
+
+let x = 250
+call clamp_100
+print "250 clamped to 100 (expected 100):"
+print x
+
+let x = 45
+call clamp_100
+print "45 clamped to 100 (expected 45):"
+print x

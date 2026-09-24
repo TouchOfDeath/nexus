@@ -1,0 +1,21 @@
+# ==============================================================================
+#                 NEXUS v5.4 DIRECT LINUX KERNEL SYSCALL TEST
+#       Tests: syscall0 (getpid = 39), syscall3 (sys_write = 1 to stdout)
+# ==============================================================================
+
+# 1. Test sys_getpid (syscall 39)
+let pid = syscall0 39
+print "Linux Kernel Process PID:"
+print pid
+
+if pid > 0 {
+    print "PID is positive - sys_getpid SUCCESS!"
+}
+
+# 2. Test sys_write (syscall 1, fd = 1, buf = msg, len = 20)
+let msg = "SYSCALL_WRITE_OK!\n"
+let nwritten = syscall3 1, 1, msg, 18
+print "Bytes written by raw kernel syscall:"
+print nwritten
+
+print "=== DIRECT LINUX SYSCALL TEST PASSED ==="

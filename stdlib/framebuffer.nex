@@ -1,0 +1,260 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY: SOFTWARE FRAMEBUFFER
+#             stdlib/framebuffer.nex - Direct 32-bit Memory Surface
+#      0% C - 0% libc - 0% Xlib - 100% Native X11 PutImage Direct Blitter
+# ==============================================================================
+
+include "stdlib/x11.nex"
+
+# Framebuffer Dimensions & Buffers
+let fb_width = 320
+let fb_height = 240
+let fb_total_pixels = 76800
+let fb_total_bytes = 307200
+let fb_buf = 0
+let fb_hdr = alloc 32
+let fb_strip_h = 16
+
+# Pixel Drawing Registers
+let fb_x = 0
+let fb_y = 0
+let fb_w = 0
+let fb_h = 0
+let fb_col = 0
+let fb_r = 0
+let fb_g = 0
+let fb_b = 0
+
+# Line Drawing Registers (Bresenham)
+let fb_x0 = 0
+let fb_y0 = 0
+let fb_x1 = 0
+let fb_y1 = 0
+
+# Internal math registers (strictly isolated with fb_ prefix)
+let fb_cur_strip = 0
+let fb_sy = 0
+let fb_cur_h = 0
+let fb_req_quads = 0
+let fb_offset = 0
+let fb_strip_bytes = 0
+let fb_pix_ptr = 0
+let fb_wr_res = 0
+
+# ------------------------------------------------------------------------------
+# fb_make_color: Converts fb_r, fb_g, fb_b (0..255) into 32-bit 0x00RRGGBB
+# Output: fb_col
+# ------------------------------------------------------------------------------
+fn fb_make_color {
+    let fb_col = fb_r * 65536
+    let fb_g_part = fb_g * 256
+    let fb_col = fb_col + fb_g_part
+    let fb_col = fb_col + fb_b
+}
+
+# ------------------------------------------------------------------------------
+# fb_init: Initializes X11 window and allocates 32-bit framebuffer memory
+# Inputs: fb_width, fb_height
+# ------------------------------------------------------------------------------
+fn fb_init {
+    let x11_width = fb_width
+    let x11_height = fb_height
+    call x11_init
+
+    let fb_total_pixels = fb_width * fb_height
+    let fb_total_bytes = fb_total_pixels * 4
+    let fb_buf = alloc fb_total_bytes
+
+    # Configure static fields of PutImage header (Opcode 72, ZPixmap 2, depth 24)
+    store [fb_hdr + 0] 72       # Opcode: PutImage
+    store [fb_hdr + 1] 2        # Format: ZPixmap
+    store32 [fb_hdr + 4] x11_win_id
+    store32 [fb_hdr + 8] x11_gc_id
+    store16 [fb_hdr + 12] fb_width
+    store16 [fb_hdr + 16] 0     # dst-x: 0
+    store [fb_hdr + 20] 0       # left-pad: 0
+    store [fb_hdr + 21] 24      # depth: 24
+    store16 [fb_hdr + 22] 0     # pad
+}
+
+# ------------------------------------------------------------------------------
+# fb_clear: Clears the entire framebuffer surface to fb_col
+# ------------------------------------------------------------------------------
+fn fb_clear {
+    if fb_buf == 0 {
+        return
+    }
+
+    let fb_clr_idx = 0
+    while fb_clr_idx < fb_total_pixels {
+        let fb_clr_off = fb_clr_idx * 4
+        store32 [fb_buf + fb_clr_off] fb_col
+        let fb_clr_idx = fb_clr_idx + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fb_set_pixel: Plots a single 32-bit pixel at (fb_x, fb_y)
+# Inputs: fb_x, fb_y, fb_col
+# ------------------------------------------------------------------------------
+fn fb_set_pixel {
+    if fb_x < 0 {
+        return
+    }
+    if fb_x >= fb_width {
+        return
+    }
+    if fb_y < 0 {
+        return
+    }
+    if fb_y >= fb_height {
+        return
+    }
+
+    let fb_pix_off = fb_y * fb_width
+    let fb_pix_off = fb_pix_off + fb_x
+    let fb_pix_off = fb_pix_off * 4
+    store32 [fb_buf + fb_pix_off] fb_col
+}
+
+# ------------------------------------------------------------------------------
+# fb_draw_rect: Draws a filled rectangle in the framebuffer
+# Inputs: fb_x, fb_y, fb_w, fb_h, fb_col
+# ------------------------------------------------------------------------------
+fn fb_draw_rect {
+    if fb_w <= 0 {
+        return
+    }
+    if fb_h <= 0 {
+        return
+    }
+
+    let fb_ry = fb_y
+    let fb_max_y = fb_y + fb_h
+    if fb_max_y > fb_height {
+        let fb_max_y = fb_height
+    }
+
+    let fb_max_x = fb_x + fb_w
+    if fb_max_x > fb_width {
+        let fb_max_x = fb_width
+    }
+
+    while fb_ry < fb_max_y {
+        if fb_ry >= 0 {
+            let fb_rx = fb_x
+            if fb_rx < 0 {
+                let fb_rx = 0
+            }
+
+            let fb_row_base = fb_ry * fb_width
+            while fb_rx < fb_max_x {
+                let fb_p_off = fb_row_base + fb_rx
+                let fb_p_off = fb_p_off * 4
+                store32 [fb_buf + fb_p_off] fb_col
+                let fb_rx = fb_rx + 1
+            }
+        }
+        let fb_ry = fb_ry + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fb_draw_line: Bresenham line rasterizer
+# Inputs: fb_x0, fb_y0, fb_x1, fb_y1, fb_col
+# ------------------------------------------------------------------------------
+fn fb_draw_line {
+    let fb_lx = fb_x0
+    let fb_ly = fb_y0
+
+    let fb_dx = fb_x1 - fb_x0
+    if fb_dx < 0 {
+        let fb_dx = 0 - fb_dx
+        let fb_sx = 0 - 1
+    } else {
+        let fb_sx = 1
+    }
+
+    let fb_dy = fb_y1 - fb_y0
+    if fb_dy < 0 {
+        let fb_dy = 0 - fb_dy
+        let fb_sy_dir = 0 - 1
+    } else {
+        let fb_sy_dir = 1
+    }
+
+    let fb_err = fb_dx - fb_dy
+
+    let fb_drawing = 1
+    while fb_drawing == 1 {
+        let fb_x = fb_lx
+        let fb_y = fb_ly
+        call fb_set_pixel
+
+        if fb_lx == fb_x1 {
+            if fb_ly == fb_y1 {
+                let fb_drawing = 0
+            }
+        }
+
+        if fb_drawing == 1 {
+            let fb_e2 = fb_err * 2
+            let fb_neg_dy = 0 - fb_dy
+            if fb_e2 > fb_neg_dy {
+                let fb_err = fb_err - fb_dy
+                let fb_lx = fb_lx + fb_sx
+            }
+            if fb_e2 < fb_dx {
+                let fb_err = fb_err + fb_dx
+                let fb_ly = fb_ly + fb_sy_dir
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fb_present: Slices framebuffer into horizontal strips and blits via PutImage
+# Throttles output to 60 FPS using sys_nanosleep (16 ms)
+# ------------------------------------------------------------------------------
+fn fb_present {
+    if fb_buf == 0 {
+        return
+    }
+
+    let fb_sy = 0
+    while fb_sy < fb_height {
+        let fb_cur_h = fb_strip_h
+        let fb_rem_h = fb_height - fb_sy
+        if fb_cur_h > fb_rem_h {
+            let fb_cur_h = fb_rem_h
+        }
+
+        # Request quads = 6 header quads + (fb_width * fb_cur_h)
+        let fb_req_quads = fb_width * fb_cur_h
+        let fb_req_quads = fb_req_quads + 6
+
+        # Update dynamic header fields: length, height, dst-y
+        store16 [fb_hdr + 2] fb_req_quads
+        store16 [fb_hdr + 14] fb_cur_h
+        store16 [fb_hdr + 18] fb_sy
+
+        # Send PutImage 24-byte header
+        let fb_wr_res = syscall3 1, x11_fd, fb_hdr, 24
+
+        # Send pixel data strip: fb_width * fb_cur_h * 4 bytes
+        let fb_offset = fb_sy * fb_width
+        let fb_offset = fb_offset * 4
+        let fb_strip_bytes = fb_width * fb_cur_h
+        let fb_strip_bytes = fb_strip_bytes * 4
+        let fb_pix_ptr = fb_buf + fb_offset
+
+        let fb_wr_res = syscall3 1, x11_fd, fb_pix_ptr, fb_strip_bytes
+
+        let fb_sy = fb_sy + fb_cur_h
+    }
+
+    # 60 FPS sleep throttle
+    store64 [x11_ts + 0] 0
+    store64 [x11_ts + 8] 16000000
+    let fb_wr_res = syscall2 35, x11_ts, 0
+}

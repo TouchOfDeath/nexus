@@ -1,0 +1,16 @@
+# ==============================================================================
+# Fibonacci Sequence (NEXUS Stage 2 Native AOT)
+# Pure x86-64 Machine Code Execution
+# ==============================================================================
+let a = 0
+let b = 1
+let n = 10
+
+print "First 10 Fibonacci Numbers:"
+while n > 0 {
+    print a
+    let c = a + b
+    let a = b
+    let b = c
+    let n = n - 1
+}

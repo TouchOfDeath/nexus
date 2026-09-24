@@ -1,0 +1,227 @@
+# ==============================================================================
+#                  NEXUS STANDARD LIBRARY - MODULE: linalg.nex
+#              Linear Algebra Engine for 3D Simulations, Physics & AI
+# ==============================================================================
+#
+# Provides high-performance 64-bit integer vector and matrix primitives.
+#
+# Memory Layout:
+#   - Vectors: 1D array of 64-bit quadwords [v0, v1, ..., vN-1]
+#   - Matrices: Row-major contiguous 1D array of 64-bit quadwords
+#               Element at row r, col c in matrix with C columns is at offset
+#               (r * C + c) * 8 bytes.
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2, nx_i3, nx_i4, nx_i5
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_dot : Vector dot product: sum(a[i] * b[i]) for i in 0..n-1
+#   Inputs: nx_i0 = a (ptr), nx_i1 = b (ptr), nx_i2 = n
+#   Output: nx_r0 = scalar dot product
+# ------------------------------------------------------------------------------
+fn nx_vec_dot {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s2 {
+        let s4 = load64 [s0 + s3 * 8]
+        let s5 = load64 [s1 + s3 * 8]
+        let s6 = s4 * s5
+        let nx_r0 = nx_r0 + s6
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_add : Vector addition: out[i] = a[i] + b[i]
+#   Inputs: nx_i0 = a (ptr), nx_i1 = b (ptr), nx_i2 = out (ptr), nx_i3 = n
+# ------------------------------------------------------------------------------
+fn nx_vec_add {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = 0
+    while s4 < s3 {
+        let s5 = load64 [s0 + s4 * 8]
+        let s6 = load64 [s1 + s4 * 8]
+        let s7 = s5 + s6
+        store64 [s2 + s4 * 8] s7
+        let s4 = s4 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_sub : Vector subtraction: out[i] = a[i] - b[i]
+#   Inputs: nx_i0 = a (ptr), nx_i1 = b (ptr), nx_i2 = out (ptr), nx_i3 = n
+# ------------------------------------------------------------------------------
+fn nx_vec_sub {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = 0
+    while s4 < s3 {
+        let s5 = load64 [s0 + s4 * 8]
+        let s6 = load64 [s1 + s4 * 8]
+        let s7 = s5 - s6
+        store64 [s2 + s4 * 8] s7
+        let s4 = s4 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_scale : Vector scalar multiplication: out[i] = a[i] * scalar
+#   Inputs: nx_i0 = a (ptr), nx_i1 = scalar, nx_i2 = out (ptr), nx_i3 = n
+# ------------------------------------------------------------------------------
+fn nx_vec_scale {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = 0
+    while s4 < s3 {
+        let s5 = load64 [s0 + s4 * 8]
+        let s6 = s5 * s1
+        store64 [s2 + s4 * 8] s6
+        let s4 = s4 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec3_cross : 3D Vector Cross Product: out = a x b
+#   Inputs: nx_i0 = a (ptr, 3 elements), nx_i1 = b (ptr, 3 elements), nx_i2 = out (ptr, 3 elements)
+# ------------------------------------------------------------------------------
+fn nx_vec3_cross {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+
+    let ax = load64 [s0 + 0]
+    let ay = load64 [s0 + 8]
+    let az = load64 [s0 + 16]
+
+    let bx = load64 [s1 + 0]
+    let by = load64 [s1 + 8]
+    let bz = load64 [s1 + 16]
+
+    # out_x = ay * bz - az * by
+    let s3 = ay * bz
+    let s4 = az * by
+    let ox = s3 - s4
+
+    # out_y = az * bx - ax * bz
+    let s3 = az * bx
+    let s4 = ax * bz
+    let oy = s3 - s4
+
+    # out_z = ax * by - ay * bx
+    let s3 = ax * by
+    let s4 = ay * bx
+    let oz = s3 - s4
+
+    store64 [s2 + 0] ox
+    store64 [s2 + 8] oy
+    store64 [s2 + 16] oz
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec3_mag_sq : 3D Vector magnitude squared: x^2 + y^2 + z^2
+#   Inputs: nx_i0 = vec (ptr, 3 elements)
+#   Output: nx_r0 = length squared
+# ------------------------------------------------------------------------------
+fn nx_vec3_mag_sq {
+    let s0 = nx_i0
+    let s1 = load64 [s0 + 0]
+    let s2 = load64 [s0 + 8]
+    let s3 = load64 [s0 + 16]
+    let s4 = s1 * s1
+    let s5 = s2 * s2
+    let s6 = s3 * s3
+    let s7 = s4 + s5
+    let nx_r0 = s7 + s6
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_mat_mul : Matrix Multiplication C = A * B
+#   Dimension: A is (M x K), B is (K x N), C is (M x N)
+#   Inputs: nx_i0 = matA (ptr)
+#           nx_i1 = matB (ptr)
+#           nx_i2 = outC (ptr)
+#           nx_i3 = M (rows in A)
+#           nx_i4 = K (cols in A / rows in B)
+#           nx_i5 = N (cols in B)
+# ------------------------------------------------------------------------------
+fn nx_mat_mul {
+    let mA = nx_i0
+    let mB = nx_i1
+    let mC = nx_i2
+    let dimM = nx_i3
+    let dimK = nx_i4
+    let dimN = nx_i5
+
+    let r = 0
+    while r < dimM {
+        let c = 0
+        while c < dimN {
+            let dot_sum = 0
+            let k = 0
+            while k < dimK {
+                # a_idx = r * dimK + k
+                let a_idx = r * dimK
+                let a_idx = a_idx + k
+                let valA = load64 [mA + a_idx * 8]
+
+                # b_idx = k * dimN + c
+                let b_idx = k * dimN
+                let b_idx = b_idx + c
+                let valB = load64 [mB + b_idx * 8]
+
+                let term = valA * valB
+                let dot_sum = dot_sum + term
+                let k = k + 1
+            }
+            # c_idx = r * dimN + c
+            let c_idx = r * dimN
+            let c_idx = c_idx + c
+            store64 [mC + c_idx * 8] dot_sum
+            let c = c + 1
+        }
+        let r = r + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_mat_transpose : Matrix Transpose C = A^T
+#   A is (rows x cols), C is (cols x rows)
+#   Inputs: nx_i0 = matA, nx_i1 = outC, nx_i2 = rows, nx_i3 = cols
+# ------------------------------------------------------------------------------
+fn nx_mat_transpose {
+    let mA = nx_i0
+    let mC = nx_i1
+    let m_rows = nx_i2
+    let m_cols = nx_i3
+
+    let r = 0
+    while r < m_rows {
+        let c = 0
+        while c < m_cols {
+            # a_idx = r * m_cols + c
+            let a_idx = r * m_cols
+            let a_idx = a_idx + c
+            let val = load64 [mA + a_idx * 8]
+
+            # c_idx = c * m_rows + r
+            let c_idx = c * m_rows
+            let c_idx = c_idx + r
+            store64 [mC + c_idx * 8] val
+            let c = c + 1
+        }
+        let r = r + 1
+    }
+}

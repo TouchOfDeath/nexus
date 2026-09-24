@@ -1,0 +1,32 @@
+==================================================================
+ NEXUS v5.3 VERIFICATION LOG — 2026-09-20 11:15 UTC
+==================================================================
+
+--- 1. Full regression suite (./nexus test) ---
+[+] Foundation: Stdlib Sort + Assert         PASS (verified ASSERTIONS: 1 passed, 0 failed)
+[+] Stdlib suite: 94 assertions                  PASS
+
+Completed: 17 example suites, 11/11 diagnostics, 20/20 foundation tests, stdlib=PASS
+
+--- 2. Self-hosting fixed point (./nexus self-host) ---
+1. Testing Gen 3 (nexc3.exe) -> app.exe (Gen 4)...
+   Generated PE size: 49152 bytes
+   Diff vs nexc3.exe: 0 byte differences across 49,152 bytes
+   Diff vs nexc4.exe: 0 byte differences across 49,152 bytes
+2. Testing Standalone Linux Compiler (nexc.elf) Self-Hosting...
+   Diff (nexc.elf emitted app.exe vs nexc3.exe): 0 differences
+   Diff (app.elf vs nexc.elf): 0 differences across 57951 bytes
+[SUCCESS] 100% Bit-for-bit identical across Windows PE32+ and Linux ELF64!
+
+--- 3. Incremental build demo (./nexus build) ---
+[+] Built /home/z/my-project/nexus_work/nexus_project/examples/fibonacci.exe (49152 bytes)
+[+] Built /home/z/my-project/nexus_work/nexus_project/examples/fibonacci.elf (57951 bytes) in 1 ms
+[+] Run: /home/z/my-project/nexus_work/nexus_project/examples/fibonacci.elf
+[up-to-date] /home/z/my-project/nexus_work/nexus_project/examples/fibonacci.elf (dependencies unchanged)
+[+] Run: /home/z/my-project/nexus_work/nexus_project/examples/fibonacci.elf
+
+--- 4. Native test runner (./nexus test --file) ---
+[+] tests/loop_control_test.nex              PASS (0 assertions)
+[+] tests/array_ops_test.nex                 PASS (13 assertions)
+
+nextest: 2/2 test file(s) passed

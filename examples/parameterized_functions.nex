@@ -1,0 +1,62 @@
+# ==============================================================================
+#                  NEXUS EXAMPLE: PARAMETERIZED FUNCTIONS
+#       Demonstrating clean function parameters, return values, & nested calls
+# ==============================================================================
+
+fn square(x) {
+    return x * x
+}
+
+fn cube(x) {
+    let s = call square(x)
+    return s * x
+}
+
+fn clamp(val, min_val, max_val) {
+    if val < min_val {
+        return min_val
+    }
+    if val > max_val {
+        return max_val
+    }
+    return val
+}
+
+fn add_three(a, b, c) {
+    let s = a + b + c
+    return s
+}
+
+fn lerp(a, b, t) {
+    let diff = b -. a
+    let scaled = diff *. t
+    let res = a +. scaled
+    return res
+}
+
+print "--- Parameterized Functions Showcase ---"
+let sq = call square(7)
+print "7 squared (expected 49):"
+print sq
+
+let cb = call cube(6)
+print "6 cubed (expected 216):"
+print cb
+
+let clamped = call clamp(250, 0, 100)
+print "250 clamped to [0, 100] (expected 100):"
+print clamped
+
+let sum3 = call add_three(10, 20, 30)
+print "10 + 20 + 30 (expected 60):"
+print sum3
+
+let nested = call square(call add_three(1, 2, 3))
+print "square(1+2+3) (expected 36):"
+print nested
+
+let interp = call lerp(10.0, 20.0, 0.5)
+print "lerp(10.0, 20.0, 0.5) (expected 15.000000):"
+print_float interp
+
+print "=== PARAMETERIZED FUNCTIONS DEMO SUCCESSFUL ==="

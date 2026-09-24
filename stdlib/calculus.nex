@@ -1,0 +1,98 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: calculus.nex
+#             Numerical Methods: Differentiation, Integration & RK4
+# ==============================================================================
+#
+# Provides numerical calculus primitives for physical simulations and kinematics.
+# All operations use 64-bit integer fixed-point scaling (scale e.g. 1000).
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2, nx_i3
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_diff_central : Central difference numerical derivative on sample array
+#   For interior points: out[i] = (y[i+1] - y[i-1]) / (2 * dx)
+#   For boundaries: forward/backward difference
+#   Inputs: nx_i0 = y_samples (ptr), nx_i1 = n, nx_i2 = dx (fixed scale), nx_i3 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_diff_central {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+
+    if s1 >= 2 {
+        # First point: forward difference (y[1] - y[0]) / dx
+        let s4 = load64 [s0 + 8]
+        let s5 = load64 [s0 + 0]
+        let s6 = s4 - s5
+        let s6 = s6 / s2
+        store64 [s3 + 0] s6
+
+        # Interior points: central difference (y[i+1] - y[i-1]) / (2 * dx)
+        let two_dx = s2 * 2
+        let s4 = 1
+        let s7 = s1 - 1
+        while s4 < s7 {
+            let next_idx = s4 + 1
+            let prev_idx = s4 - 1
+            let y_next = load64 [s0 + next_idx * 8]
+            let y_prev = load64 [s0 + prev_idx * 8]
+            let diff = y_next - y_prev
+            let deriv = diff / two_dx
+            store64 [s3 + s4 * 8] deriv
+            let s4 = s4 + 1
+        }
+
+        # Last point: backward difference (y[n-1] - y[n-2]) / dx
+        let last_idx = s1 - 1
+        let prev_idx = s1 - 2
+        let y_last = load64 [s0 + last_idx * 8]
+        let y_prev = load64 [s0 + prev_idx * 8]
+        let diff = y_last - y_prev
+        let deriv = diff / s2
+        store64 [s3 + last_idx * 8] deriv
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_simpson_integrate : Numerical integration via Simpson's 1/3 rule
+#   Approximates integral = (dx / 3) * (y_0 + 4*y_1 + 2*y_2 + 4*y_3 + ... + y_n)
+#   Inputs: nx_i0 = y_samples (ptr), nx_i1 = n (odd number >= 3), nx_i2 = dx
+#   Output: nx_r0 = integrated area
+# ------------------------------------------------------------------------------
+fn nx_simpson_integrate {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+
+    if s1 < 3 {
+        let nx_r0 = 0
+    } else {
+        let first_y = load64 [s0 + 0]
+        let last_idx = s1 - 1
+        let last_y = load64 [s0 + last_idx * 8]
+        let sum = first_y + last_y
+
+        let i = 1
+        while i < last_idx {
+            let y_val = load64 [s0 + i * 8]
+            let rem = i % 2
+            if rem == 1 {
+                let term = y_val * 4
+                let sum = sum + term
+            } else {
+                let term = y_val * 2
+                let sum = sum + term
+            }
+            let i = i + 1
+        }
+
+        # Area = (sum * dx) / 3
+        let area = sum * s2
+        let nx_r0 = area / 3
+    }
+}

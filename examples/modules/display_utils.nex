@@ -1,0 +1,16 @@
+# ==============================================================================
+#                 NEXUS MODULE: display_utils.nex
+#             Formatting and telemetry routines for NEXUS
+# ==============================================================================
+
+fn show_banner {
+    print "=================================================="
+    print " [NEXUS] Multi-File Modular Pipeline Active"
+    print "=================================================="
+}
+
+fn show_footer {
+    print "=================================================="
+    print " [SUCCESS] Multi-File Inclusion Verified!"
+    print "=================================================="
+}

@@ -1,0 +1,108 @@
+# ==============================================================================
+#            NEXUS SOFTWARE FRAMEBUFFER DEMONSTRATION (framebuffer_demo.nex)
+#     0% C - 0% libc - 0% Xlib - 100% Direct Memory Blitting via PutImage
+# ==============================================================================
+
+include "stdlib/framebuffer.nex"
+
+# Initialize 320x240 Framebuffer
+let fb_width = 320
+let fb_height = 240
+call fb_init
+
+let frame = 0
+let running = 1
+
+while running == 1 {
+    let frame = frame + 1
+
+    # Check for user input (Escape to quit)
+    call x11_poll_events
+    if x11_key == 255 {
+        let running = 0
+    }
+
+    # 1. Clear background to dark navy blue (0x000a1224)
+    let fb_col = 660004
+    call fb_clear
+
+    # 2. Draw dynamic plasma / gradient test bands
+    let row = 0
+    while row < 60 {
+        let band_r = row * 4 + frame
+        let band_r = band_r % 256
+        let band_g = row * 2 + frame
+        let band_g = band_g % 256
+        let band_b = 200
+
+        let fb_r = band_r
+        let fb_g = band_g
+        let fb_b = band_b
+        call fb_make_color
+
+        let fb_x = 20
+        let fb_y = 20 + row
+        let fb_w = 280
+        let fb_h = 1
+        call fb_draw_rect
+
+        let row = row + 1
+    }
+
+    # 3. Draw Bresenham Lines: Starburst pattern centered at (160, 160)
+    let cx = 160
+    let cy = 160
+
+    # Line 1: Green horizontal
+    let fb_x0 = 40
+    let fb_y0 = cy
+    let fb_x1 = 280
+    let fb_y1 = cy
+    let fb_col = 65280  # 0x0000FF00 Green
+    call fb_draw_line
+
+    # Line 2: Red diagonal
+    let fb_x0 = 80
+    let fb_y0 = 100
+    let fb_x1 = 240
+    let fb_y1 = 220
+    let fb_col = 16711680 # 0x00FF0000 Red
+    call fb_draw_line
+
+    # Line 3: Cyan diagonal
+    let fb_x0 = 240
+    let fb_y0 = 100
+    let fb_x1 = 80
+    let fb_y1 = 220
+    let fb_col = 65535 # 0x0000FFFF Cyan
+    call fb_draw_line
+
+    # Line 4: Yellow vertical
+    let fb_x0 = cx
+    let fb_y0 = 100
+    let fb_x1 = cx
+    let fb_y1 = 220
+    let fb_col = 16776960 # 0x00FFFF00 Yellow
+    call fb_draw_line
+
+    # 4. Animated moving bouncing pixel / box
+    let box_x = frame * 3
+    let box_x = box_x % 240
+    let box_x = box_x + 40
+    let fb_x = box_x
+    let fb_y = 150
+    let fb_w = 12
+    let fb_h = 12
+    let fb_col = 16777215 # White
+    call fb_draw_rect
+
+    # 5. Present Framebuffer to X11 Desktop (PutImage slices @ 60 FPS)
+    call fb_present
+
+    # Auto-stop after 120 frames for headless/automated verification
+    if frame >= 120 {
+        let running = 0
+    }
+}
+
+call x11_close

@@ -1,0 +1,300 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY: CHIPTUNE AUDIO ENGINE
+#                 stdlib/sound.nex - Retro 8-bit Sound Synthesizer
+#      0% C - 0% libc - 100% Native Linux Kernel Audio via Async Subprocess
+# ==============================================================================
+
+# Memory Buffers
+let snd_wav_hdr = alloc 64
+let snd_pcm_buf = alloc 8192
+let snd_cmd_path = alloc 64
+let snd_arg_s = alloc 16
+let snd_arg_sock = alloc 64
+let snd_arg_file = alloc 64
+let snd_argv_arr = alloc 64
+let snd_envp_arr = alloc 16
+let snd_initialized = 0
+
+# Tone parameters
+let snd_num_samples = 2400
+let snd_seed = 4321
+
+# ------------------------------------------------------------------------------
+# snd_init: Configures RIFF WAV header (16000 Hz, 8-bit mono PCM) and player path
+# ------------------------------------------------------------------------------
+fn snd_init {
+    if snd_initialized == 1 {
+        return
+    }
+
+    # 1. Setup /usr/bin/paplay path
+    store [snd_cmd_path + 0] 47   # /
+    store [snd_cmd_path + 1] 117  # u
+    store [snd_cmd_path + 2] 115  # s
+    store [snd_cmd_path + 3] 114  # r
+    store [snd_cmd_path + 4] 47   # /
+    store [snd_cmd_path + 5] 98   # b
+    store [snd_cmd_path + 6] 105  # i
+    store [snd_cmd_path + 7] 110  # n
+    store [snd_cmd_path + 8] 47   # /
+    store [snd_cmd_path + 9] 112  # p
+    store [snd_cmd_path + 10] 97  # a
+    store [snd_cmd_path + 11] 112 # p
+    store [snd_cmd_path + 12] 108 # l
+    store [snd_cmd_path + 13] 97  # a
+    store [snd_cmd_path + 14] 121 # y
+    store [snd_cmd_path + 15] 0   # \0
+
+    # 2. Setup "-s"
+    store [snd_arg_s + 0] 45      # -
+    store [snd_arg_s + 1] 115     # s
+    store [snd_arg_s + 2] 0       # \0
+
+    # 3. Setup "/run/user/1000/pulse/native"
+    store [snd_arg_sock + 0] 47   # /
+    store [snd_arg_sock + 1] 114  # r
+    store [snd_arg_sock + 2] 117  # u
+    store [snd_arg_sock + 3] 110  # n
+    store [snd_arg_sock + 4] 47   # /
+    store [snd_arg_sock + 5] 117  # u
+    store [snd_arg_sock + 6] 115  # s
+    store [snd_arg_sock + 7] 101  # e
+    store [snd_arg_sock + 8] 114  # r
+    store [snd_arg_sock + 9] 47   # /
+    store [snd_arg_sock + 10] 49  # 1
+    store [snd_arg_sock + 11] 48  # 0
+    store [snd_arg_sock + 12] 48  # 0
+    store [snd_arg_sock + 13] 48  # 0
+    store [snd_arg_sock + 14] 47  # /
+    store [snd_arg_sock + 15] 112 # p
+    store [snd_arg_sock + 16] 117 # u
+    store [snd_arg_sock + 17] 108 # l
+    store [snd_arg_sock + 18] 115 # s
+    store [snd_arg_sock + 19] 101 # e
+    store [snd_arg_sock + 20] 47  # /
+    store [snd_arg_sock + 21] 110 # n
+    store [snd_arg_sock + 22] 97  # a
+    store [snd_arg_sock + 23] 116 # t
+    store [snd_arg_sock + 24] 105 # i
+    store [snd_arg_sock + 25] 118 # v
+    store [snd_arg_sock + 26] 101 # e
+    store [snd_arg_sock + 27] 0   # \0
+
+    # 4. Setup /tmp/nex_snd.wav path
+    store [snd_arg_file + 0] 47   # /
+    store [snd_arg_file + 1] 116  # t
+    store [snd_arg_file + 2] 109  # m
+    store [snd_arg_file + 3] 112  # p
+    store [snd_arg_file + 4] 47   # /
+    store [snd_arg_file + 5] 110  # n
+    store [snd_arg_file + 6] 101  # e
+    store [snd_arg_file + 7] 120  # x
+    store [snd_arg_file + 8] 95   # _
+    store [snd_arg_file + 9] 115  # s
+    store [snd_arg_file + 10] 110 # n
+    store [snd_arg_file + 11] 100 # d
+    store [snd_arg_file + 12] 46  # .
+    store [snd_arg_file + 13] 119 # w
+    store [snd_arg_file + 14] 97  # a
+    store [snd_arg_file + 15] 118 # v
+    store [snd_arg_file + 16] 0   # \0
+
+    # 5. Setup argv = [cmd_path, "-s", "/run/user/1000/pulse/native", arg_file, NULL]
+    store64 [snd_argv_arr + 0] snd_cmd_path
+    store64 [snd_argv_arr + 8] snd_arg_s
+    store64 [snd_argv_arr + 16] snd_arg_sock
+    store64 [snd_argv_arr + 24] snd_arg_file
+    store64 [snd_argv_arr + 32] 0
+    store64 [snd_envp_arr + 0] 0
+
+    # 4. Configure static RIFF/WAVE header
+    store [snd_wav_hdr + 0] 82   # 'R'
+    store [snd_wav_hdr + 1] 73   # 'I'
+    store [snd_wav_hdr + 2] 70   # 'F'
+    store [snd_wav_hdr + 3] 70   # 'F'
+    store [snd_wav_hdr + 8] 87   # 'W'
+    store [snd_wav_hdr + 9] 65   # 'A'
+    store [snd_wav_hdr + 10] 86  # 'V'
+    store [snd_wav_hdr + 11] 69  # 'E'
+    store [snd_wav_hdr + 12] 102 # 'f'
+    store [snd_wav_hdr + 13] 109 # 'm'
+    store [snd_wav_hdr + 14] 116 # 't'
+    store [snd_wav_hdr + 15] 32  # ' '
+    store32 [snd_wav_hdr + 16] 16 # Subchunk1Size = 16
+    store16 [snd_wav_hdr + 20] 1  # AudioFormat = 1 (PCM)
+    store16 [snd_wav_hdr + 22] 1  # NumChannels = 1 (Mono)
+    store32 [snd_wav_hdr + 24] 16000 # SampleRate = 16000
+    store32 [snd_wav_hdr + 28] 16000 # ByteRate = 16000
+    store16 [snd_wav_hdr + 32] 1  # BlockAlign = 1
+    store16 [snd_wav_hdr + 34] 8  # BitsPerSample = 8
+    store [snd_wav_hdr + 36] 100 # 'd'
+    store [snd_wav_hdr + 37] 97  # 'a'
+    store [snd_wav_hdr + 38] 116 # 't'
+    store [snd_wav_hdr + 39] 97  # 'a'
+
+    let snd_initialized = 1
+}
+
+# ------------------------------------------------------------------------------
+# snd_flush_and_play: Writes WAV file to disk and forks async paplay subprocess
+# ------------------------------------------------------------------------------
+fn snd_flush_and_play {
+    # Update dynamic file size fields in header
+    let snd_riff_sz = snd_num_samples + 36
+    store32 [snd_wav_hdr + 4] snd_riff_sz
+    store32 [snd_wav_hdr + 40] snd_num_samples
+
+    # Open /tmp/nex_snd.wav: sys_open(path, O_WRONLY|O_CREAT|O_TRUNC=577, 0644=420)
+    let snd_fd = syscall3 2, snd_arg_file, 577, 420
+    if snd_fd >= 0 {
+        # Write 44-byte WAV header
+        let wr1 = syscall3 1, snd_fd, snd_wav_hdr, 44
+        # Write PCM sample buffer
+        let wr2 = syscall3 1, snd_fd, snd_pcm_buf, snd_num_samples
+        # Close file
+        let cl = syscall1 3, snd_fd
+
+        # Fork background audio worker
+        let snd_pid = syscall0 57
+        if snd_pid == 0 {
+            let res = syscall3 59, snd_cmd_path, snd_argv_arr, snd_envp_arr
+            syscall1 60, 0
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# snd_play_jump: Synthesizes rising square-wave platformer jump tone (150ms)
+# ------------------------------------------------------------------------------
+fn snd_play_jump {
+    call snd_init
+
+    let snd_num_samples = 2400 # 150ms @ 16kHz
+    let s_i = 0
+
+    while s_i < snd_num_samples {
+        # Rising frequency from 300 Hz to 900 Hz
+        let freq_delta = s_i * 600
+        let freq_delta = freq_delta / snd_num_samples
+        let cur_freq = 300 + freq_delta
+
+        # Square wave: period = 16000 / cur_freq
+        let period = 16000 / cur_freq
+        let half_period = period / 2
+        let phase = s_i % period
+
+        let val = 56
+        if phase < half_period {
+            let val = 200
+        }
+
+        store [snd_pcm_buf + s_i] val
+        let s_i = s_i + 1
+    }
+
+    call snd_flush_and_play
+}
+
+# ------------------------------------------------------------------------------
+# snd_play_point: Synthesizes high-pitch two-tone point scored chime (180ms)
+# ------------------------------------------------------------------------------
+fn snd_play_point {
+    call snd_init
+
+    let snd_num_samples = 2880 # 180ms @ 16kHz
+    let s_i = 0
+
+    while s_i < snd_num_samples {
+        # First tone B5 (987 Hz) for first 1200 samples, then E6 (1318 Hz)
+        let cur_freq = 987
+        if s_i >= 1200 {
+            let cur_freq = 1318
+        }
+
+        let period = 16000 / cur_freq
+        let half_period = period / 2
+        let phase = s_i % period
+
+        let val = 56
+        if phase < half_period {
+            let val = 200
+        }
+
+        store [snd_pcm_buf + s_i] val
+        let s_i = s_i + 1
+    }
+
+    call snd_flush_and_play
+}
+
+# ------------------------------------------------------------------------------
+# snd_play_hit: Synthesizes retro white noise collision burst (120ms)
+# ------------------------------------------------------------------------------
+fn snd_play_hit {
+    call snd_init
+
+    let snd_num_samples = 1920 # 120ms @ 16kHz
+    let s_i = 0
+
+    while s_i < snd_num_samples {
+        # Pseudo-random noise generator
+        let snd_seed = snd_seed * 1103515245
+        let snd_seed = snd_seed + 12345
+        let noise_val = snd_seed % 120
+        if noise_val < 0 {
+            let noise_val = 0 - noise_val
+        }
+
+        # Decaying amplitude envelope
+        let decay = s_i * 80
+        let decay = decay / snd_num_samples
+        let amp = 100 - decay
+
+        let pcm_val = 128 - noise_val
+        if pcm_val < 50 {
+            let pcm_val = 50
+        }
+        if pcm_val > 205 {
+            let pcm_val = 205
+        }
+
+        store [snd_pcm_buf + s_i] pcm_val
+        let s_i = s_i + 1
+    }
+
+    call snd_flush_and_play
+}
+
+# ------------------------------------------------------------------------------
+# snd_play_laser: Synthesizes retro falling frequency laser blaster (120ms)
+# ------------------------------------------------------------------------------
+fn snd_play_laser {
+    call snd_init
+
+    let snd_num_samples = 1920 # 120ms @ 16kHz
+    let s_i = 0
+
+    while s_i < snd_num_samples {
+        # Falling frequency from 1400 Hz down to 200 Hz
+        let freq_drop = s_i * 1200
+        let freq_drop = freq_drop / snd_num_samples
+        let cur_freq = 1400 - freq_drop
+        if cur_freq < 150 {
+            let cur_freq = 150
+        }
+
+        let period = 16000 / cur_freq
+        let half_period = period / 2
+        let phase = s_i % period
+
+        let val = 56
+        if phase < half_period {
+            let val = 200
+        }
+
+        store [snd_pcm_buf + s_i] val
+        let s_i = s_i + 1
+    }
+
+    call snd_flush_and_play
+}

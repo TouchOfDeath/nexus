@@ -1,0 +1,14 @@
+# ==============================================================================
+# Factorial Algorithm (NEXUS Stage 2 Native AOT)
+# Pure x86-64 Machine Code Execution
+# ==============================================================================
+let n = 6
+let f = 1
+
+while n > 1 {
+    let f = f * n
+    let n = n - 1
+}
+
+print "Factorial of 6 (Expected: 720):"
+print f

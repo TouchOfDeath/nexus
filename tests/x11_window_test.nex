@@ -1,0 +1,182 @@
+# ==============================================================================
+# X11 Pure Native NEXUS Test: tests/x11_window_test.nex
+# Zero C - Zero libc - Zero Xlib - Pure Linux Syscalls & X11 Protocol
+# ==============================================================================
+
+print "--- Starting Pure Native NEXUS X11 Test ---"
+
+# 1. Open UNIX domain socket: socket(AF_UNIX=1, SOCK_STREAM=1, 0)
+let fd = syscall3 41, 1, 1, 0
+if fd < 0 {
+    print "[FAIL] Could not create UNIX domain socket"
+        syscall1 60, 1
+}
+print "[OK] Socket created, fd = "
+print fd
+
+# 2. Prepare sockaddr_un for "/tmp/.X11-unix/X0"
+let sa = alloc 128
+store16 [sa + 0] 1
+store [sa + 2] 47   # /
+store [sa + 3] 116  # t
+store [sa + 4] 109  # m
+store [sa + 5] 112  # p
+store [sa + 6] 47   # /
+store [sa + 7] 46   # .
+store [sa + 8] 88   # X
+store [sa + 9] 49   # 1
+store [sa + 10] 49  # 1
+store [sa + 11] 45  # -
+store [sa + 12] 117 # u
+store [sa + 13] 110 # n
+store [sa + 14] 105 # i
+store [sa + 15] 120 # x
+store [sa + 16] 47  # /
+store [sa + 17] 88  # X
+store [sa + 18] 48  # 0
+store [sa + 19] 0   # \0
+
+# 3. Connect to X server: connect(fd, sa, 110)
+let conn = syscall3 42, fd, sa, 110
+if conn < 0 {
+    print "[FAIL] Could not connect to /tmp/.X11-unix/X0"
+        syscall1 60, 1
+}
+print "[OK] Connected to X11 server"
+
+# 4. Send 12-byte Setup Request
+let buf = alloc 16384
+store [buf + 0] 108   # 'l' (little endian)
+store [buf + 1] 0     # pad
+store16 [buf + 2] 11  # major version 11
+store16 [buf + 4] 0   # minor version 0
+store16 [buf + 6] 0   # auth proto len 0
+store16 [buf + 8] 0   # auth data len 0
+store16 [buf + 10] 0  # pad
+let wr = syscall3 1, fd, buf, 12
+
+# 5. Read 8-byte setup reply header
+let rd = syscall3 0, fd, buf, 8
+if rd < 8 {
+    print "[FAIL] Handshake header read failed"
+        syscall1 60, 1
+}
+
+let status = load [buf + 0]
+if status != 1 {
+    print "[FAIL] Handshake rejected by X11 server, status = "
+    print status
+        syscall1 60, 1
+}
+
+let add_quads = load16 [buf + 6]
+let add_bytes = add_quads * 4
+print "[OK] Handshake success! Additional bytes = "
+print add_bytes
+
+# 6. Read remaining setup reply payload
+let cur_read = 0
+while cur_read < add_bytes {
+    let rem = add_bytes - cur_read
+    let ptr = buf + cur_read
+    let n = syscall3 0, fd, ptr, rem
+    if n <= 0 {
+        print "[FAIL] Failed reading setup reply payload"
+            syscall1 60, 1
+    }
+    let cur_read = cur_read + n
+}
+print "[OK] Received full setup payload: "
+print cur_read
+
+# 7. Extract resource_id_base, vendor_len, num_formats, root_window
+let r_base = load32 [buf + 4]
+let v_len = load16 [buf + 16]
+let n_fmts = load [buf + 21]
+
+let v_pad = v_len + 3
+let v_pad = v_pad / 4
+let v_pad = v_pad * 4
+
+let scr_offset = 32 + v_pad
+let fmt_bytes = n_fmts * 8
+let scr_offset = scr_offset + fmt_bytes
+
+let root_win = load32 [buf + scr_offset]
+
+print "[OK] Resource Base: "
+print r_base
+print "[OK] Root Window ID: "
+print root_win
+
+let my_win = r_base + 1
+let my_gc = r_base + 2
+
+# 8. Send CreateWindow (Opcode 1)
+# Request length: 10 (40 bytes)
+store [buf + 0] 1      # Opcode: CreateWindow
+store [buf + 1] 0      # Depth: 0 (CopyFromParent)
+store16 [buf + 2] 10   # Length: 10 quads (40 bytes)
+store32 [buf + 4] my_win
+store32 [buf + 8] root_win
+store16 [buf + 12] 120 # x
+store16 [buf + 14] 120 # y
+store16 [buf + 16] 360 # width
+store16 [buf + 18] 600 # height
+store16 [buf + 20] 0   # border width
+store16 [buf + 22] 0   # class: CopyFromParent
+store32 [buf + 24] 0   # visual: CopyFromParent
+store32 [buf + 28] 2050 # value_mask: CWBackPixel(2) | CWEventMask(2048)
+store32 [buf + 32] 7390670 # Sky Blue (0x0070c5ce)
+store32 [buf + 36] 32775   # KeyPress(1) | KeyRelease(2) | ButtonPress(4) | Exposure(32768)
+let wr = syscall3 1, fd, buf, 40
+
+# 9. Send CreateGC (Opcode 55)
+# Request length: 4 (16 bytes)
+store [buf + 0] 55     # Opcode: CreateGC
+store [buf + 1] 0
+store16 [buf + 2] 4    # Length: 4 quads (16 bytes)
+store32 [buf + 4] my_gc
+store32 [buf + 8] my_win
+store32 [buf + 12] 0   # value_mask: 0
+let wr = syscall3 1, fd, buf, 16
+
+# 10. Send MapWindow (Opcode 8)
+store [buf + 0] 8      # Opcode: MapWindow
+store [buf + 1] 0
+store16 [buf + 2] 2    # Length: 2 quads (8 bytes)
+store32 [buf + 4] my_win
+let wr = syscall3 1, fd, buf, 8
+
+# 11. ChangeGC to Yellow (Opcode 56)
+store [buf + 0] 56     # Opcode: ChangeGC
+store [buf + 1] 0
+store16 [buf + 2] 4    # Length: 4 quads (16 bytes)
+store32 [buf + 4] my_gc
+store32 [buf + 8] 4    # GCForeground (4)
+store32 [buf + 12] 16240696 # Yellow 0x00f7d038
+let wr = syscall3 1, fd, buf, 16
+
+# 12. PolyFillRectangle (Opcode 70)
+store [buf + 0] 70     # Opcode: PolyFillRectangle
+store [buf + 1] 0
+store16 [buf + 2] 5    # Length: 5 quads (20 bytes)
+store32 [buf + 4] my_win
+store32 [buf + 8] my_gc
+store16 [buf + 12] 80  # x
+store16 [buf + 14] 80  # y
+store16 [buf + 16] 200 # width
+store16 [buf + 18] 150 # height
+let wr = syscall3 1, fd, buf, 20
+
+print "[OK] Window mapped and rectangle drawn! Sleeping 1 second..."
+
+# 13. Sleep 1 second (1000000000 ns) using sys_nanosleep
+let ts = alloc 16
+store64 [ts + 0] 1
+store64 [ts + 8] 0
+let slp = syscall2 35, ts, 0
+
+print "[OK] Woke up! Closing socket..."
+let cl = syscall1 3, fd
+print "[ALL PASS] Pure Native NEXUS X11 Test Successful!"

@@ -1,0 +1,47 @@
+# ==============================================================================
+#                  NEXUS TEST: NATIVE EXPONENTIATION OPERATOR (**)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+print "=== Testing Native Exponentiation Operator (**) ==="
+
+# 1. Literals
+let p1 = 2 ** 0
+assert_eq p1, 1
+
+let p2 = 2 ** 10
+assert_eq p2, 1024
+
+let p3 = 3 ** 4
+assert_eq p3, 81
+
+let p4 = 5 ** 3
+assert_eq p4, 125
+
+let p5 = 10 ** 6
+assert_eq p5, 1000000
+
+# 2. Variables
+let b = 2
+let e = 16
+let p6 = b ** e
+assert_eq p6, 65536
+
+# 3. Compound Exponentiation Assignment (**=)
+let x = 2
+x **= 5
+assert_eq x, 32
+
+x **= 2
+assert_eq x, 1024
+
+# 4. Zero exponent and negative exponent
+let zero_pow = 12345 ** 0
+assert_eq zero_pow, 1
+
+let neg_pow = 2 ** -1
+assert_eq neg_pow, 0
+
+print "[SUCCESS] Native Exponentiation Tests Passed!"
+call nx_assert_summary

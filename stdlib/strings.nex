@@ -1,0 +1,189 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: strings.nex
+#    Null-terminated string + number conversion utilities for NEXUS programs
+# ==============================================================================
+#
+# Strings in NEXUS are pointers to null-terminated bytes. A string variable
+# obtained from a literal ('let s = "abc"') or from a heap buffer both work.
+#
+# CALLING CONVENTION: see math.nex header.
+#   nx_i0/nx_i1/nx_i2 = string pointers, char codes, or buffer pointers
+#   Char codes are ASCII: 'A' = 65, 'a' = 97, '0' = 48, '-' = 45
+
+# ------------------------------------------------------------------------------
+# fn nx_str_len : nx_r0 = byte length of string nx_i0 (excluding terminator)
+# ------------------------------------------------------------------------------
+fn nx_str_len {
+    let s0 = nx_i0
+    let nx_r0 = 0
+    let s1 = load [s0 + 0]
+    while s1 != 0 {
+        let nx_r0 = nx_r0 + 1
+        let s1 = load [s0 + nx_r0]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_copy : copy string nx_i0 into buffer nx_i1 (including terminator)
+#                  The destination buffer must be large enough.
+# ------------------------------------------------------------------------------
+fn nx_str_copy {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = 0
+    let s3 = load [s0 + 0]
+    while s3 != 0 {
+        store [s1 + s2] s3
+        let s2 = s2 + 1
+        let s3 = load [s0 + s2]
+    }
+    store [s1 + s2] 0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_cmp : compare strings nx_i0 and nx_i1 byte-wise
+#                 nx_r0 = -1 if nx_i0 < nx_i1, 0 if equal, 1 if nx_i0 > nx_i1
+# ------------------------------------------------------------------------------
+fn nx_str_cmp {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s5 = 1
+    let s2 = 0
+    while s5 == 1 {
+        let s3 = load [s0 + s2]
+        let s4 = load [s1 + s2]
+        if s3 < s4 {
+            let nx_r0 = 0 - 1
+            let s5 = 0
+        }
+        if s3 > s4 {
+            let nx_r0 = 1
+            let s5 = 0
+        }
+        if s3 == 0 {
+            if s4 == 0 {
+                let nx_r0 = 0
+                let s5 = 0
+            }
+        }
+        let s2 = s2 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_concat : dst(nx_i2) = string nx_i0 + string nx_i1
+#                    Destination buffer must hold len(a)+len(b)+1 bytes.
+# ------------------------------------------------------------------------------
+fn nx_str_concat {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s6 = nx_i2
+    let s2 = 0
+    let s3 = load [s0 + 0]
+    while s3 != 0 {
+        store [s6 + s2] s3
+        let s2 = s2 + 1
+        let s3 = load [s0 + s2]
+    }
+    let s4 = 0
+    let s3 = load [s1 + 0]
+    while s3 != 0 {
+        store [s6 + s2] s3
+        let s2 = s2 + 1
+        let s4 = s4 + 1
+        let s3 = load [s1 + s4]
+    }
+    store [s6 + s2] 0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_chr : nx_r0 = first index of char nx_i1 in string nx_i0, else -1
+# ------------------------------------------------------------------------------
+fn nx_str_chr {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0 - 1
+    let s2 = 0
+    let s3 = load [s0 + 0]
+    while s3 != 0 {
+        if nx_r0 < 0 {
+            if s3 == s1 {
+                let nx_r0 = s2
+            }
+        }
+        let s2 = s2 + 1
+        let s3 = load [s0 + s2]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_to_int : nx_r0 = decimal integer parsed from string nx_i0
+#                    Accepts an optional leading '-'. Non-digit characters
+#                    are ignored. Stops at the null terminator.
+# ------------------------------------------------------------------------------
+fn nx_str_to_int {
+    let s0 = nx_i0
+    let nx_r0 = 0
+    let s1 = 0
+    let s2 = 0
+    let s3 = load [s0 + 0]
+    while s3 != 0 {
+        if s3 >= 48 {
+            if s3 <= 57 {
+                let s4 = s3 - 48
+                let nx_r0 = nx_r0 * 10
+                let nx_r0 = nx_r0 + s4
+            }
+        }
+        if s3 == 45 {
+            let s2 = 1
+        }
+        let s1 = s1 + 1
+        let s3 = load [s0 + s1]
+    }
+    if s2 == 1 {
+        let nx_r0 = 0 - nx_r0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_int_to_str : write decimal nx_i0 into buffer nx_i1, null-terminated
+#                    Buffer must hold at least 12 bytes (sign + 10 digits + 0).
+# ------------------------------------------------------------------------------
+fn nx_int_to_str {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = 0
+    let s3 = 0
+    if s0 < 0 {
+        let s3 = 1
+        let s0 = 0 - s0
+    }
+    if s0 == 0 {
+        store [s1 + 0] 48
+        let s2 = 1
+    }
+    while s0 > 0 {
+        let s4 = s0 % 10
+        let s4 = s4 + 48
+        store [s1 + s2] s4
+        let s2 = s2 + 1
+        let s0 = s0 / 10
+    }
+    if s3 == 1 {
+        store [s1 + s2] 45
+        let s2 = s2 + 1
+    }
+    let s5 = 0
+    let s6 = s2 - 1
+    while s5 < s6 {
+        let s7 = load [s1 + s5]
+        let s4 = load [s1 + s6]
+        store [s1 + s5] s4
+        store [s1 + s6] s7
+        let s5 = s5 + 1
+        let s6 = s6 - 1
+    }
+    store [s1 + s2] 0
+}

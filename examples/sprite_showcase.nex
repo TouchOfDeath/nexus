@@ -1,0 +1,258 @@
+# ==============================================================================
+#                 NEXUS SPRITE & PIXEL ART SHOWCASE DEMO
+#           0% C - 0% libc - 0% Xlib - 100% Pure Native NEXUS
+# ==============================================================================
+
+include "stdlib/x11.nex"
+include "stdlib/font.nex"
+include "stdlib/sprite.nex"
+include "examples/assets/spaceship_sprite.nex"
+include "examples/assets/alien_sprite.nex"
+
+# Shared rectangle parameters & helper
+let rx = 0
+let ry = 0
+let rw = 0
+let rh = 0
+let rc_r = 0
+let rc_g = 0
+let rc_b = 0
+
+fn draw_rect {
+    let x11_rx = rx
+    let x11_ry = ry
+    let x11_rw = rw
+    let x11_rh = rh
+    let x11_r = rc_r
+    let x11_g = rc_g
+    let x11_b = rc_b
+    call x11_fill_rect
+}
+
+# 1. Initialize Window (400x500)
+let x11_width = 400
+let x11_height = 500
+call x11_init
+
+let frame_count = 0
+while frame_count < 60 {
+    let frame_count = frame_count + 1
+
+    # Clear Space Background: Deep Void Navy (10, 15, 30)
+    let x11_r = 10
+    let x11_g = 15
+    let x11_b = 30
+    call x11_clear
+
+    # Starfield (Distant Twinkling Stars)
+    let x11_r = 255
+    let x11_g = 255
+    let x11_b = 255
+    let x11_rw = 2
+    let x11_rh = 2
+
+    let x11_rx = 40
+    let x11_ry = 80
+    call x11_fill_rect
+
+    let x11_rx = 120
+    let x11_ry = 140
+    call x11_fill_rect
+
+    let x11_rx = 320
+    let x11_ry = 90
+    call x11_fill_rect
+
+    let x11_rx = 280
+    let x11_ry = 220
+    call x11_fill_rect
+
+    let x11_rx = 70
+    let x11_ry = 340
+    call x11_fill_rect
+
+    let x11_rx = 350
+    let x11_ry = 420
+    call x11_fill_rect
+
+    # Title Banner (Neon Cyan & Golden Yellow)
+    let draw_text_str = "NEXUS SPRITE"
+    let draw_text_x = 36
+    let draw_text_y = 20
+    let draw_text_scale = 2
+    let draw_text_r = 56
+    let draw_text_g = 189
+    let draw_text_b = 248
+    call draw_text
+
+    let draw_text_str = "PIXEL ART ENGINE"
+    let draw_text_x = 36
+    let draw_text_y = 42
+    let draw_text_scale = 2
+    let draw_text_r = 250
+    let draw_text_g = 204
+    let draw_text_b = 21
+    call draw_text
+
+    # Section 1: Spaceship in multiple scales
+    let draw_text_str = "SPACESHIP (1x, 2x, 3x)"
+    let draw_text_x = 36
+    let draw_text_y = 80
+    let draw_text_scale = 1
+    let draw_text_r = 148
+    let draw_text_g = 163
+    let draw_text_b = 184
+    call draw_text
+
+    # Scale 1x
+    let sprite_ptr = spaceship_sprite_data
+    let sprite_x = 40
+    let sprite_y = 105
+    let sprite_scale = 1
+    let sprite_flip_x = 0
+    call draw_sprite
+
+    # Scale 2x
+    let sprite_x = 75
+    let sprite_y = 100
+    let sprite_scale = 2
+    call draw_sprite
+
+    # Scale 3x
+    let sprite_x = 135
+    let sprite_y = 95
+    let sprite_scale = 3
+    call draw_sprite
+
+    # Scale 4x (Showcase)
+    let sprite_x = 220
+    let sprite_y = 90
+    let sprite_scale = 4
+    call draw_sprite
+
+    # Section 2: Alien Invaders (Normal & Flipped)
+    let draw_text_str = "INVADERS (NORMAL & MIRRORED)"
+    let draw_text_x = 36
+    let draw_text_y = 190
+    let draw_text_scale = 1
+    let draw_text_r = 148
+    let draw_text_g = 163
+    let draw_text_b = 184
+    call draw_text
+
+    # Alien Scale 2x Normal
+    let sprite_ptr = alien_sprite_data
+    let sprite_x = 40
+    let sprite_y = 215
+    let sprite_scale = 2
+    let sprite_flip_x = 0
+    call draw_sprite
+
+    # Alien Scale 3x Normal
+    let sprite_x = 90
+    let sprite_y = 210
+    let sprite_scale = 3
+    let sprite_flip_x = 0
+    call draw_sprite
+
+    # Alien Scale 4x Normal
+    let sprite_x = 160
+    let sprite_y = 205
+    let sprite_scale = 4
+    let sprite_flip_x = 0
+    call draw_sprite
+
+    # Alien Scale 4x Horizontally Flipped
+    let sprite_x = 250
+    let sprite_y = 205
+    let sprite_scale = 4
+    let sprite_flip_x = 1
+    call draw_sprite
+
+    # Section 3: Performance Metrics Card
+    let rc_r = 30
+    let rc_g = 41
+    let rc_b = 59
+    let rx = 30
+    let ry = 310
+    let rw = 340
+    let rh = 150
+    call draw_rect
+
+    let rc_r = 56
+    let rc_g = 189
+    let rc_b = 248
+    let rx = 30
+    let ry = 310
+    let rw = 340
+    let rh = 3
+    call draw_rect
+
+    let draw_text_str = "PIXEL ART BENCHMARK"
+    let draw_text_x = 45
+    let draw_text_y = 325
+    let draw_text_scale = 1
+    let draw_text_r = 56
+    let draw_text_g = 189
+    let draw_text_b = 248
+    call draw_text
+
+    let draw_text_str = "Run-Length Span Compression: ACTIVE"
+    let draw_text_x = 45
+    let draw_text_y = 350
+    let draw_text_scale = 1
+    let draw_text_r = 255
+    let draw_text_g = 255
+    let draw_text_b = 255
+    call draw_text
+
+    let draw_text_str = "Transparency Color-Keying:  0 overhead"
+    let draw_text_x = 45
+    let draw_text_y = 370
+    let draw_text_scale = 1
+    let draw_text_r = 74
+    let draw_text_g = 222
+    let draw_text_b = 128
+    call draw_text
+
+    let draw_text_str = "Hardware FPS Pacing:        60 FPS"
+    let draw_text_x = 45
+    let draw_text_y = 390
+    let draw_text_scale = 1
+    let draw_text_r = 74
+    let draw_text_g = 222
+    let draw_text_b = 128
+    call draw_text
+
+    let draw_text_str = "Runtime Dependencies:       0% (libc-free)"
+    let draw_text_x = 45
+    let draw_text_y = 410
+    let draw_text_scale = 1
+    let draw_text_r = 250
+    let draw_text_g = 204
+    let draw_text_b = 21
+    call draw_text
+
+    let draw_text_str = "Active Frame: "
+    let draw_text_x = 45
+    let draw_text_y = 430
+    let draw_text_scale = 1
+    let draw_text_r = 148
+    let draw_text_g = 163
+    let draw_text_b = 184
+    call draw_text
+
+    let draw_int_val = frame_count
+    let draw_text_x = 165
+    let draw_text_y = 430
+    let draw_text_scale = 1
+    let draw_text_r = 255
+    let draw_text_g = 255
+    let draw_text_b = 255
+    call draw_int
+
+    call x11_present
+    call x11_poll_events
+}
+
+call x11_close

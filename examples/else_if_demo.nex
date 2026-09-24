@@ -1,0 +1,63 @@
+# ==============================================================================
+#                       NEXUS: ELSE IF CHAINING DEMO
+#           0% C#  -  0% .NET Runtime  -  100% Native x86-64 Machine Code
+#
+# Demonstrates flat conditional branching using '} else if <cond> {' syntax.
+# ==============================================================================
+
+print "--- NEXUS Else-If Chaining Showcase ---"
+
+# 1. Multi-way score classifier
+let score = 85
+let grade = 0
+
+if score >= 90 {
+    let grade = 1
+    print "Grade: A"
+} else if score >= 80 {
+    let grade = 2
+    print "Grade: B"
+} else if score >= 70 {
+    let grade = 3
+    print "Grade: C"
+} else if score >= 60 {
+    let grade = 4
+    print "Grade: D"
+} else {
+    let grade = 5
+    print "Grade: F"
+}
+
+# 2. Else-If without trailing else
+let status_code = 404
+if status_code == 200 {
+    print "Status: OK"
+} else if status_code == 301 {
+    print "Status: Moved Permanently"
+} else if status_code == 404 {
+    print "Status: Not Found"
+} else if status_code == 500 {
+    print "Status: Internal Server Error"
+}
+
+# 3. Else-If in a Loop
+let step = 1
+let accumulator = 0
+
+while step <= 4 {
+    if step == 1 {
+        let accumulator = accumulator + 10
+    } else if step == 2 {
+        let accumulator = accumulator + 20
+    } else if step == 3 {
+        let accumulator = accumulator + 30
+    } else {
+        let accumulator = accumulator + 40
+    }
+    let step = step + 1
+}
+
+print "Accumulator total (10+20+30+40):"
+print accumulator
+
+print "--- Showcase Execution Finished Successfully ---"

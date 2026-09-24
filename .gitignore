@@ -1,0 +1,19 @@
+# Build artifacts and caches
+.nexuscache
+**/.nexuscache
+scratch/
+*.log
+*.tmp
+core
+
+# Root compilation outputs
+/app.exe
+/app.elf
+/prologue.bin
+/code.nex
+
+# Compiler temporary outputs
+compiler/code.nex
+compiler/output.txt
+compiler/test_io_out.txt
+compiler/vars_test.dat

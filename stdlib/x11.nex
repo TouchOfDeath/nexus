@@ -1,0 +1,416 @@
+# ==============================================================================
+#                       NEXUS STANDARD LIBRARY: X11 GRAPHICS
+#                 stdlib/x11.nex - Pure Native X11 Protocol Driver
+#      0% C - 0% libc - 0% Xlib - 100% Raw Linux Syscalls & Direct X11 Wire Protocol
+# ==============================================================================
+
+# Global state for X11 connection and window
+let x11_fd = 0
+let x11_win_id = 0
+let x11_gc_id = 0
+let x11_root_win = 0
+let x11_cur_color = 0 - 1
+
+# Window dimensions
+let x11_width = 360
+let x11_height = 600
+
+# Input parameter registers
+let x11_rx = 0
+let x11_ry = 0
+let x11_rw = 0
+let x11_rh = 0
+let x11_r = 0
+let x11_g = 0
+let x11_b = 0
+
+# Output event register: 0 = none, 1 = space/click, 2 = enter, 255 = quit (Escape)
+let x11_key = 0
+
+# Internal buffers
+let x11_draw_buf = alloc 32768
+let x11_draw_p = 0
+let x11_ev_buf = alloc 64
+let x11_ts = alloc 16
+let x11_sock_addr = alloc 128
+let x11_scratch = alloc 16384
+
+# ------------------------------------------------------------------------------
+# x11_flush: Writes any buffered drawing commands to the X11 server socket
+# ------------------------------------------------------------------------------
+fn x11_flush {
+    if x11_draw_p > 0 {
+        let wr = syscall3 1, x11_fd, x11_draw_buf, x11_draw_p
+        let x11_draw_p = 0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# x11_set_color: Changes current graphics context foreground color
+# Inputs: x11_r, x11_g, x11_b (0..255)
+# ------------------------------------------------------------------------------
+fn x11_set_color {
+    let x11_col = x11_r * 65536
+    let x11_g_val = x11_g * 256
+    let x11_col = x11_col + x11_g_val
+    let x11_col = x11_col + x11_b
+
+    if x11_col != x11_cur_color {
+        let x11_cur_color = x11_col
+
+        # Flush if buffer is nearing capacity
+        if x11_draw_p > 30000 {
+            call x11_flush
+        }
+
+        # ChangeGC (Opcode 56, len 4 quads = 16 bytes)
+        let x11_ptr = x11_draw_buf + x11_draw_p
+        store [x11_ptr + 0] 56          # Opcode: ChangeGC
+        store [x11_ptr + 1] 0           # pad
+        store16 [x11_ptr + 2] 4         # Request length (4 quadwords)
+        store32 [x11_ptr + 4] x11_gc_id
+        store32 [x11_ptr + 8] 4         # Value mask: GCForeground (4)
+        store32 [x11_ptr + 12] x11_col  # Foreground color (0x00RRGGBB)
+        let x11_draw_p = x11_draw_p + 16
+    }
+}
+
+# ------------------------------------------------------------------------------
+# x11_fill_rect: Appends a PolyFillRectangle command to the draw buffer
+# Inputs: x11_rx, x11_ry, x11_rw, x11_rh, x11_r, x11_g, x11_b
+# ------------------------------------------------------------------------------
+fn x11_fill_rect {
+    if x11_rw <= 0 {
+        return
+    }
+    if x11_rh <= 0 {
+        return
+    }
+
+    call x11_set_color
+
+    if x11_draw_p > 30000 {
+        call x11_flush
+    }
+
+    # PolyFillRectangle (Opcode 70, len 5 quads = 20 bytes)
+    let x11_ptr = x11_draw_buf + x11_draw_p
+    store [x11_ptr + 0] 70          # Opcode: PolyFillRectangle
+    store [x11_ptr + 1] 0           # pad
+    store16 [x11_ptr + 2] 5         # Request length (5 quadwords)
+    store32 [x11_ptr + 4] x11_win_id
+    store32 [x11_ptr + 8] x11_gc_id
+
+    # Handle negative coordinates (two's complement 16-bit)
+    let x11_kx = x11_rx
+    if x11_kx < 0 {
+        let x11_kx = x11_kx + 65536
+    }
+    let x11_ky = x11_ry
+    if x11_ky < 0 {
+        let x11_ky = x11_ky + 65536
+    }
+
+    store16 [x11_ptr + 12] x11_kx
+    store16 [x11_ptr + 14] x11_ky
+    store16 [x11_ptr + 16] x11_rw
+    store16 [x11_ptr + 18] x11_rh
+    let x11_draw_p = x11_draw_p + 20
+}
+
+# ------------------------------------------------------------------------------
+# x11_clear: Clears the entire window surface to the specified RGB color
+# Inputs: x11_r, x11_g, x11_b
+# ------------------------------------------------------------------------------
+fn x11_clear {
+    let x11_rx = 0
+    let x11_ry = 0
+    let x11_rw = x11_width
+    let x11_rh = x11_height
+    call x11_fill_rect
+}
+
+# ------------------------------------------------------------------------------
+# x11_present: Flushes draw commands and throttles to 60 FPS (sys_nanosleep)
+# ------------------------------------------------------------------------------
+fn x11_present {
+    call x11_flush
+
+    # Precise 60 FPS pacing via sys_nanosleep (16.0 ms)
+    store64 [x11_ts + 0] 0
+    store64 [x11_ts + 8] 16000000
+    let slp = syscall2 35, x11_ts, 0
+}
+
+# ------------------------------------------------------------------------------
+# x11_poll_events: Drains pending X11 events non-blocking
+# Output: x11_key (0 = none, 1 = space/click, 2 = enter, 255 = quit/escape)
+# ------------------------------------------------------------------------------
+fn x11_poll_events {
+    let x11_key = 0
+    let polling = 1
+
+    while polling == 1 {
+        let ev_n = syscall6 45, x11_fd, x11_ev_buf, 32, 64, 0, 0
+        if ev_n < 32 {
+            let polling = 0
+        } else {
+            let ev_code = load [x11_ev_buf + 0]
+            if ev_code > 127 {
+                let ev_code = ev_code - 128
+            }
+
+            # KeyPress Event (Code 2)
+            if ev_code == 2 {
+                let keycode = load [x11_ev_buf + 1]
+                # Spacebar (65) -> Action / Flap
+                if keycode == 65 {
+                    let x11_key = 1
+                }
+                # Return / Enter (36) -> Confirm
+                if keycode == 36 {
+                    let x11_key = 2
+                }
+                # W (25) or Up Arrow (111) -> Forward
+                if keycode == 25 {
+                    let x11_key = 10
+                }
+                if keycode == 111 {
+                    let x11_key = 10
+                }
+                # S (39) or Down Arrow (116) -> Backward
+                if keycode == 39 {
+                    let x11_key = 11
+                }
+                if keycode == 116 {
+                    let x11_key = 11
+                }
+                # A (38) or Left Arrow (113) -> Turn Left
+                if keycode == 38 {
+                    let x11_key = 12
+                }
+                if keycode == 113 {
+                    let x11_key = 12
+                }
+                # D (40) or Right Arrow (114) -> Turn Right
+                if keycode == 40 {
+                    let x11_key = 13
+                }
+                if keycode == 114 {
+                    let x11_key = 13
+                }
+                # Escape (9) -> Quit
+                if keycode == 9 {
+                    let x11_key = 255
+                }
+            }
+
+            # ButtonPress Event (Code 4)
+            if ev_code == 4 {
+                let btn = load [x11_ev_buf + 1]
+                # Left Click (1) -> Flap / Start
+                if btn == 1 {
+                    let x11_key = 1
+                }
+            }
+
+            # ClientMessage / DestroyNotify
+            if ev_code == 17 {
+                let x11_key = 255
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# x11_init: Establishes raw socket connection, performs handshake, creates window
+# Inputs: x11_width, x11_height
+# ------------------------------------------------------------------------------
+fn x11_init {
+    # 1. Open UNIX domain socket: socket(AF_UNIX=1, SOCK_STREAM=1, 0)
+    let x11_fd = syscall3 41, 1, 1, 0
+    if x11_fd < 0 {
+        print "[-] Error: Failed to open X11 UNIX socket"
+        syscall1 60, 1
+    }
+
+    # 2. Build sockaddr_un for "/tmp/.X11-unix/X0"
+    store16 [x11_sock_addr + 0] 1
+    store [x11_sock_addr + 2] 47   # /
+    store [x11_sock_addr + 3] 116  # t
+    store [x11_sock_addr + 4] 109  # m
+    store [x11_sock_addr + 5] 112  # p
+    store [x11_sock_addr + 6] 47   # /
+    store [x11_sock_addr + 7] 46   # .
+    store [x11_sock_addr + 8] 88   # X
+    store [x11_sock_addr + 9] 49   # 1
+    store [x11_sock_addr + 10] 49  # 1
+    store [x11_sock_addr + 11] 45  # -
+    store [x11_sock_addr + 12] 117 # u
+    store [x11_sock_addr + 13] 110 # n
+    store [x11_sock_addr + 14] 105 # i
+    store [x11_sock_addr + 15] 120 # x
+    store [x11_sock_addr + 16] 47  # /
+    store [x11_sock_addr + 17] 88  # X
+    store [x11_sock_addr + 18] 48  # 0
+    store [x11_sock_addr + 19] 0   # \0
+
+    # 3. Connect to X server
+    let conn = syscall3 42, x11_fd, x11_sock_addr, 110
+    if conn < 0 {
+        print "[-] Error: Failed to connect to /tmp/.X11-unix/X0"
+        syscall1 60, 1
+    }
+
+    # 4. Send 12-byte Setup Request
+    store [x11_scratch + 0] 108   # 'l' (little endian)
+    store [x11_scratch + 1] 0     # pad
+    store16 [x11_scratch + 2] 11  # major version 11
+    store16 [x11_scratch + 4] 0   # minor version 0
+    store16 [x11_scratch + 6] 0   # auth proto len 0
+    store16 [x11_scratch + 8] 0   # auth data len 0
+    store16 [x11_scratch + 10] 0  # pad
+    let wr = syscall3 1, x11_fd, x11_scratch, 12
+
+    # 5. Read 8-byte setup reply header
+    let rd = syscall3 0, x11_fd, x11_scratch, 8
+    if rd < 8 {
+        print "[-] Error: Failed to read X11 setup reply header"
+        syscall1 60, 1
+    }
+
+    let hstatus = load [x11_scratch + 0]
+    if hstatus != 1 {
+        print "[-] Error: X11 connection rejected by server"
+        syscall1 60, 1
+    }
+
+    let add_quads = load16 [x11_scratch + 6]
+    let add_bytes = add_quads * 4
+
+    # 6. Read remaining setup reply payload
+    let cur_read = 0
+    while cur_read < add_bytes {
+        let rem = add_bytes - cur_read
+        let rptr = x11_scratch + cur_read
+        let n = syscall3 0, x11_fd, rptr, rem
+        if n <= 0 {
+            print "[-] Error: Incomplete X11 setup payload"
+            syscall1 60, 1
+        }
+        let cur_read = cur_read + n
+    }
+
+    # 7. Extract resource_id_base, vendor_len, num_formats, root_window
+    let r_base = load32 [x11_scratch + 4]
+    let v_len = load16 [x11_scratch + 16]
+    let n_fmts = load [x11_scratch + 21]
+
+    let v_pad = v_len + 3
+    let v_pad = v_pad / 4
+    let v_pad = v_pad * 4
+
+    let scr_offset = 32 + v_pad
+    let fmt_bytes = n_fmts * 8
+    let scr_offset = scr_offset + fmt_bytes
+
+    let x11_root_win = load32 [x11_scratch + scr_offset]
+    let x11_win_id = r_base + 1
+    let x11_gc_id = r_base + 2
+
+    # 8. Send CreateWindow (Opcode 1, 40 bytes)
+    store [x11_scratch + 0] 1      # Opcode: CreateWindow
+    store [x11_scratch + 1] 0      # Depth: 0 (CopyFromParent)
+    store16 [x11_scratch + 2] 10   # Length: 10 quads (40 bytes)
+    store32 [x11_scratch + 4] x11_win_id
+    store32 [x11_scratch + 8] x11_root_win
+    store16 [x11_scratch + 12] 120 # x
+    store16 [x11_scratch + 14] 80  # y
+    store16 [x11_scratch + 16] x11_width
+    store16 [x11_scratch + 18] x11_height
+    store16 [x11_scratch + 20] 0   # border width
+    store16 [x11_scratch + 22] 0   # class: CopyFromParent
+    store32 [x11_scratch + 24] 0   # visual: CopyFromParent
+    store32 [x11_scratch + 28] 2050 # value_mask: CWBackPixel(2) | CWEventMask(2048)
+    store32 [x11_scratch + 32] 7390670 # Sky Blue initial background
+    store32 [x11_scratch + 36] 32775   # KeyPress(1) | KeyRelease(2) | ButtonPress(4) | Exposure(32768)
+    let wr = syscall3 1, x11_fd, x11_scratch, 40
+
+    # 9. Set Window Title: "NEXUS Flappy Bird (Pure Native)" via ChangeProperty (Opcode 18)
+    # Title len = 30 chars. Padded to 32 bytes (8 quads). Request len = 6 + 8 = 14 quads (56 bytes)
+    store [x11_scratch + 0] 18     # Opcode: ChangeProperty
+    store [x11_scratch + 1] 0      # mode: PropModeReplace
+    store16 [x11_scratch + 2] 14   # request length (14 quads = 56 bytes)
+    store32 [x11_scratch + 4] x11_win_id
+    store32 [x11_scratch + 8] 39   # property: XA_WM_NAME (39)
+    store32 [x11_scratch + 12] 31  # type: XA_STRING (31)
+    store [x11_scratch + 16] 8     # format: 8
+    store [x11_scratch + 17] 0     # pad
+    store [x11_scratch + 18] 0     # pad
+    store [x11_scratch + 19] 0     # pad
+    store32 [x11_scratch + 20] 30  # data_len: 30 chars
+
+    # "NEXUS Flappy Bird (Pure Native)"
+    store [x11_scratch + 24] 78    # N
+    store [x11_scratch + 25] 69    # E
+    store [x11_scratch + 26] 88    # X
+    store [x11_scratch + 27] 85    # U
+    store [x11_scratch + 28] 83    # S
+    store [x11_scratch + 29] 32    #  
+    store [x11_scratch + 30] 70    # F
+    store [x11_scratch + 31] 108   # l
+    store [x11_scratch + 32] 97    # a
+    store [x11_scratch + 33] 112   # p
+    store [x11_scratch + 34] 112   # p
+    store [x11_scratch + 35] 121   # y
+    store [x11_scratch + 36] 32    #  
+    store [x11_scratch + 37] 66    # B
+    store [x11_scratch + 38] 105   # i
+    store [x11_scratch + 39] 114   # r
+    store [x11_scratch + 40] 100   # d
+    store [x11_scratch + 41] 32    #  
+    store [x11_scratch + 42] 40    # (
+    store [x11_scratch + 43] 80    # P
+    store [x11_scratch + 44] 117   # u
+    store [x11_scratch + 45] 114   # r
+    store [x11_scratch + 46] 101   # e
+    store [x11_scratch + 47] 32    #  
+    store [x11_scratch + 48] 78    # N
+    store [x11_scratch + 49] 97    # a
+    store [x11_scratch + 50] 116   # t
+    store [x11_scratch + 51] 105   # i
+    store [x11_scratch + 52] 118   # v
+    store [x11_scratch + 53] 101   # e
+    store [x11_scratch + 54] 41    # )
+    store [x11_scratch + 55] 0     # pad
+    let wr = syscall3 1, x11_fd, x11_scratch, 56
+
+    # 10. Send CreateGC (Opcode 55, 16 bytes)
+    store [x11_scratch + 0] 55     # Opcode: CreateGC
+    store [x11_scratch + 1] 0
+    store16 [x11_scratch + 2] 4    # Length: 4 quads (16 bytes)
+    store32 [x11_scratch + 4] x11_gc_id
+    store32 [x11_scratch + 8] x11_win_id
+    store32 [x11_scratch + 12] 0   # value_mask: 0
+    let wr = syscall3 1, x11_fd, x11_scratch, 16
+
+    # 11. Send MapWindow (Opcode 8, 8 bytes)
+    store [x11_scratch + 0] 8      # Opcode: MapWindow
+    store [x11_scratch + 1] 0
+    store16 [x11_scratch + 2] 2    # Length: 2 quads (8 bytes)
+    store32 [x11_scratch + 4] x11_win_id
+    let wr = syscall3 1, x11_fd, x11_scratch, 8
+
+    # 12. Socket remains blocking for reliable bulk framebuffer streaming
+}
+
+# ------------------------------------------------------------------------------
+# x11_close: Closes the X11 connection socket
+# ------------------------------------------------------------------------------
+fn x11_close {
+    call x11_flush
+    if x11_fd > 0 {
+        let cl = syscall1 3, x11_fd
+        let x11_fd = 0
+    }
+}

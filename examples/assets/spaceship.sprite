@@ -1,0 +1,25 @@
+name: spaceship
+palette:
+  . = transparent
+  R = #ef4444
+  W = #f8fafc
+  C = #38bdf8
+  D = #1e293b
+  O = #f97316
+  Y = #facc15
+
+pixels:
+  . . . . . . R . . . . . .
+  . . . . . R W R . . . . .
+  . . . . . R W R . . . . .
+  . . . . R W C W R . . . .
+  . . . . R W C W R . . . .
+  . . . R W W C W W R . . .
+  . . . R W W W W W R . . .
+  . . R W D W W W D W R . .
+  . . R W D W W W D W R . .
+  . R W W D W W W D W W R .
+  R R W W W W W W W W W R R
+  R . R R R . . . R R R . R
+  . . . O O . . . O O . . .
+  . . . . Y . . . . Y . . .

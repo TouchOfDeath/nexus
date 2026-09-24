@@ -1,0 +1,245 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: math.nex
+#         Integer math utilities for the NEXUS native programming language
+# ==============================================================================
+#
+# CALLING CONVENTION (applies to every stdlib function):
+#   Inputs : set nx_i0, nx_i1, nx_i2 before the call (see signature below)
+#   Result : read nx_r0 after the call
+#   Scratch: nx_s0..nx_s7 are clobbered by every stdlib call
+#   Rule   : never name your own variables with the "nx_" prefix
+#
+# Every stdlib function is a leaf: stdlib functions never call each other,
+# so the shared scratch pool is always safe between calls.
+#
+# NOTE: NEXUS expressions fold strictly left-to-right (no parentheses, no
+#       operator precedence), so every intermediate step is a separate let.
+
+# ------------------------------------------------------------------------------
+# fn nx_max : nx_r0 = max(nx_i0, nx_i1)
+# ------------------------------------------------------------------------------
+fn nx_max {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s0 > s1 {
+        let nx_r0 = s0
+    } else {
+        let nx_r0 = s1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_min : nx_r0 = min(nx_i0, nx_i1)
+# ------------------------------------------------------------------------------
+fn nx_min {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s0 < s1 {
+        let nx_r0 = s0
+    } else {
+        let nx_r0 = s1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_clamp : nx_r0 = clamp(nx_i0, nx_i1, nx_i2)
+#              Constrain nx_i0 to the closed interval [nx_i1, nx_i2]
+# ------------------------------------------------------------------------------
+fn nx_clamp {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    if s0 < s1 {
+        let nx_r0 = s1
+    } else {
+        if s0 > s2 {
+            let nx_r0 = s2
+        } else {
+            let nx_r0 = s0
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_sign : nx_r0 = sign(nx_i0)   ->  -1, 0 or 1
+# ------------------------------------------------------------------------------
+fn nx_sign {
+    let s0 = nx_i0
+    if s0 > 0 {
+        let nx_r0 = 1
+    } else {
+        if s0 < 0 {
+            let nx_r0 = 0 - 1
+        } else {
+            let nx_r0 = 0
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pow : nx_r0 = nx_i0 raised to nx_i1 (integer power)
+#             Negative exponent returns 0. 0^0 returns 1.
+# ------------------------------------------------------------------------------
+fn nx_pow {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 1
+    if s1 < 0 {
+        let nx_r0 = 0
+    } else {
+        while s1 > 0 {
+            let nx_r0 = nx_r0 * s0
+            let s1 = s1 - 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_isqrt : nx_r0 = floor(sqrt(nx_i0)) via integer Newton iteration
+#               Negative input returns -1.
+# ------------------------------------------------------------------------------
+fn nx_isqrt {
+    let s2 = nx_i0
+    if s2 < 0 {
+        let nx_r0 = 0 - 1
+    } else {
+        if s2 < 2 {
+            let nx_r0 = s2
+        } else {
+            let s3 = s2
+            let s4 = s2 / s3
+            let s4 = s4 + s3
+            let s4 = s4 / 2
+            while s4 < s3 {
+                let s3 = s4
+                let s4 = s2 / s3
+                let s4 = s4 + s3
+                let s4 = s4 / 2
+            }
+            let nx_r0 = s3
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_gcd : nx_r0 = gcd(|nx_i0|, |nx_i1|) via Euclid's algorithm
+#             gcd(0, 0) returns 0.
+# ------------------------------------------------------------------------------
+fn nx_gcd {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s0 < 0 {
+        let s0 = 0 - s0
+    }
+    if s1 < 0 {
+        let s1 = 0 - s1
+    }
+    while s1 != 0 {
+        let s2 = s0 / s1
+        let s2 = s2 * s1
+        let s2 = s0 - s2
+        let s0 = s1
+        let s1 = s2
+    }
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lcm : nx_r0 = lcm(|nx_i0|, |nx_i1|)
+#             lcm(0, x) returns 0. (Euclid inlined: stdlib never nests calls.)
+# ------------------------------------------------------------------------------
+fn nx_lcm {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s0 < 0 {
+        let s0 = 0 - s0
+    }
+    if s1 < 0 {
+        let s1 = 0 - s1
+    }
+    let s3 = s0
+    let s4 = s1
+    while s4 != 0 {
+        let s2 = s3 / s4
+        let s2 = s2 * s4
+        let s2 = s3 - s2
+        let s3 = s4
+        let s4 = s2
+    }
+    if s3 == 0 {
+        let nx_r0 = 0
+    } else {
+        let s5 = s0 / s3
+        let s5 = s5 * s1
+        let nx_r0 = s5
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_fib : nx_r0 = nth Fibonacci number, fib(0) = 0, fib(1) = 1 (iterative)
+#             Negative input returns -1.
+# ------------------------------------------------------------------------------
+fn nx_fib {
+    let s1 = nx_i0
+    if s1 < 0 {
+        let nx_r0 = 0 - 1
+    } else {
+        let s2 = 0
+        let s3 = 1
+        while s1 > 0 {
+            let s4 = s2 + s3
+            let s2 = s3
+            let s3 = s4
+            let s1 = s1 - 1
+        }
+        let nx_r0 = s2
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_is_prime : nx_r0 = 1 if nx_i0 is prime, else 0 (trial division)
+#                  Numbers below 2 return 0.
+# ------------------------------------------------------------------------------
+fn nx_is_prime {
+    let s1 = nx_i0
+    let nx_r0 = 0
+    if s1 >= 2 {
+        let nx_r0 = 1
+        let s6 = s1 / 2
+        let s6 = s6 * 2
+        if s6 == s1 {
+            if s1 > 2 {
+                let nx_r0 = 0
+            }
+        }
+        let s2 = 3
+        let s5 = s2 * s2
+        while s5 <= s1 {
+            let s6 = s1 / s2
+            let s6 = s6 * s2
+            if s6 == s1 {
+                let nx_r0 = 0
+                let s1 = 0
+            } else {
+                let s2 = s2 + 2
+                let s5 = s2 * s2
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_digits : nx_r0 = number of decimal digits in |nx_i0|
+#                nx_digits(0) returns 1.
+# ------------------------------------------------------------------------------
+fn nx_digits {
+    let s1 = nx_i0
+    if s1 < 0 {
+        let s1 = 0 - s1
+    }
+    let nx_r0 = 1
+    while s1 >= 10 {
+        let s1 = s1 / 10
+        let nx_r0 = nx_r0 + 1
+    }
+}

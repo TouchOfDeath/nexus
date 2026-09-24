@@ -1,0 +1,44 @@
+# ==============================================================================
+#                      NEXUS TEST: NUMERICAL CALCULUS
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/calculus.nex"
+
+print "=== Testing Numerical Calculus Module ==="
+
+# Samples of y = x^2 for x = 0, 1, 2, 3, 4 (dx = 1)
+# y = [0, 1, 4, 9, 16]
+let y_samples = [0, 1, 4, 9, 16]
+let dy_out = alloc 40
+
+# 1. Numerical Derivative (dy/dx = 2x)
+let nx_i0 = y_samples
+let nx_i1 = 5
+let nx_i2 = 1
+let nx_i3 = dy_out
+call nx_diff_central
+
+# dy/dx at x=1 should be 2
+let dy1 = dy_out[1]
+assert_eq dy1, 2
+
+# dy/dx at x=2 should be 4
+let dy2 = dy_out[2]
+assert_eq dy2, 4
+
+# dy/dx at x=3 should be 6
+let dy3 = dy_out[3]
+assert_eq dy3, 6
+
+# 2. Numerical Integration: Integral of x^2 from 0 to 4
+# Exact analytical integral = 64 / 3 = 21.333...
+# Simpson rule with dx = 1 gives exactly 64 / 3 = 21
+let nx_i0 = y_samples
+let nx_i1 = 5
+let nx_i2 = 1
+call nx_simpson_integrate
+assert_eq nx_r0, 21
+
+print "[SUCCESS] Numerical Calculus Tests Passed!"
+call nx_assert_summary

@@ -1,0 +1,36 @@
+# ==============================================================================
+#                     NEXUS STANDARD LIBRARY - MASTER INCLUDE
+# ==============================================================================
+# Include this single file to load the entire standard library:
+#
+#   include "stdlib/nstdlib.nex"
+#
+# Modules provided:
+#   stdlib/math.nex    nx_max nx_min nx_clamp nx_sign nx_pow nx_isqrt
+#                      nx_gcd nx_lcm nx_fib nx_is_prime nx_digits
+#   stdlib/arrays.nex  nx_arr_fill nx_arr_iota nx_arr_sum nx_arr_max
+#                      nx_arr_min nx_arr_index_of nx_arr_reverse nx_arr_count
+#                      nx_arr_sort nx_arr_avg
+#   stdlib/strings.nex nx_str_len nx_str_copy nx_str_cmp nx_str_concat
+#                      nx_str_chr nx_str_to_int nx_int_to_str
+#   stdlib/qarrays.nex nx_qarr_fill nx_qarr_iota nx_qarr_sum nx_qarr_max
+#                      nx_qarr_min nx_qarr_index_of nx_qarr_reverse
+#                      nx_qarr_count nx_qarr_sort nx_qarr_avg
+#   stdlib/assert.nex  nx_assert_passes nx_assert_fails nx_assert_summary
+#                      (backs the assert_eq / assert_ne macros of nexprep)
+#
+# CALLING CONVENTION (all functions):
+#   1. Set inputs in nx_i0, nx_i1, nx_i2 (per-function signature)
+#   2. call <fn>
+#   3. Read the result from nx_r0
+#
+# nx_i0..nx_i2, nx_r0 and nx_s0..nx_s7 are clobbered by every stdlib call.
+# Do not name your own variables with the "nx_" prefix, and do not assume
+# any nx_* variable keeps its value across a stdlib call.
+# ==============================================================================
+
+include "stdlib/math.nex"
+include "stdlib/arrays.nex"
+include "stdlib/strings.nex"
+include "stdlib/qarrays.nex"
+include "stdlib/assert.nex"

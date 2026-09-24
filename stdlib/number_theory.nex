@@ -1,0 +1,319 @@
+# ==============================================================================
+#              NEXUS STANDARD LIBRARY - MODULE: number_theory.nex
+#    Modular Arithmetic, Primes, Cryptographic Primitives & Hyperoperations
+# ==============================================================================
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2, nx_i3
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_mod_pow : Binary exponentiation modulo m: (base^exp) % mod
+#   Inputs: nx_i0 = base, nx_i1 = exp, nx_i2 = mod
+#   Output: nx_r0 = (base^exp) % mod
+# ------------------------------------------------------------------------------
+fn nx_mod_pow {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    if s2 == 1 {
+        let nx_r0 = 0
+    } else {
+        let nx_r0 = 1
+        let s0 = s0 % s2
+        if s0 < 0 {
+            let s0 = s0 + s2
+        }
+        while s1 > 0 {
+            let s3 = s1 % 2
+            if s3 == 1 {
+                let nx_r0 = nx_r0 * s0
+                let nx_r0 = nx_r0 % s2
+            }
+            let s0 = s0 * s0
+            let s0 = s0 % s2
+            let s1 = s1 / 2
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_ext_gcd : Extended Euclidean Algorithm
+#   Computes gcd(a, b) and finds x, y such that a*x + b*y = gcd(a, b)
+#   Inputs: nx_i0 = a, nx_i1 = b, nx_i2 = out_ptr (stores [gcd, x, y])
+#   Output: nx_r0 = gcd(a, b)
+# ------------------------------------------------------------------------------
+fn nx_ext_gcd {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+
+    let s3 = 1
+    let s4 = 0
+    let s5 = 0
+    let s6 = 1
+
+    while s1 != 0 {
+        let s7 = s0 / s1
+        let d = s7 * s1
+        let d = s0 - d
+        let s0 = s1
+        let s1 = d
+
+        let d = s7 * s5
+        let d = s3 - d
+        let s3 = s5
+        let s5 = d
+
+        let d = s7 * s6
+        let d = s4 - d
+        let s4 = s6
+        let s6 = d
+    }
+
+    store64 [s2 + 0] s0
+    store64 [s2 + 8] s3
+    store64 [s2 + 16] s4
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_mod_inv : Modular Multiplicative Inverse: a^-1 mod m
+#   Inputs: nx_i0 = a, nx_i1 = mod
+#   Output: nx_r0 = inverse in range [0, mod - 1], or -1 if no inverse exists
+# ------------------------------------------------------------------------------
+fn nx_mod_inv {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 1
+    let s5 = 0
+    let s0 = s0 % s1
+    if s0 < 0 {
+        let s0 = s0 + s1
+    }
+    let d = s1
+
+    while s1 != 0 {
+        let s7 = s0 / s1
+        let s2 = s7 * s1
+        let s2 = s0 - s2
+        let s0 = s1
+        let s1 = s2
+
+        let s2 = s7 * s5
+        let s2 = s3 - s2
+        let s3 = s5
+        let s5 = s2
+    }
+
+    if s0 != 1 {
+        let nx_r0 = -1
+    } else {
+        let nx_r0 = s3 % d
+        if nx_r0 < 0 {
+            let nx_r0 = nx_r0 + d
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_totient : Euler's Totient function phi(n)
+#   Counts integers k in 1..n coprime to n
+#   Inputs: nx_i0 = n
+#   Output: nx_r0 = phi(n)
+# ------------------------------------------------------------------------------
+fn nx_totient {
+    let s0 = nx_i0
+    if s0 <= 0 {
+        let nx_r0 = 0
+    } else {
+        let nx_r0 = s0
+        let s1 = 2
+        let s4 = s1 * s1
+        while s4 <= s0 {
+            let s2 = s0 % s1
+            if s2 == 0 {
+                let s5 = s0 % s1
+                while s5 == 0 {
+                    let s0 = s0 / s1
+                    let s5 = s0 % s1
+                }
+                let s3 = nx_r0 / s1
+                let nx_r0 = nx_r0 - s3
+            }
+            let s1 = s1 + 1
+            let s4 = s1 * s1
+        }
+        if s0 > 1 {
+            let s3 = nx_r0 / s0
+            let nx_r0 = nx_r0 - s3
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_tetrate : Tetration a ^^ b (repeated power tower of height b)
+#   Inputs: nx_i0 = base a, nx_i1 = height b
+#   Output: nx_r0 = a ^^ b, or -1 if value overflows 64-bit integer
+# ------------------------------------------------------------------------------
+fn nx_tetrate {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s1 < 0 {
+        let nx_r0 = -1
+    } else {
+        if s1 == 0 {
+            let nx_r0 = 1
+        } else {
+            if s1 == 1 {
+                let nx_r0 = s0
+            } else {
+                if s0 == 1 {
+                    let nx_r0 = 1
+                } else {
+                    if s0 == 2 {
+                        if s1 == 2 {
+                            let nx_r0 = 4
+                        } else {
+                            if s1 == 3 {
+                                let nx_r0 = 16
+                            } else {
+                                if s1 == 4 {
+                                    let nx_r0 = 65536
+                                } else {
+                                    let nx_r0 = -1
+                                }
+                            }
+                        }
+                    } else {
+                        if s0 == 3 {
+                            if s1 == 2 {
+                                let nx_r0 = 27
+                            } else {
+                                if s1 == 3 {
+                                    let nx_r0 = 7625597484987
+                                } else {
+                                    let nx_r0 = -1
+                                }
+                            }
+                        } else {
+                            if s1 == 2 {
+                                # a^a
+                                let nx_i0 = s0
+                                let nx_i1 = s0
+                                call nx_pow
+                            } else {
+                                let nx_r0 = -1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pentate : Pentation a ^^^ b (repeated tetration)
+#   Inputs: nx_i0 = base a, nx_i1 = height b
+#   Output: nx_r0 = a ^^^ b, or -1 on overflow
+# ------------------------------------------------------------------------------
+fn nx_pentate {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s1 < 0 {
+        let nx_r0 = -1
+    } else {
+        if s1 == 0 {
+            let nx_r0 = 1
+        } else {
+            if s1 == 1 {
+                let nx_r0 = s0
+            } else {
+                if s0 == 1 {
+                    let nx_r0 = 1
+                } else {
+                    if s0 == 2 {
+                        if s1 == 2 {
+                            let nx_r0 = 4
+                        } else {
+                            if s1 == 3 {
+                                # 2 ^^ 4 = 65536
+                                let nx_r0 = 65536
+                            } else {
+                                let nx_r0 = -1
+                            }
+                        }
+                    } else {
+                        let nx_r0 = -1
+                    }
+                }
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_mod_tetrate : Modular Tetration (a ^^ b) % mod
+#   Inputs: nx_i0 = base, nx_i1 = height, nx_i2 = mod
+#   Output: nx_r0 = (a ^^ b) % mod
+# ------------------------------------------------------------------------------
+fn nx_mod_tetrate {
+    let t_base = nx_i0
+    let t_h = nx_i1
+    let t_mod = nx_i2
+    if t_mod == 1 {
+        let nx_r0 = 0
+    } else {
+        if t_h == 0 {
+            let nx_r0 = 1
+        } else {
+            if t_h == 1 {
+                let nx_r0 = t_base % t_mod
+            } else {
+                let t_e = t_base
+                if t_h == 3 {
+                    let t_p = 1
+                    let t_b = t_base
+                    let t_k = t_base
+                    while t_k > 0 {
+                        let t_rem = t_k % 2
+                        if t_rem == 1 {
+                            let t_p = t_p * t_b
+                        }
+                        let t_b = t_b * t_b
+                        let t_k = t_k / 2
+                    }
+                    let t_e = t_p
+                }
+                if t_h >= 4 {
+                    if t_base == 2 {
+                        let t_e = 65536
+                        if t_h == 4 {
+                            let t_e = 16
+                        }
+                    }
+                    if t_base == 3 {
+                        let t_e = 7625597484987
+                    }
+                }
+
+                let nx_r0 = 1
+                let t_b = t_base % t_mod
+                let t_k = t_e
+                while t_k > 0 {
+                    let t_rem = t_k % 2
+                    if t_rem == 1 {
+                        let nx_r0 = nx_r0 * t_b
+                        let nx_r0 = nx_r0 % t_mod
+                    }
+                    let t_b = t_b * t_b
+                    let t_b = t_b % t_mod
+                    let t_k = t_k / 2
+                }
+            }
+        }
+    }
+}

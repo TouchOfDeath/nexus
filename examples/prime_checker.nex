@@ -1,0 +1,35 @@
+# ==============================================================================
+#                      NEXUS EXAMPLE: PRIME NUMBER CHECKER
+#           Demonstrating subroutines (fn), loops (while), conditionals (if/else)
+# ==============================================================================
+
+fn check_prime {
+    let p = 1
+    if n <= 1 {
+        let p = 0
+        return
+    }
+    let d = 2
+    let q = d * d
+    while q <= n {
+        let m = n % d
+        if m == 0 {
+            let p = 0
+            return
+        }
+        let d = d + 1
+        let q = d * d
+    }
+}
+
+print "--- NEXUS Native Primality Tester ---"
+print "Enter an integer to test:"
+read n
+
+call check_prime
+
+if p == 1 {
+    print "Verdict: PRIME NUMBER!"
+} else {
+    print "Verdict: COMPOSITE NUMBER!"
+}

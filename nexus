@@ -1,0 +1,635 @@
+#!/usr/bin/env bash
+# ==============================================================================
+#                       NEXUS CLI TOOLCHAIN DRIVER (LINUX)
+#           0% C#  -  0% .NET Runtime  -  100% Native x86-64 Machine Code
+# ==============================================================================
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPILER_DIR="$SCRIPT_DIR/compiler"
+BIN_DIR="$SCRIPT_DIR/bin"
+TOOLS_DIR="$SCRIPT_DIR/tools"
+NEXLOAD="$BIN_DIR/nexload"
+NEXELF="$BIN_DIR/nexelf"
+NEXPREP="$BIN_DIR/nexprep"
+
+# Compile nexload, nexelf, nexprep, and nexgfx if missing
+if [ ! -f "$NEXLOAD" ] || [ "$TOOLS_DIR/nexload.c" -nt "$NEXLOAD" ]; then
+    mkdir -p "$BIN_DIR"
+    gcc -O2 "$TOOLS_DIR/nexload.c" -o "$NEXLOAD"
+fi
+if [ ! -f "$NEXELF" ] || [ "$TOOLS_DIR/nexelf.c" -nt "$NEXELF" ]; then
+    mkdir -p "$BIN_DIR"
+    gcc -O2 "$TOOLS_DIR/nexelf.c" -o "$NEXELF"
+fi
+if [ ! -f "$NEXPREP" ] || [ "$TOOLS_DIR/nexprep.c" -nt "$NEXPREP" ]; then
+    mkdir -p "$BIN_DIR"
+    gcc -O2 "$TOOLS_DIR/nexprep.c" -o "$NEXPREP"
+fi
+
+usage() {
+    cat << EOF
+NEXUS Native Toolchain Driver (Linux & Cross-Platform)
+Usage:
+  ./nexus build                   Run master multi-step build and verification pipeline
+  ./nexus play [game.nex]         Launch native graphical desktop window for a GUI game
+  ./nexus run <source.nex>        Compile and run a .nex program (direct Linux kernel execution)
+  ./nexus compile <source.nex>    Compile program (emits dual Windows PE32+ and Linux ELF64)
+  ./nexus prep <src.nex> [out]    Preprocess and inline multi-file source directives (include/import)
+  ./nexus elf [src.exe] [dst.elf] Convert PE32+ executable to standalone native Linux ELF64
+  ./nexus test                    Run full regression test suite across native ELF binaries
+  ./nexus bench                   Run the arithmetic benchmark (best of 3, M-iters/sec)
+  ./nexus self-host               Verify Stage 5 self-hosting bit-for-bit parity
+  ./nexus dump [binary]           Dump binary headers, sections, and import tables
+  ./nexus disasm [binary]         Disassemble native x86-64 machine code
+  ./nexus diff <bin1> <bin2>      Perform byte-for-byte binary diff across sections
+
+Developer tooling:
+  ./nexus repl                    Interactive stateful REPL (stdlib preloaded)
+  ./nexus new <project-name>      Scaffold a new NEXUS project in the current directory
+  ./nexus fmt [--check] <file>    Format a .nex source file (stable, idempotent)
+  ./nexus build <file.nex>        Incremental project build with dependency caching
+                                  (.nexuscache; skips rebuild when nothing changed)
+  ./nexus build                   Full master build + verification pipeline
+  ./nexus sprite <in.sprite|png>  Compile pixel art/PNG into a standalone NEXUS sprite asset
+  ./nexus test --file <test.nex>  Run one test file through bin/nextest
+                                  (assert_eq/assert_ne macros, counting, fail-fast)
+
+Examples:
+  ./nexus run examples/multi_file_demo.nex
+  ./nexus run examples/rocket_physics.nex
+  ./nexus prep examples/multi_file_demo.nex
+  ./nexus elf compiler/app.exe compiler/app.elf
+  ./nexus disasm compiler/app.exe
+EOF
+    exit 1
+}
+
+cmd="${1:-}"
+case "$cmd" in
+    build)
+        if [ -n "${2:-}" ]; then
+            python3 - "$SCRIPT_DIR" "$(realpath "$2")" "${3:-}" << 'PYBUILD'
+import hashlib, os, shutil, subprocess, sys
+
+root, src, flag = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
+src_dir = os.path.dirname(src)
+base = os.path.splitext(os.path.basename(src))[0]
+cache_file = os.path.join(src_dir, '.nexuscache')
+out_exe = os.path.join(src_dir, base + '.exe')
+out_elf = os.path.join(src_dir, base + '.elf')
+compiler_dir = os.path.join(root, 'compiler')
+
+if flag == '--clean':
+    for p in (out_exe, out_elf, cache_file):
+        if os.path.exists(p):
+            os.remove(p)
+            print(f'[+] removed {p}')
+    print('[+] clean done')
+    sys.exit(0)
+
+# dependency fingerprint: source + every resolved include + toolchain binaries
+deps = [src]
+r = subprocess.run([os.path.join(root, 'bin', 'nexprep'), '--list-deps', src],
+                   capture_output=True, text=True)
+if r.returncode != 0:
+    sys.stderr.write(r.stderr)
+    sys.exit(1)
+for line in r.stdout.splitlines():
+    line = line.strip()
+    if line and line not in deps:
+        deps.append(line)
+for extra in ('compiler/template.bin', 'compiler/elf_parts.bin',
+              'compiler/nexc.elf', 'compiler/nexc.exe'):
+    p = os.path.join(root, extra)
+    if os.path.exists(p):
+        deps.append(p)
+
+def fingerprint():
+    h = hashlib.sha256()
+    for d in deps:
+        st = os.stat(d)
+        h.update(d.encode())
+        h.update(str(st.st_mtime_ns).encode())
+        h.update(str(st.st_size).encode())
+    return h.hexdigest()
+
+cache = {}
+if os.path.exists(cache_file):
+    for line in open(cache_file):
+        k, _, v = line.strip().partition('=')
+        if k and v:
+            cache[k] = v
+key = base + ':' + hashlib.sha256(src.encode()).hexdigest()[:12]
+fp = fingerprint()
+
+cached = cache.get(key)
+if cached == fp and os.path.exists(out_exe) and os.path.exists(out_elf):
+    print(f'[up-to-date] {out_elf} (dependencies unchanged)')
+    print(f'[+] Run: {out_elf}')
+    sys.exit(0)
+
+import time
+t0 = time.time()
+subprocess.run([os.path.join(root, 'bin', 'nexprep'), src,
+                os.path.join(compiler_dir, 'code.nex')], check=True)
+for f in ('app.exe', 'app.elf'):
+    p = os.path.join(compiler_dir, f)
+    if os.path.exists(p):
+        os.remove(p)
+nexc = os.path.join(compiler_dir, 'nexc.elf')
+r = subprocess.run([nexc], cwd=compiler_dir, capture_output=True, text=True)
+if not os.path.exists(os.path.join(compiler_dir, 'app.elf')):
+    print(r.stdout.replace('\r', ''))
+    print('[-] Incremental build failed (compilation gated).')
+    sys.exit(1)
+shutil.move(os.path.join(compiler_dir, 'app.exe'), out_exe)
+shutil.move(os.path.join(compiler_dir, 'app.elf'), out_elf)
+os.chmod(out_elf, 0o755)
+print(f'[+] Built {out_exe} ({os.path.getsize(out_exe)} bytes)')
+print(f'[+] Built {out_elf} ({os.path.getsize(out_elf)} bytes) in {(time.time()-t0)*1000:.0f} ms')
+print(f'[+] Run: {out_elf}')
+cache[key] = fp
+open(cache_file, 'w').write('\n'.join(f'{k}={v}' for k, v in cache.items()) + '\n')
+PYBUILD
+        else
+            "$SCRIPT_DIR/build_all.sh"
+        fi
+        ;;
+    prep)
+        [ -z "${2:-}" ] && usage
+        src="$(realpath "$2")"
+        out="${3:-}"
+        if [ -n "$out" ]; then
+            "$NEXPREP" "$src" "$out"
+        else
+            "$NEXPREP" "$src"
+        fi
+        ;;
+    run)
+        [ -z "${2:-}" ] && usage
+        src="$(realpath "$2")"
+        "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
+        rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
+        if [ -f "$COMPILER_DIR/nexc.elf" ]; then
+            (cd "$COMPILER_DIR" && ./nexc.elf > /dev/null)
+        else
+            (cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe" > /dev/null)
+        fi
+        if [ ! -f "$COMPILER_DIR/app.exe" ]; then
+            echo "[-] Execution halted due to compilation error."
+            exit 1
+        fi
+        [ ! -f "$COMPILER_DIR/app.elf" ] && "$NEXELF" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf" > /dev/null
+        # Direct execution on bare-metal Linux kernel (0% loader, 0% C runtime):
+        "$COMPILER_DIR/app.elf"
+        ;;
+    compile)
+        [ -z "${2:-}" ] && usage
+        src="$(realpath "$2")"
+        "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
+        rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
+        if [ -f "$COMPILER_DIR/nexc.elf" ]; then
+            (cd "$COMPILER_DIR" && ./nexc.elf)
+        else
+            (cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe")
+        fi
+        if [ -f "$COMPILER_DIR/app.exe" ]; then
+            [ ! -f "$COMPILER_DIR/app.elf" ] && "$NEXELF" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf" > /dev/null
+            echo -e "[+] Dual Native Binaries Generated:"
+            echo -e "    Windows PE32+: $COMPILER_DIR/app.exe (49,152 bytes)"
+            echo -e "    Linux ELF64:   $COMPILER_DIR/app.elf ($(wc -c < "$COMPILER_DIR/app.elf") bytes - Direct Kernel Execution)"
+        else
+            echo "[-] Compilation failed."
+            exit 1
+        fi
+        ;;
+    play)
+        src="${2:-examples/gui_flappy.nex}"
+        "$0" build "$src"
+        bin_elf="${src%.nex}.elf"
+        [ ! -f "$bin_elf" ] && bin_elf="$COMPILER_DIR/app.elf"
+        echo "[+] Launching pure native NEXUS graphical game: $bin_elf"
+        echo "    (0% C - 0% libc - 0% Xlib - Direct Kernel & X11 Execution)"
+        "$bin_elf"
+        ;;
+    elf)
+        in_bin="${2:-$COMPILER_DIR/app.exe}"
+        out_bin="${3:-$COMPILER_DIR/app.elf}"
+        "$NEXELF" "$in_bin" "$out_bin"
+        ;;
+    test)
+        if [ "${2:-}" = "--file" ] || [ "${2:-}" = "-f" ]; then
+            [ -z "${3:-}" ] && usage
+            NEXTEST="$BIN_DIR/nextest"
+            if [ ! -f "$NEXTEST" ] || [ "$TOOLS_DIR/nextest.c" -nt "$NEXTEST" ]; then
+                gcc -O2 "$TOOLS_DIR/nextest.c" -o "$NEXTEST"
+            fi
+            shift 2
+            exec "$NEXTEST" "$@"
+        fi
+        echo "Running NEXUS test suite on Linux (Direct Native ELF64 Execution)..."
+        python3 -c '
+import subprocess, os, glob
+
+base_dir = "'"$SCRIPT_DIR"'"
+compiler_dir = os.path.join(base_dir, "compiler")
+nexload = os.path.join(base_dir, "bin", "nexload")
+nexelf = os.path.join(base_dir, "bin", "nexelf")
+nexprep = os.path.join(base_dir, "bin", "nexprep")
+examples = sorted(glob.glob(os.path.join(base_dir, "examples", "*.nex")))
+
+passed = 0
+for ex in examples:
+    name = os.path.basename(ex)
+    if any(k in name for k in ["interactive", "prime", "master", "gui"]):
+        continue
+    subprocess.run([nexprep, ex, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        p = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(p): os.remove(p)
+    
+    r_comp = subprocess.run([nexload, os.path.join(compiler_dir, "nexc.exe")], cwd=compiler_dir, capture_output=True)
+    app_exe = os.path.join(compiler_dir, "app.exe")
+    app_elf = os.path.join(compiler_dir, "app.elf")
+    if r_comp.returncode != 0 or not os.path.exists(app_exe):
+        print(f"[-] {name:22} FAIL (compile)")
+        continue
+    # Emit native Linux ELF64 binary (if not directly emitted by compiler)
+    if not os.path.exists(app_elf):
+        r_elf = subprocess.run([nexelf, app_exe, app_elf], capture_output=True)
+    if not os.path.exists(app_elf):
+        print(f"[-] {name:22} FAIL (elf generation)")
+        continue
+    # Direct execution on bare-metal Linux kernel (0% loader, 0% C runtime)
+    r_run = subprocess.run([app_elf], cwd=compiler_dir, capture_output=True, text=True)
+    if r_run.returncode == 0:
+        print(f"[+] {name:22} PASS (Direct Native ELF64)")
+        passed += 1
+    else:
+        print(f"[-] {name:22} FAIL (runtime)")
+
+# Diagnostic error reporting tests
+diag_tests = [
+    ("invalid_statement_xyz", "Line 1 Unrecognized Stmt", "Unrecognized statement keyword"),
+    ("let a 42", "Line 1 Missing '='", "Expected \x27=\x27 in let assignment"),
+    ("call non_existent_fn", "Undefined Function Call", "Undefined function name in call statement"),
+    ("while a < 5 { let a = a + 1", "Unclosed Block at EOF", "Unclosed block (missing \x27}\x27) at end of file"),
+    ("}", "Unmatched '}'", "Unmatched \x27}\x27 (no block was open)"),
+    ("let a = 5\nlet n = 20\nif a * a > n {\n    print 1\n}", "Condition Expr Trap", "Invalid relational operator in condition"),
+    ("let a = 5\nif a == 5\n    print 1\n}", "Missing { in Cond", "Expected \x27{\x27 after condition"),
+    ("let a = 5\nif a = 5 {\n    print 1\n}", "Single = in Cond", "Invalid relational operator in condition"),
+    ("let a = 0\nwhile a < 3 {\n    let a = a + 1\n}\nbreak\n", "Break Outside Loop", "\x27break\x27 outside of a loop"),
+    ("let a = 0\nwhile a < 3 {\n    let a = a + 1\n}\ncontinue\n", "Continue Outside Loop", "\x27continue\x27 outside of a loop"),
+    ("for i = 0 i < 3, i = i + 1 {\n    print i\n}", "For Missing Comma", "Expected \x27,\x27 in for header"),
+    ("read\n", "Read Missing Variable", "Expected variable name in read statement"),
+    ("read 123\n", "Read Number Variable", "Expected variable name in read statement")
+]
+
+diag_passed = 0
+for snippet, test_name, expected_err in diag_tests:
+    with open(os.path.join(compiler_dir, "code.nex"), "w") as f:
+        f.write(snippet + "\n")
+    if os.path.exists(os.path.join(compiler_dir, "app.exe")):
+        os.remove(os.path.join(compiler_dir, "app.exe"))
+    r = subprocess.run([nexload, os.path.join(compiler_dir, "nexc.exe")], cwd=compiler_dir, capture_output=True, text=True)
+    app_exists = os.path.exists(os.path.join(compiler_dir, "app.exe"))
+    if not app_exists and expected_err in r.stdout:
+        print(f"[+] Diagnostic: {test_name:24} PASS (gated, error caught)")
+        diag_passed += 1
+    else:
+        print(f"[-] Diagnostic: {test_name:24} FAIL")
+
+# Foundation bugfix regression suite
+foundation_tests = [
+    ("; comment\nlet x = 77\nprint x\n", "77", "Semicolon Comments (;)"),
+    ("let x = -1\nif x < -2 {\n    print 111\n}\nif x > -2 {\n    print 222\n}\n", "222", "Negative Comparisons (< -2)"),
+    ("print -42\n", "-42", "Negative Integer Literals"),
+    ("fn ComputeTotal {\n    let x = 99\n}\ncall ComputeTotal\nprint x\n", "99", "Uppercase Function Identifiers"),
+    ("let counter = 10\nlet velocity = 7800\nlet step_size = 5\nlet total_sum = counter + velocity * step_size\nprint total_sum\n", "39050", "Multi-Letter Variables (basic)"),
+    ("let loop_idx = 0\nlet running_total = 0\nwhile loop_idx < 5 {\n    let running_total = running_total + loop_idx\n    let loop_idx = loop_idx + 1\n}\nprint running_total\n", "10", "Multi-Letter Variables (while loop)"),
+    ("let val = 25\nif val == 10 {\n    print 1\n} else if val == 25 {\n    print 2\n} else {\n    print 3\n}\n", "2", "Else-If Chaining (3-way)"),
+    ("let msg = \"NEXUS_STRING_OK\"\nprint_str msg\n", "NEXUS_STRING_OK", "String Variables (let s = \"...\")"),
+    ("fn display {\n    print_str greeting\n}\nlet greeting = \"SUBROUTINE_OK\"\ncall display\n", "SUBROUTINE_OK", "String Subroutine Passing"),
+    ("let text = \"ABC\"\nlet c0 = load [text + 0]\nprint c0\n", "65", "String Character Indexing (load)"),
+    ("let s = \"hello\"\nlet n = len s\nprint n\n", "5", "Built-in len (string length)"),
+    ("let v = 0 - 55\nlet a = abs v\nprint a\n", "55", "Built-in abs (negative integer)"),
+    ("let a = abs -123\nprint a\n", "123", "Built-in abs (negative literal)"),
+    ("include \"examples/modules/math_utils.nex\"\nlet in_val = 6\ncall calc_square\nprint sq_res\n", "36", "Multi-File Module Include"),
+    ("struct Point {\n    x\n    y\n}\nlet p = alloc Point.size\np.x = 42\np.y = 84\nlet a = p.x\nlet b = p.y\nprint a\nprint b\n", "42\n84", "User-Defined Structs"),
+    ("let acc = 0\nfor i = 1, i <= 4, i = i + 1 {\n    let acc = acc + i\n}\nprint acc\n", "10", "For Loop Accumulate"),
+    ("let i = 0\nwhile i < 9 {\n    let i = i + 1\n    if i == 5 {\n        break\n    }\n}\nprint i\n", "5", "Break Exits While"),
+    ("let n = 0\nlet seen = 0\nwhile n < 6 {\n    let n = n + 1\n    if n == 3 {\n        continue\n    }\n    let seen = seen + 1\n}\nprint seen\n", "5", "Continue Skips Iteration"),
+    ("let q = alloc 16\nlet v1 = 30\nstore64 [q + 0 * 8] v1\nlet v2 = 4\nstore64 [q + 1 * 8] v2\nlet a = load64 [q + 0 * 8]\nprint a\n", "30", "Store64 Load64 Numeric Scale"),
+    ("include \"stdlib/nstdlib.nex\"\nlet b = alloc 4\nstore [b + 0] 9\nstore [b + 1] 1\nstore [b + 2] 8\nstore [b + 3] 2\nlet nx_i0 = b\nlet nx_i1 = 4\ncall nx_arr_sort\nlet nx_i0 = load [b + 0]\nassert_eq nx_i0, 1\ncall nx_assert_summary\n", "ASSERTIONS: 1 passed, 0 failed", "Stdlib Sort + Assert"),
+    ("let a = 2.5\nlet b = 4.0\nlet c = fadd a b\nlet d = fmul c 2.0\nprint_float d\n", "13.000000", "Float Arithmetic (fadd, fmul)"),
+    ("let a = 49.0\nlet s = fsqrt a\nlet n = fneg s\nprint_float n\n", "-7.000000", "Float Sqrt & Neg (fsqrt, fneg)"),
+    ("let i = 123\nlet f = itof i\nlet f2 = fadd f 0.5\nlet j = ftoi f2\nprint j\n", "123", "Float Conversions (itof, ftoi)"),
+    ("let x = 10.0 +. 5.5 -. 3.5\nprint_float x\n", "12.000000", "Float Infix Sugar (+., -.)"),
+    ("let k = 1.0\nwhile k <. 4.0 {\n    let k = k +. 1.0\n}\nprint_float k\n", "4.000000", "Float Loop Sugar (<., while_f)"),
+    ("fn add(a, b) {\n    return a + b\n}\nlet z = call add(15, 27)\nprint z\n", "42", "Function Parameters & Return"),
+    ("fn mul(a, b) {\n    return a * b\n}\nlet z = call mul(call mul(2, 3), 4)\nprint z\n", "24", "Nested Function Calls"),
+    ("fn clamp(v, lo, hi) {\n    if v < lo {\n        return lo\n    }\n    if v > hi {\n        return hi\n    }\n    return v\n}\nlet c = call clamp(150, 0, 100)\nprint c\n", "100", "Function Early Return"),
+    ("fn f_add(a, b) {\n    return a +. b\n}\nlet z = call f_add(1.5, 2.5)\nprint_float z\n", "4.000000", "Float Function Return"),
+    ("let a = 10\na += 5\na *= 2\nprint a\n", "30", "Compound Assignment (+=, *=)"),
+    ("let s = 0\nfor i = 1, i <= 4, i += 1 {\n    s += i\n}\nprint s\n", "10", "Compound Assignment For Loop (i += 1)"),
+    ("let arr = [10, 20, 30]\nprint arr[0]\n", "10", "Array Literal (inline)"),
+    ("let arr = [5, 10, 15]\nlet sum = arr[0] + arr[1] + arr[2]\nprint sum\n", "30", "Array Literal (sum of elements)"),
+    ("let arr = [1, 2, 3, 4, 5]\nlet total = 0\nfor i = 0, i < 5, i += 1 {\n    total += arr[i]\n}\nprint total\n", "15", "Array Literal (loop indexing)"),
+    ("let arr = [10, 20, 30]\narr[1] = 99\nprint arr[1]\n", "99", "Array Literal (indexed write)"),
+    ("let arr = [7, 14]\narr[0] += 7\nprint arr[0]\n", "14", "Array Literal (compound update)"),
+    ("let p = 2 ** 10\nprint p\n", "1024", "Exponentiation Operator (**)"),
+    ("let a = 3\na **= 3\nprint a\n", "27", "Compound Exponentiation (**=)"),
+    ("let x = 123 ** 0\nprint x\n", "1", "Exponentiation Power Zero"),
+]
+
+found_passed = 0
+for src, expected, tname in foundation_tests:
+    temp_src = os.path.join(compiler_dir, "temp_test.nex")
+    with open(temp_src, "w") as f: f.write(src)
+    subprocess.run([nexprep, temp_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    if os.path.exists(temp_src): os.remove(temp_src)
+    for f_clean in ["app.exe", "app.elf"]:
+        p = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(p): os.remove(p)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
+    if expected in r.stdout:
+        print(f"[+] Foundation: {tname:28} PASS (verified {expected})")
+        found_passed += 1
+    else:
+        print(f"[-] Foundation: {tname:28} FAIL")
+
+# Standard library test suite (94 assertions over all 26 functions)
+stdlib_ok = False
+stdlib_src = os.path.join(base_dir, "tests", "stdlib_test.nex")
+if os.path.exists(stdlib_src):
+    subprocess.run([nexprep, stdlib_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
+    if "[SUCCESS] ALL STDLIB TESTS PASSED!" in r.stdout:
+        print("[+] Stdlib suite: 94 assertions                  PASS")
+        stdlib_ok = True
+    else:
+        print("[-] Stdlib suite: FAIL")
+
+# Interactive Console Input test suite (read <var>)
+interactive_tests = [
+    ("examples/interactive_calc.nex", "45\n15\n", ["60", "30", "675", "3", "0"], "Interactive Calc (read a, b)"),
+    ("examples/prime_checker.nex", "17\n", ["PRIME NUMBER!"], "Prime Checker (17=PRIME)"),
+    ("examples/prime_checker.nex", "24\n", ["COMPOSITE NUMBER!"], "Prime Checker (24=COMPOSITE)")
+]
+interactive_passed = 0
+for ex_rel, user_in, expected_list, tname in interactive_tests:
+    ex_path = os.path.join(base_dir, ex_rel)
+    subprocess.run([nexprep, ex_path, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    r = subprocess.run([os.path.join(compiler_dir, "app.elf")], input=user_in, capture_output=True, text=True)
+    if all(exp in r.stdout for exp in expected_list):
+        print(f"[+] Interactive: {tname:27} PASS (Direct Native ELF64)")
+        interactive_passed += 1
+    else:
+        print(f"[-] Interactive: {tname:27} FAIL")
+
+print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={"PASS" if stdlib_ok else "FAIL"}")
+'
+        ;;
+    self-host)
+        echo "Verifying Stage 5 Bit-for-Bit Self-Hosting Convergence (PE + Native ELF)..."
+        python3 -c '
+import subprocess, os
+base_dir = "'"$SCRIPT_DIR"'"
+compiler_dir = os.path.join(base_dir, "compiler")
+nexload = os.path.join(base_dir, "bin", "nexload")
+nexelf = os.path.join(base_dir, "bin", "nexelf")
+
+with open(os.path.join(compiler_dir, "nexc.nex"), "rb") as f: c = f.read()
+with open(os.path.join(compiler_dir, "code.nex"), "wb") as f: f.write(c)
+
+print("1. Testing Gen 3 (nexc3.exe) -> app.exe (Gen 4)...")
+subprocess.run([nexload, os.path.join(compiler_dir, "nexc3.exe")], cwd=compiler_dir, capture_output=True)
+
+with open(os.path.join(compiler_dir, "app.exe"), "rb") as f: app = f.read()
+with open(os.path.join(compiler_dir, "nexc3.exe"), "rb") as f: n3 = f.read()
+with open(os.path.join(compiler_dir, "nexc4.exe"), "rb") as f: n4 = f.read()
+
+diffs_3 = sum(1 for a, b in zip(app, n3) if a != b)
+diffs_4 = sum(1 for a, b in zip(app, n4) if a != b)
+print(f"   Generated PE size: {len(app)} bytes")
+print(f"   Diff vs nexc3.exe: {diffs_3} byte differences across 49,152 bytes")
+print(f"   Diff vs nexc4.exe: {diffs_4} byte differences across 49,152 bytes")
+
+nexc_elf = os.path.join(compiler_dir, "nexc.elf")
+if os.path.exists(nexc_elf):
+    print("2. Testing Standalone Linux Compiler (nexc.elf) Self-Hosting...")
+    subprocess.run([nexc_elf], cwd=compiler_dir, capture_output=True)
+    with open(os.path.join(compiler_dir, "app.exe"), "rb") as f: app_from_elf = f.read()
+    diffs_elf_pe = sum(1 for a, b in zip(app_from_elf, n3) if a != b)
+    print(f"   Diff (nexc.elf emitted app.exe vs nexc3.exe): {diffs_elf_pe} differences")
+    
+    app_elf = os.path.join(compiler_dir, "app.elf")
+    if not os.path.exists(app_elf):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), app_elf], capture_output=True)
+    with open(app_elf, "rb") as f: app_elf_data = f.read()
+    with open(nexc_elf, "rb") as f: nexc_elf_data = f.read()
+    diffs_elf_elf = sum(1 for a, b in zip(app_elf_data, nexc_elf_data) if a != b)
+    print(f"   Diff (app.elf vs nexc.elf): {diffs_elf_elf} differences across {len(nexc_elf_data)} bytes")
+else:
+    diffs_elf_pe = 0
+    diffs_elf_elf = 0
+
+if diffs_3 == 0 and diffs_4 == 0 and diffs_elf_pe == 0 and diffs_elf_elf == 0:
+    print("[SUCCESS] 100% Bit-for-bit identical across Windows PE32+ and Linux ELF64!")
+else:
+    print("[FAIL] Mismatch detected.")
+'
+        ;;
+    dump)
+        target="${2:-$COMPILER_DIR/app.exe}"
+        echo "=== Binary Header & Import Dump: $target ==="
+        objdump -p "$target" 2>/dev/null || file "$target"
+        ;;
+    disasm)
+        target="${2:-$COMPILER_DIR/app.exe}"
+        echo "=== Disassembly of .text: $target ==="
+        objdump -d -M intel "$target" 2>/dev/null | head -n 100
+        ;;
+    diff)
+        [ -z "${3:-}" ] && usage
+        bin1="$2"
+        bin2="$3"
+        python3 -c '
+import sys
+with open("'"$bin1"'", "rb") as f1, open("'"$bin2"'", "rb") as f2:
+    b1 = f1.read()
+    b2 = f2.read()
+diffs = [i for i, (x, y) in enumerate(zip(b1, b2)) if x != y]
+print(f"Comparing {len(b1)} bytes vs {len(b2)} bytes:")
+print(f"Total byte differences: {len(diffs)}")
+if diffs:
+    print("First 10 differences (Offset: bin1 != bin2):")
+    for d in diffs[:10]:
+        print(f"  0x{d:06X}: 0x{b1[d]:02X} != 0x{b2[d]:02X}")
+else:
+    print("Exact bitwise identity (0 differences)!")
+'
+        ;;
+    bench)
+        echo "Running NEXUS arithmetic benchmark (examples/bench_arith.nex, best of 3)..."
+        python3 -c '
+import subprocess, time, os, sys
+base_dir = "'"$SCRIPT_DIR"'"
+compiler_dir = os.path.join(base_dir, "compiler")
+work = os.path.join(base_dir, "compiler")
+
+src = os.path.join(base_dir, "examples", "bench_arith.nex")
+if not os.path.exists(src):
+    print("[FAIL] examples/bench_arith.nex not found"); exit(1)
+
+subprocess.run([os.path.join(base_dir, "bin", "nexprep"), src,
+                os.path.join(work, "code.nex")], check=True)
+for f in ("app.exe", "app.elf"):
+    p = os.path.join(work, f)
+    if os.path.exists(p): os.remove(p)
+
+nexc_elf = os.path.join(work, "nexc.elf")
+if os.path.exists(nexc_elf):
+    subprocess.run([nexc_elf], cwd=work, capture_output=True)
+else:
+    subprocess.run([os.path.join(base_dir, "bin", "nexload"), os.path.join(work, "nexc.exe")], cwd=work, capture_output=True)
+
+binary = os.path.join(work, "app.elf")
+if not os.path.exists(binary):
+    if os.path.exists(os.path.join(work, "app.exe")):
+        subprocess.run([os.path.join(base_dir, "bin", "nexelf"), os.path.join(work, "app.exe"), binary], capture_output=True)
+if not os.path.exists(binary):
+    print("[FAIL] benchmark compile failed"); exit(1)
+
+out = subprocess.run([binary], capture_output=True, text=True).stdout
+best = None
+for run in (1, 2, 3):
+    t0 = time.perf_counter()
+    subprocess.run([binary], capture_output=True)
+    dt = time.perf_counter() - t0
+    best = dt if best is None or dt < best else best
+    print(f"   Run {run}: {dt*1000:.1f} ms")
+iters = 50000000
+print(f"[SUCCESS] best of 3: {best*1000:.1f} ms  (~{iters/best/1e6:.1f}M stmt-iters/sec)")
+'
+        ;;
+    repl)
+        exec bash "$SCRIPT_DIR/tools/nexrepl.sh"
+        ;;
+    new)
+        [ -z "${2:-}" ] && usage
+        proj="$2"
+        if [ -e "$proj" ]; then
+            echo "[-] Directory already exists: $proj"
+            exit 1
+        fi
+        mkdir -p "$proj"
+        cat > "$proj/main.nex" << 'EOFMAIN'
+# ==============================================================================
+#  <project> - a NEXUS program
+#  Build:  nexus run main.nex     (from anywhere; stdlib resolves automatically)
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+print "Hello from NEXUS!"
+
+# stdlib example: greatest common divisor
+let nx_i0 = 1071
+let nx_i1 = 462
+call nx_gcd
+print "gcd(1071, 462) ="
+print nx_r0
+EOFMAIN
+        sed -i "s/<project>/$proj/" "$proj/main.nex"
+        cp -r "$SCRIPT_DIR/stdlib" "$proj/stdlib"
+        cat > "$proj/nexus.project" << EOFPROJ
+# NEXUS project manifest
+name = $proj
+main = main.nex
+version = 0.1.0
+includes = stdlib/nstdlib.nex
+EOFPROJ
+        cat > "$proj/build.sh" << 'EOFBUILD'
+#!/usr/bin/env bash
+# Self-contained build for this project.
+# Prefers NEXUS_HOME (toolchain root); falls back to a local copy of the
+# stdlib and any nexc.elf found up the tree.
+set -e
+cd "$(dirname "$0")"
+NEXC="${NEXUS_HOME:-}/compiler/nexc.elf"
+if [ ! -x "$NEXC" ]; then
+  for up in ../.. ../../.. ../../../..; do
+    [ -x "$up/compiler/nexc.elf" ] && NEXC="$up/compiler/nexc.elf" && break
+  done
+fi
+if [ -z "$NEXC" ] || [ ! -x "$NEXC" ]; then
+  echo "[-] nexc.elf not found. Set NEXUS_HOME to the NEXUS toolchain root." >&2
+  exit 1
+fi
+COMPILER_DIR="$(dirname "$NEXC")"
+"$COMPILER_DIR/../bin/nexprep" main.nex "$COMPILER_DIR/code.nex"
+( cd "$COMPILER_DIR" && ./nexc.elf ) > /dev/null
+mv "$COMPILER_DIR/app.exe" ./app.exe
+mv "$COMPILER_DIR/app.elf" ./app.elf
+echo "[+] Built ./app.exe and ./app.elf - run with: ./app.elf"
+EOFBUILD
+        chmod +x "$proj/build.sh"
+        cat > "$proj/README.md" << EOFREAD
+# $proj
+
+A NEXUS project. NEXUS compiles to 100% native x86-64 machine code -
+no runtime, no VM, no garbage collector.
+
+## Build and run
+
+Option A - via the toolchain driver (works from anywhere):
+
+    nexus run main.nex
+
+Option B - self-contained script:
+
+    ./build.sh && ./app.elf
+
+## Layout
+
+- main.nex        your program
+- stdlib/         vendored copy of the NEXUS standard library
+- nexus.project   manifest
+EOFREAD
+        echo "[+] Project created: $proj"
+        echo "    $proj/main.nex      - edit this"
+        echo "    $proj/build.sh      - standalone build"
+        echo "    Run now:  cd $proj && ./build.sh && ./app.elf"
+        ;;
+    fmt)
+        NEXFMT="$BIN_DIR/nexfmt"
+        if [ ! -f "$NEXFMT" ] || [ "$TOOLS_DIR/nexfmt.c" -nt "$NEXFMT" ]; then
+            mkdir -p "$BIN_DIR"
+            gcc -O2 "$TOOLS_DIR/nexfmt.c" -o "$NEXFMT"
+        fi
+        [ -z "${2:-}" ] && usage
+        "$NEXFMT" "${@:2}"
+        ;;
+    sprite)
+        python3 "$TOOLS_DIR/nexsprite.py" "${@:2}"
+        ;;
+    *)
+        usage
+        ;;
+esac

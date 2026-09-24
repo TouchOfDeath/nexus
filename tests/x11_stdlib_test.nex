@@ -1,0 +1,50 @@
+# ==============================================================================
+# Test for stdlib/x11.nex
+# ==============================================================================
+
+include "stdlib/x11.nex"
+
+print "Initializing native X11 window via stdlib/x11.nex..."
+let x11_width = 360
+let x11_height = 600
+call x11_init
+
+print "Window initialized! Testing rendering..."
+
+# Clear sky blue
+let x11_r = 112
+let x11_g = 197
+let x11_b = 206
+call x11_clear
+
+# Draw a red rectangle
+let x11_rx = 50
+let x11_ry = 50
+let x11_rw = 100
+let x11_rh = 100
+let x11_r = 240
+let x11_g = 60
+let x11_b = 40
+call x11_fill_rect
+
+# Draw a green rectangle
+let x11_rx = 180
+let x11_ry = 50
+let x11_rw = 100
+let x11_rh = 100
+let x11_r = 50
+let x11_g = 200
+let x11_b = 50
+call x11_fill_rect
+
+# Present
+call x11_present
+
+# Poll events
+call x11_poll_events
+print "Poll event result:"
+print x11_key
+
+print "Closing X11 window..."
+call x11_close
+print "SUCCESS: stdlib/x11.nex passed all tests!"

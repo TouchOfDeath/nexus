@@ -1,0 +1,93 @@
+=============================================================================
+  NEXUS v5.9 — OPTIMIZATION & BENCHMARK RESULTS
+  Code-generation optimizer pass (tools/nexc.c)
+=============================================================================
+
+OVERVIEW
+--------
+The NEXUS compiler's code generator was upgraded with a safe, semantics-
+preserving optimizer. Every transformation matches the exact runtime
+behavior of the unoptimized compiler (verified by 52 new optimizer
+assertions plus the full 49-foundation / 94-stdlib regression gates).
+
+A/B METHODOLOGY
+---------------
+Baseline compiler: unmodified pre-optimizer nexc.c, built as
+bench/nexc_baseline.elf from the identical C toolchain.
+All timings: best of 3 runs, identical hardware, fresh process per run.
+
+BENCHMARK RESULTS (best of 3)
+-----------------------------
+  Mixed bench (bench_arith.nex)     308.6 ms -> 186.4 ms    1.66x faster
+  Var arithmetic chain              (isolated)              1.93x faster
+  Literal-heavy loop                (isolated)              1.22x faster
+  Condition-heavy loop              (isolated)              1.06x faster
+  Output binary size                (all programs)          5-10% smaller
+
+  Post-optimization throughput: ~270M statement-iterations/sec
+  (185.3 ms best-of-3 on bench_arith.nex)
+
+OPTIMIZATIONS IMPLEMENTED
+-------------------------
+1. Constant folding (integer)
+   - +, -, * folded at compile time with exact 64-bit wrap-around
+   - /, % folded with truncation toward zero (matches idiv)
+   - Division by zero and INT64_MIN / -1 deliberately NOT folded
+     (remain runtime traps, preserving original semantics)
+
+2. Zero-spill operand staging
+   - Removed the per-operand temporary accumulator spill/reload that
+     emitted two redundant memory moves for every operand
+   - Spill now only occurs for mid-chain atoms that need the value twice
+
+3. Shorter instruction encodings
+   - xor rax,rax for zero; B8+ imm32 moves; imm8 add/sub/cmp forms
+   - add [rbp+d8], imm8 addressing when in range
+   - imul by immediate; RIP-relative movsd for float literals from a
+     deduplicated 256-entry constant pool (imm64 fallback kept)
+
+4. Strength reduction
+   - Multiplication by 2^n        -> shl (shift left)
+   - Division by 2^n (n <= 8)     -> lea/test/cmovns/sar sequence with
+     exact truncating-toward-zero reduction
+
+5. Folded conditions
+   - Literal-OP-literal predicates resolved at compile time
+   - Provably-true if/while/for emit no jump at all (COND_ALWAYS path)
+   - Provably-false branches eliminated
+
+6. New language feature: truthiness conditions
+   - if flag { ... }   /   while 1 { ... }   /   for i = 0, 1, ...
+   - Non-zero integer treated as true (test rax,rax + je)
+
+7. Unary and float folds
+   - abs/len/itof/ftoi/fsqrt/fneg on literals
+   - fadd/fsub/fmul/fdiv on literal pairs (IEEE-exact; NaN/Inf/0-div
+     guarded and left to runtime)
+
+8. Addressing improvements
+   - Scale-1 base+offset addresses folded to a single
+     add rbx, [rbp+d32] instead of separate mov + add
+
+9. PE32+ correctness hardening (bonus fixes)
+   - Import descriptor fields now absolute RVAs (loader-visible)
+   - IAT relocated; .rdata layout rewritten strictly sequential
+   - objdump walks all 7 kernel32 imports cleanly
+
+REGRESSION GATES (all green after optimization)
+-----------------------------------------------
+  Examples:               13/13 suites
+  Diagnostics:            13/13
+  Foundation tests:       49/49  (includes 11 new optimizer tests)
+  Interactive tests:      3/3
+  Stdlib assertions:      94/94
+  Optimizer assertions:   52/52  (tests/optimizer_test.nex)
+  Determinism:            byte-for-byte identical (SHA-256 verified)
+  Cold-start acceptance:  fresh-zip extract -> build -> PASS
+  PE32+ structure:        objdump-verified headers + imports
+
+USAGE
+-----
+  ./nexus bench          Run the arithmetic benchmark (best of 3)
+  ./nexus test           Full regression suite
+  ./nexus self-host      Determinism verification

@@ -1,0 +1,610 @@
+# ==============================================================================
+#           NEXUS NATIVE GRAPHICAL FLAPPY BIRD (flappy_gui.nex)
+#     The First Full Graphical Game on NEXUS Native Programming Language
+#           0% C#  -  0% .NET Runtime  -  100% Native x86-64 Machine Code
+# ==============================================================================
+
+include "stdlib/x11.nex"
+include "stdlib/font.nex"
+include "stdlib/sprite.nex"
+include "examples/assets/flappy_bird_sprite.nex"
+
+# Shared drawing parameters
+let rx = 0
+let ry = 0
+let rw = 0
+let rh = 0
+let rc_r = 0
+let rc_g = 0
+let rc_b = 0
+let clr_r = 0
+let clr_g = 0
+let clr_b = 0
+
+# ------------------------------------------------------------------------------
+# GRAPHICS HELPER: clear_screen
+# ------------------------------------------------------------------------------
+fn clear_screen {
+    let x11_r = clr_r
+    let x11_g = clr_g
+    let x11_b = clr_b
+    call x11_clear
+}
+
+# ------------------------------------------------------------------------------
+# GRAPHICS HELPER: draw_rect
+# ------------------------------------------------------------------------------
+fn draw_rect {
+    let x11_rx = rx
+    let x11_ry = ry
+    let x11_rw = rw
+    let x11_rh = rh
+    let x11_r = rc_r
+    let x11_g = rc_g
+    let x11_b = rc_b
+    call x11_fill_rect
+}
+
+# ==============================================================================
+#                           MAIN GAME LOGIC
+# ==============================================================================
+
+# Game State Constants: 0 = Title, 1 = Playing, 2 = GameOver
+let game_state = 0
+
+# Flappy Bird State
+let bird_x = 70
+let bird_y = 250
+let bird_vy = 0
+let wing_state = 0
+
+# Pipe Obstacles (Pipe 1 and Pipe 2 for continuous scrolling)
+let pipe1_x = 380
+let pipe1_gap = 180
+let pipe2_x = 580
+let pipe2_gap = 260
+let gap_size = 140
+
+# Scoring & High Score
+let score = 0
+let high_score = 0
+let seed = 12345
+let frame = 0
+let ground_scroll = 0
+
+# Initialize Native X11 Desktop Window
+let x11_width = 360
+let x11_height = 600
+call x11_init
+
+# Initialize Pixel Art Sprite Assets
+call init_flappy_bird_down_sprite
+call init_flappy_bird_up_sprite
+
+# Game loop control
+let running = 1
+
+while running == 1 {
+    let frame = frame + 1
+    let p = 0
+
+    # --------------------------------------------------------------------------
+    # 1. DRAW BACKGROUND & SCENERY
+    # --------------------------------------------------------------------------
+    # Clear Sky: Classic 8-bit Blue (112, 197, 206)
+    let clr_r = 112
+    let clr_g = 197
+    let clr_b = 206
+    call clear_screen
+
+    # Distant White Clouds
+    let rc_r = 255
+    let rc_g = 255
+    let rc_b = 255
+    let rx = 40
+    let ry = 90
+    let rw = 70
+    let rh = 28
+    call draw_rect
+    let rx = 210
+    let ry = 140
+    let rw = 90
+    let rh = 32
+    call draw_rect
+
+    # Distant Horizon Green Trees/Bushes
+    let rc_r = 140
+    let rc_g = 210
+    let rc_b = 100
+    let rx = 0
+    let ry = 485
+    let rw = 360
+    let rh = 35
+    call draw_rect
+
+    # --------------------------------------------------------------------------
+    # 2. DRAW PIPES (When playing or game over)
+    # --------------------------------------------------------------------------
+    if game_state != 0 {
+        # --- PIPE 1 ---
+        # Top Pipe Body
+        let rc_r = 115
+        let rc_g = 190
+        let rc_b = 46
+        let rx = pipe1_x
+        let ry = 0
+        let rw = 52
+        let rh = pipe1_gap
+        call draw_rect
+
+        # Top Pipe Highlight Line
+        let rc_r = 160
+        let rc_g = 230
+        let rc_b = 70
+        let rx = pipe1_x + 6
+        let ry = 0
+        let rw = 6
+        let rh = pipe1_gap
+        call draw_rect
+
+        # Top Pipe Cap/Lip
+        let rc_r = 90
+        let rc_g = 160
+        let rc_b = 35
+        let rx = pipe1_x - 4
+        let ry = pipe1_gap - 24
+        let rw = 60
+        let rh = 24
+        call draw_rect
+
+        # Bottom Pipe Body
+        let bot1_y = pipe1_gap + gap_size
+        let bot1_h = 520 - bot1_y
+        let rc_r = 115
+        let rc_g = 190
+        let rc_b = 46
+        let rx = pipe1_x
+        let ry = bot1_y
+        let rw = 52
+        let rh = bot1_h
+        call draw_rect
+
+        # Bottom Pipe Highlight Line
+        let rc_r = 160
+        let rc_g = 230
+        let rc_b = 70
+        let rx = pipe1_x + 6
+        let ry = bot1_y
+        let rw = 6
+        let rh = bot1_h
+        call draw_rect
+
+        # Bottom Pipe Cap/Lip
+        let rc_r = 90
+        let rc_g = 160
+        let rc_b = 35
+        let rx = pipe1_x - 4
+        let ry = bot1_y
+        let rw = 60
+        let rh = 24
+        call draw_rect
+
+        # --- PIPE 2 ---
+        # Top Pipe Body
+        let rc_r = 115
+        let rc_g = 190
+        let rc_b = 46
+        let rx = pipe2_x
+        let ry = 0
+        let rw = 52
+        let rh = pipe2_gap
+        call draw_rect
+
+        # Top Pipe Highlight Line
+        let rc_r = 160
+        let rc_g = 230
+        let rc_b = 70
+        let rx = pipe2_x + 6
+        let ry = 0
+        let rw = 6
+        let rh = pipe2_gap
+        call draw_rect
+
+        # Top Pipe Cap/Lip
+        let rc_r = 90
+        let rc_g = 160
+        let rc_b = 35
+        let rx = pipe2_x - 4
+        let ry = pipe2_gap - 24
+        let rw = 60
+        let rh = 24
+        call draw_rect
+
+        # Bottom Pipe Body
+        let bot2_y = pipe2_gap + gap_size
+        let bot2_h = 520 - bot2_y
+        let rc_r = 115
+        let rc_g = 190
+        let rc_b = 46
+        let rx = pipe2_x
+        let ry = bot2_y
+        let rw = 52
+        let rh = bot2_h
+        call draw_rect
+
+        # Bottom Pipe Highlight Line
+        let rc_r = 160
+        let rc_g = 230
+        let rc_b = 70
+        let rx = pipe2_x + 6
+        let ry = bot2_y
+        let rw = 6
+        let rh = bot2_h
+        call draw_rect
+
+        # Bottom Pipe Cap/Lip
+        let rc_r = 90
+        let rc_g = 160
+        let rc_b = 35
+        let rx = pipe2_x - 4
+        let ry = bot2_y
+        let rw = 60
+        let rh = 24
+        call draw_rect
+    }
+
+    # --------------------------------------------------------------------------
+    # 3. DRAW SCROLLING GROUND
+    # --------------------------------------------------------------------------
+    # Grass Top Bar: Green (115, 190, 46)
+    let rc_r = 115
+    let rc_g = 190
+    let rc_b = 46
+    let rx = 0
+    let ry = 520
+    let rw = 360
+    let rh = 14
+    call draw_rect
+
+    # Ground Dirt Body: Tan Sandy Yellow (222, 216, 149)
+    let rc_r = 222
+    let rc_g = 216
+    let rc_b = 149
+    let rx = 0
+    let ry = 534
+    let rw = 360
+    let rh = 66
+    call draw_rect
+
+    # Ground Pattern Stripes (Scrolling effect)
+    let rc_r = 200
+    let rc_g = 190
+    let rc_b = 130
+    for stripe = 0, stripe < 16, stripe = stripe + 1 {
+        let sx = stripe * 24 - ground_scroll
+        let rx = sx
+        let ry = 534
+        let rw = 10
+        let rh = 66
+        call draw_rect
+    }
+
+    # --------------------------------------------------------------------------
+    # 4. DRAW FLAPPY BIRD SPRITE
+    # --------------------------------------------------------------------------
+    # Render high-detail pixel art Flappy Bird sprite
+    let sprite_ptr = flappy_bird_down_sprite_data
+    if wing_state == 1 {
+        let sprite_ptr = flappy_bird_up_sprite_data
+    }
+    let sprite_x = bird_x
+    let sprite_y = bird_y
+    let sprite_scale = 2
+    let sprite_flip_x = 0
+    call draw_sprite
+
+    # --------------------------------------------------------------------------
+    # 5. DRAW SCOREBOARD & HUD (via stdlib/font.nex)
+    # --------------------------------------------------------------------------
+    if game_state == 1 {
+        # Draw Score at top center at Scale 3
+        let draw_int_val = score
+        let draw_text_x = 168
+        let draw_text_y = 40
+        let draw_text_scale = 3
+        let draw_text_r = 255
+        let draw_text_g = 255
+        let draw_text_b = 255
+        call draw_int
+    } else if game_state == 0 {
+        # Title Card Banner
+        let rc_r = 255
+        let rc_g = 255
+        let rc_b = 255
+        let rx = 50
+        let ry = 130
+        let rw = 260
+        let rh = 50
+        call draw_rect
+
+        let rc_r = 230
+        let rc_g = 90
+        let rc_b = 40
+        let rx = 54
+        let ry = 134
+        let rw = 252
+        let rh = 42
+        call draw_rect
+
+        let draw_text_str = "FLAPPY BIRD"
+        let draw_text_x = 88
+        let draw_text_y = 146
+        let draw_text_scale = 2
+        let draw_text_r = 255
+        let draw_text_g = 255
+        let draw_text_b = 255
+        call draw_text
+
+        # Subtitle instruction
+        let draw_text_str = "PRESS SPACE TO FLAP"
+        let draw_text_x = 104
+        let draw_text_y = 195
+        let draw_text_scale = 1
+        let draw_text_r = 255
+        let draw_text_g = 255
+        let draw_text_b = 255
+        call draw_text
+    } else if game_state == 2 {
+        # Game Over Card
+        let rc_r = 255
+        let rc_g = 255
+        let rc_b = 255
+        let rx = 60
+        let ry = 150
+        let rw = 240
+        let rh = 150
+        call draw_rect
+
+        let rc_r = 222
+        let rc_g = 216
+        let rc_b = 149
+        let rx = 64
+        let ry = 154
+        let rw = 232
+        let rh = 142
+        call draw_rect
+
+        let draw_text_str = "GAME OVER"
+        let draw_text_x = 108
+        let draw_text_y = 168
+        let draw_text_scale = 2
+        let draw_text_r = 220
+        let draw_text_g = 50
+        let draw_text_b = 40
+        call draw_text
+
+        let draw_text_str = "SCORE: "
+        let draw_text_x = 95
+        let draw_text_y = 205
+        let draw_text_scale = 1
+        let draw_text_r = 40
+        let draw_text_g = 40
+        let draw_text_b = 40
+        call draw_text
+
+        let draw_int_val = score
+        let draw_text_x = 180
+        let draw_text_y = 205
+        let draw_text_scale = 1
+        let draw_text_r = 40
+        let draw_text_g = 40
+        let draw_text_b = 40
+        call draw_int
+
+        if score > high_score {
+            let high_score = score
+        }
+
+        let draw_text_str = "BEST:  "
+        let draw_text_x = 95
+        let draw_text_y = 225
+        let draw_text_scale = 1
+        let draw_text_r = 40
+        let draw_text_g = 40
+        let draw_text_b = 40
+        call draw_text
+
+        let draw_int_val = high_score
+        let draw_text_x = 180
+        let draw_text_y = 225
+        let draw_text_scale = 1
+        let draw_text_r = 40
+        let draw_text_g = 40
+        let draw_text_b = 40
+        call draw_int
+
+        let draw_text_str = "PRESS SPACE TO RETRY"
+        let draw_text_x = 90
+        let draw_text_y = 260
+        let draw_text_scale = 1
+        let draw_text_r = 180
+        let draw_text_g = 70
+        let draw_text_b = 30
+        call draw_text
+    }
+
+    # --------------------------------------------------------------------------
+    # 6. PRESENT FRAME & POLL INPUT (Pure Native X11)
+    # --------------------------------------------------------------------------
+    call x11_present
+    call x11_poll_events
+    let key = x11_key
+
+    # Quit on Window Close or Escape (key 255)
+    if key == 255 {
+        let running = 0
+        break
+    }
+
+    # --------------------------------------------------------------------------
+    # 7. GAME STATE MACHINE & PHYSICS
+    # --------------------------------------------------------------------------
+    if game_state == 0 {
+        # --- TITLE SCREEN ---
+        # Bob bird smoothly up and down
+        let m = frame % 30
+        if m < 15 {
+            let bird_y = bird_y + 1
+        } else {
+            let bird_y = bird_y - 1
+        }
+
+        # Press Space or Click to start
+        if key == 1 {
+            let game_state = 1
+            let bird_vy = 0 - 8
+            let wing_state = 1
+        }
+    } else if game_state == 1 {
+        # --- ACTIVE PLAYING ---
+        # Scroll ground
+        let ground_scroll = ground_scroll + 3
+        if ground_scroll >= 24 {
+            let ground_scroll = 0
+        }
+
+        # Handle Flap
+        if key == 1 {
+            let bird_vy = 0 - 8
+            let wing_state = 1
+        } else {
+            # Apply Gravity
+            let bird_vy = bird_vy + 1
+            if bird_vy > 10 {
+                let bird_vy = 10
+            }
+            if bird_vy > 0 {
+                let wing_state = 0
+            }
+        }
+
+        # Update Bird Position
+        let bird_y = bird_y + bird_vy
+
+        # Move Pipes left
+        let pipe1_x = pipe1_x - 3
+        let pipe2_x = pipe2_x - 3
+
+        let pipe_exit_limit = -60
+
+        # Recycle Pipe 1
+        if pipe1_x < pipe_exit_limit {
+            let pipe1_x = 360
+            let score = score + 1
+
+            # Pseudo-Random Gap Height (100 to 280)
+            let seed = seed * 1103515245
+            let seed = seed + 12345
+            let smod = seed % 180
+            if smod < 0 {
+                let smod = 0 - smod
+            }
+            let pipe1_gap = smod + 100
+        }
+
+        # Recycle Pipe 2
+        if pipe2_x < pipe_exit_limit {
+            let pipe2_x = 360
+            let score = score + 1
+
+            # Pseudo-Random Gap Height (100 to 280)
+            let seed = seed * 1103515245
+            let seed = seed + 12345
+            let smod = seed % 180
+            if smod < 0 {
+                let smod = 0 - smod
+            }
+            let pipe2_gap = smod + 100
+        }
+
+        # --- COLLISION DETECTION ---
+        # 1. Ground and Ceiling Collision
+        if bird_y <= 0 {
+            let game_state = 2
+        }
+        if bird_y >= 496 {
+            let bird_y = 496
+            let game_state = 2
+        }
+
+        # 2. Pipe 1 Collision
+        let bx_right = bird_x + 28
+        let by_bottom = bird_y + 22
+
+        let p1_overlap = 0
+        let p1_right = pipe1_x + 52
+        if bx_right > pipe1_x {
+            if bird_x < p1_right {
+                let p1_overlap = 1
+            }
+        }
+        if p1_overlap == 1 {
+            if bird_y < pipe1_gap {
+                let game_state = 2
+            }
+            let gap1_bot = pipe1_gap + gap_size
+            if by_bottom > gap1_bot {
+                let game_state = 2
+            }
+        }
+
+        # 3. Pipe 2 Collision
+        let p2_overlap = 0
+        let p2_right = pipe2_x + 52
+        if bx_right > pipe2_x {
+            if bird_x < p2_right {
+                let p2_overlap = 1
+            }
+        }
+        if p2_overlap == 1 {
+            if bird_y < pipe2_gap {
+                let game_state = 2
+            }
+            let gap2_bot = pipe2_gap + gap_size
+            if by_bottom > gap2_bot {
+                let game_state = 2
+            }
+        }
+    } else if game_state == 2 {
+        # --- GAME OVER ---
+        # Bird falls down to ground
+        if bird_y < 496 {
+            let bird_y = bird_y + 8
+        }
+
+        # Press Space, Enter, or Click to Restart
+        if key == 1 {
+            # Reset game
+            let bird_y = 250
+            let bird_vy = 0
+            let pipe1_x = 380
+            let pipe1_gap = 180
+            let pipe2_x = 580
+            let pipe2_gap = 260
+            let score = 0
+            let game_state = 1
+        } else if key == 2 {
+            # Reset game
+            let bird_y = 250
+            let bird_vy = 0
+            let pipe1_x = 380
+            let pipe1_gap = 180
+            let pipe2_x = 580
+            let pipe2_gap = 260
+            let score = 0
+            let game_state = 1
+        }
+    }
+}
+
+call x11_close

@@ -1,0 +1,339 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: sets.nex
+#              Set Theory Operations on Sorted Integer Arrays
+# ==============================================================================
+#
+# Sets are represented as strictly sorted 64-bit integer arrays without duplicates.
+# All operations (union, intersection, difference, symmetric difference)
+# run in optimal linear time O(n + m) via two-pointer traversal.
+# Binary search membership testing runs in O(log n) time.
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2, nx_i3, nx_i4
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_set_contains : Binary search for element in sorted set
+#   Inputs:  nx_i0 = set pointer
+#            nx_i1 = element count n
+#            nx_i2 = target element
+#   Output:  nx_r0 = 1 if found, 0 otherwise
+# ------------------------------------------------------------------------------
+fn nx_set_contains {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = 0
+    let s3 = 0
+    let s4 = s1 - 1
+    while s3 <= s4 {
+        if nx_r0 == 0 {
+            let s5 = s4 - s3
+            let s5 = s5 / 2
+            let s5 = s3 + s5
+            let s6 = load64 [s0 + s5 * 8]
+            if s6 == s2 {
+                let nx_r0 = 1
+            } else {
+                if s6 < s2 {
+                    let s3 = s5 + 1
+                } else {
+                    let s4 = s5 - 1
+                }
+            }
+        } else {
+            let s3 = s4 + 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_union : Union of set A and set B (A U B)
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#            nx_i4 = out_set pointer
+#   Output:  nx_r0 = number of elements in union
+# ------------------------------------------------------------------------------
+fn nx_set_union {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let nx_r0 = 0
+    let s5 = 0
+    let s6 = 0
+    while s5 < s1 {
+        if s6 < s3 {
+            let s7 = load64 [s0 + s5 * 8]
+            let d = load64 [s2 + s6 * 8]
+            if s7 == d {
+                store64 [s4 + nx_r0 * 8] s7
+                let nx_r0 = nx_r0 + 1
+                let s5 = s5 + 1
+                let s6 = s6 + 1
+            } else {
+                if s7 < d {
+                    store64 [s4 + nx_r0 * 8] s7
+                    let nx_r0 = nx_r0 + 1
+                    let s5 = s5 + 1
+                } else {
+                    store64 [s4 + nx_r0 * 8] d
+                    let nx_r0 = nx_r0 + 1
+                    let s6 = s6 + 1
+                }
+            }
+        } else {
+            let s7 = load64 [s0 + s5 * 8]
+            store64 [s4 + nx_r0 * 8] s7
+            let nx_r0 = nx_r0 + 1
+            let s5 = s5 + 1
+        }
+    }
+    while s6 < s3 {
+        let d = load64 [s2 + s6 * 8]
+        store64 [s4 + nx_r0 * 8] d
+        let nx_r0 = nx_r0 + 1
+        let s6 = s6 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_intersect : Intersection of set A and set B (A n B)
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#            nx_i4 = out_set pointer
+#   Output:  nx_r0 = number of elements in intersection
+# ------------------------------------------------------------------------------
+fn nx_set_intersect {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let nx_r0 = 0
+    let s5 = 0
+    let s6 = 0
+    while s5 < s1 {
+        if s6 < s3 {
+            let s7 = load64 [s0 + s5 * 8]
+            let d = load64 [s2 + s6 * 8]
+            if s7 == d {
+                store64 [s4 + nx_r0 * 8] s7
+                let nx_r0 = nx_r0 + 1
+                let s5 = s5 + 1
+                let s6 = s6 + 1
+            } else {
+                if s7 < d {
+                    let s5 = s5 + 1
+                } else {
+                    let s6 = s6 + 1
+                }
+            }
+        } else {
+            let s5 = s1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_diff : Set difference (A \ B)
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#            nx_i4 = out_set pointer
+#   Output:  nx_r0 = number of elements in difference
+# ------------------------------------------------------------------------------
+fn nx_set_diff {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let nx_r0 = 0
+    let s5 = 0
+    let s6 = 0
+    while s5 < s1 {
+        if s6 < s3 {
+            let s7 = load64 [s0 + s5 * 8]
+            let d = load64 [s2 + s6 * 8]
+            if s7 == d {
+                let s5 = s5 + 1
+                let s6 = s6 + 1
+            } else {
+                if s7 < d {
+                    store64 [s4 + nx_r0 * 8] s7
+                    let nx_r0 = nx_r0 + 1
+                    let s5 = s5 + 1
+                } else {
+                    let s6 = s6 + 1
+                }
+            }
+        } else {
+            let s7 = load64 [s0 + s5 * 8]
+            store64 [s4 + nx_r0 * 8] s7
+            let nx_r0 = nx_r0 + 1
+            let s5 = s5 + 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_sym_diff : Symmetric difference A Delta B = (A \ B) U (B \ A)
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#            nx_i4 = out_set pointer
+#   Output:  nx_r0 = number of elements in symmetric difference
+# ------------------------------------------------------------------------------
+fn nx_set_sym_diff {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let nx_r0 = 0
+    let s5 = 0
+    let s6 = 0
+    while s5 < s1 {
+        if s6 < s3 {
+            let s7 = load64 [s0 + s5 * 8]
+            let d = load64 [s2 + s6 * 8]
+            if s7 == d {
+                let s5 = s5 + 1
+                let s6 = s6 + 1
+            } else {
+                if s7 < d {
+                    store64 [s4 + nx_r0 * 8] s7
+                    let nx_r0 = nx_r0 + 1
+                    let s5 = s5 + 1
+                } else {
+                    store64 [s4 + nx_r0 * 8] d
+                    let nx_r0 = nx_r0 + 1
+                    let s6 = s6 + 1
+                }
+            }
+        } else {
+            let s7 = load64 [s0 + s5 * 8]
+            store64 [s4 + nx_r0 * 8] s7
+            let nx_r0 = nx_r0 + 1
+            let s5 = s5 + 1
+        }
+    }
+    while s6 < s3 {
+        let d = load64 [s2 + s6 * 8]
+        store64 [s4 + nx_r0 * 8] d
+        let nx_r0 = nx_r0 + 1
+        let s6 = s6 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_is_subset : Checks if A is a subset of B (A <= B)
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#   Output:  nx_r0 = 1 if A is subset of B, 0 otherwise
+# ------------------------------------------------------------------------------
+fn nx_set_is_subset {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let nx_r0 = 1
+    if s1 > s3 {
+        let nx_r0 = 0
+    } else {
+        let s5 = 0
+        let s6 = 0
+        while s5 < s1 {
+            if nx_r0 == 1 {
+                if s6 >= s3 {
+                    let nx_r0 = 0
+                } else {
+                    let s7 = load64 [s0 + s5 * 8]
+                    let d = load64 [s2 + s6 * 8]
+                    if s7 == d {
+                        let s5 = s5 + 1
+                        let s6 = s6 + 1
+                    } else {
+                        if s7 > d {
+                            let s6 = s6 + 1
+                        } else {
+                            let nx_r0 = 0
+                        }
+                    }
+                }
+            } else {
+                let s5 = s1
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_is_equal : Checks if set A equals set B
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#   Output:  nx_r0 = 1 if A == B, 0 otherwise
+# ------------------------------------------------------------------------------
+fn nx_set_is_equal {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let nx_r0 = 1
+    if s1 != s3 {
+        let nx_r0 = 0
+    } else {
+        let s5 = 0
+        while s5 < s1 {
+            if nx_r0 == 1 {
+                let s7 = load64 [s0 + s5 * 8]
+                let d = load64 [s2 + s5 * 8]
+                if s7 != d {
+                    let nx_r0 = 0
+                }
+                let s5 = s5 + 1
+            } else {
+                let s5 = s1
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_set_is_disjoint : Checks if A and B share no elements (A n B = empty)
+#   Inputs:  nx_i0 = setA pointer, nx_i1 = nA
+#            nx_i2 = setB pointer, nx_i3 = nB
+#   Output:  nx_r0 = 1 if disjoint, 0 otherwise
+# ------------------------------------------------------------------------------
+fn nx_set_is_disjoint {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let nx_r0 = 1
+    let s5 = 0
+    let s6 = 0
+    while s5 < s1 {
+        if nx_r0 == 1 {
+            if s6 < s3 {
+                let s7 = load64 [s0 + s5 * 8]
+                let d = load64 [s2 + s6 * 8]
+                if s7 == d {
+                    let nx_r0 = 0
+                } else {
+                    if s7 < d {
+                        let s5 = s5 + 1
+                    } else {
+                        let s6 = s6 + 1
+                    }
+                }
+            } else {
+                let s5 = s1
+            }
+        } else {
+            let s5 = s1
+        }
+    }
+}

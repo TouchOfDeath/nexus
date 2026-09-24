@@ -1,0 +1,118 @@
+# ==============================================================================
+#                      NEXUS TEST: LINEAR ALGEBRA ENGINE
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/linalg.nex"
+
+print "=== Testing Linear Algebra Module ==="
+
+# 1. Vector Dot Product
+# [1, 2, 3] . [4, 5, 6] = 4 + 10 + 18 = 32
+let vA = [1, 2, 3]
+let vB = [4, 5, 6]
+let nx_i0 = vA
+let nx_i1 = vB
+let nx_i2 = 3
+call nx_vec_dot
+assert_eq nx_r0, 32
+
+# 2. Vector Addition: [1, 2, 3] + [4, 5, 6] = [5, 7, 9]
+let vOut = alloc 32
+let nx_i0 = vA
+let nx_i1 = vB
+let nx_i2 = vOut
+let nx_i3 = 3
+call nx_vec_add
+let add0 = vOut[0]
+let add1 = vOut[1]
+let add2 = vOut[2]
+assert_eq add0, 5
+assert_eq add1, 7
+assert_eq add2, 9
+
+# 3. Vector Scale: [1, 2, 3] * 10 = [10, 20, 30]
+let nx_i0 = vA
+let nx_i1 = 10
+let nx_i2 = vOut
+let nx_i3 = 3
+call nx_vec_scale
+let sc0 = vOut[0]
+let sc1 = vOut[1]
+let sc2 = vOut[2]
+assert_eq sc0, 10
+assert_eq sc1, 20
+assert_eq sc2, 30
+
+# 4. 3D Cross Product: [1, 0, 0] x [0, 1, 0] = [0, 0, 1]
+let x_axis = [1, 0, 0]
+let y_axis = [0, 1, 0]
+let z_out = alloc 24
+let nx_i0 = x_axis
+let nx_i1 = y_axis
+let nx_i2 = z_out
+call nx_vec3_cross
+let z0 = z_out[0]
+let z1 = z_out[1]
+let z2 = z_out[2]
+assert_eq z0, 0
+assert_eq z1, 0
+assert_eq z2, 1
+
+# 5. 3D Magnitude Squared: [3, 4, 12]^2 = 9 + 16 + 144 = 169
+let v3d = [3, 4, 12]
+let nx_i0 = v3d
+call nx_vec3_mag_sq
+assert_eq nx_r0, 169
+
+# 6. Matrix Multiplication (2x2 * 2x2):
+# [1, 2] * [5, 6] = [1*5 + 2*7, 1*6 + 2*8] = [19, 22]
+# [3, 4]   [7, 8]   [3*5 + 4*7, 3*6 + 4*8]   [43, 50]
+let mA = [1, 2, 3, 4]
+let mB = [5, 6, 7, 8]
+let mC = alloc 64
+
+let nx_i0 = mA
+let nx_i1 = mB
+let nx_i2 = mC
+let nx_i3 = 2
+let nx_i4 = 2
+let nx_i5 = 2
+call nx_mat_mul
+
+let c00 = mC[0]
+let c01 = mC[1]
+let c10 = mC[2]
+let c11 = mC[3]
+assert_eq c00, 19
+assert_eq c01, 22
+assert_eq c10, 43
+assert_eq c11, 50
+
+# 7. Matrix Transpose (2x3 -> 3x2):
+# [1, 2, 3] -> [1, 4]
+# [4, 5, 6]    [2, 5]
+#              [3, 6]
+let matRect = [1, 2, 3, 4, 5, 6]
+let matTrans = alloc 48
+let nx_i0 = matRect
+let nx_i1 = matTrans
+let nx_i2 = 2
+let nx_i3 = 3
+call nx_mat_transpose
+
+let t00 = matTrans[0]
+let t01 = matTrans[1]
+let t10 = matTrans[2]
+let t11 = matTrans[3]
+let t20 = matTrans[4]
+let t21 = matTrans[5]
+assert_eq t00, 1
+assert_eq t01, 4
+assert_eq t10, 2
+assert_eq t11, 5
+assert_eq t20, 3
+assert_eq t21, 6
+
+print "[SUCCESS] Linear Algebra Tests Passed!"
+call nx_assert_summary

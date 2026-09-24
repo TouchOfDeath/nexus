@@ -1,0 +1,28 @@
+# ==============================================================================
+#                 NEXUS EXAMPLE: INTERACTIVE ARITHMETIC CALCULATOR
+#             Demonstrating interactive console input (read <var>)
+# ==============================================================================
+
+print "--- NEXUS Interactive Math Engine ---"
+print "Enter first integer (a):"
+read a
+
+print "Enter second integer (b):"
+read b
+
+let s = a + b
+let d = a - b
+let p = a * b
+let q = a / b
+let r = a % b
+
+print "Sum (a + b):"
+print s
+print "Difference (a - b):"
+print d
+print "Product (a * b):"
+print p
+print "Quotient (a / b):"
+print q
+print "Remainder (a % b):"
+print r

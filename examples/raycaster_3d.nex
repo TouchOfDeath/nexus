@@ -1,0 +1,438 @@
+# ==============================================================================
+#            NEXUS 3D RETRO RAYCASTER (Wolfenstein 3D Style Engine)
+#                     examples/raycaster_3d.nex
+#      0% C - 0% libc - 0% Xlib - 100% Native 3D Perspective Raycasting
+# ==============================================================================
+
+include "stdlib/framebuffer.nex"
+include "stdlib/math_trig.nex"
+
+# World Map (16x16 maze grid: 256 bytes)
+let world_map = alloc 256
+
+# Initialize 16x16 map maze layout
+fn init_map {
+    let my = 0
+    while my < 16 {
+        let mx = 0
+        while mx < 16 {
+            let m_off = my * 16
+            let m_off = m_off + mx
+            let t_val = 0
+
+            # Outer boundary walls
+            if mx == 0 {
+                let t_val = 1
+            }
+            if mx == 15 {
+                let t_val = 1
+            }
+            if my == 0 {
+                let t_val = 1
+            }
+            if my == 15 {
+                let t_val = 1
+            }
+
+            # Inner maze pillars and walls
+            if mx == 4 {
+                if my >= 3 {
+                    if my <= 8 {
+                        let t_val = 2
+                    }
+                }
+            }
+            if mx == 11 {
+                if my >= 5 {
+                    if my <= 12 {
+                        let t_val = 3
+                    }
+                }
+            }
+            if my == 7 {
+                if mx >= 6 {
+                    if mx <= 10 {
+                        let t_val = 1
+                    }
+                }
+            }
+            if my == 11 {
+                if mx >= 2 {
+                    if mx <= 7 {
+                        let t_val = 2
+                    }
+                }
+            }
+
+            store [world_map + m_off] t_val
+            let mx = mx + 1
+        }
+        let my = my + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# MAIN 3D RAYCASTER INITIALIZATION
+# ------------------------------------------------------------------------------
+
+# Initialize Framebuffer and Trig LUT
+let fb_width = 320
+let fb_height = 240
+call fb_init
+call init_trig_tables
+call init_map
+
+# Player Position (tile 8.5 = 8704 fixed-point)
+let px = 8704
+let py = 8704
+let pa = 35 # Looking down the hallway towards maze corner
+
+let running = 1
+let frame = 0
+
+while running == 1 {
+    let frame = frame + 1
+
+    # 1. POLL USER INPUT
+    call x11_poll_events
+    if x11_key == 255 {
+        let running = 0
+    }
+
+    # Turn Left (A / Left Arrow)
+    if x11_key == 12 {
+        let pa = pa - 8
+        if pa < 0 {
+            let pa = pa + 360
+        }
+    }
+
+    # Turn Right (D / Right Arrow)
+    if x11_key == 13 {
+        let pa = pa + 8
+        if pa >= 360 {
+            let pa = pa - 360
+        }
+    }
+
+    # Move Forward (W / Up / Space)
+    if x11_key == 10 {
+        let trig_angle = pa
+        call trig_cos
+        let step_x = trig_val / 12
+        call trig_sin
+        let step_y = trig_val / 12
+
+        let npx = px + step_x
+        let npy = py + step_y
+        let ngx = npx / 1024
+        let ngy = npy / 1024
+        let n_off = ngy * 16
+        let n_off = n_off + ngx
+        let n_tile = load [world_map + n_off]
+        if n_tile == 0 {
+            let px = npx
+            let py = npy
+        }
+    }
+    if x11_key == 1 {
+        let trig_angle = pa
+        call trig_cos
+        let step_x = trig_val / 12
+        call trig_sin
+        let step_y = trig_val / 12
+
+        let npx = px + step_x
+        let npy = py + step_y
+        let ngx = npx / 1024
+        let ngy = npy / 1024
+        let n_off = ngy * 16
+        let n_off = n_off + ngx
+        let n_tile = load [world_map + n_off]
+        if n_tile == 0 {
+            let px = npx
+            let py = npy
+        }
+    }
+
+    # Move Backward (S / Down)
+    if x11_key == 11 {
+        let trig_angle = pa
+        call trig_cos
+        let step_x = trig_val / 12
+        call trig_sin
+        let step_y = trig_val / 12
+
+        let npx = px - step_x
+        let npy = py - step_y
+        let ngx = npx / 1024
+        let ngy = npy / 1024
+        let n_off = ngy * 16
+        let n_off = n_off + ngx
+        let n_tile = load [world_map + n_off]
+        if n_tile == 0 {
+            let px = npx
+            let py = npy
+        }
+    }
+
+    # Auto-pan camera slightly in headless/automated mode for visual verification
+    let pa = pa + 1
+    if pa >= 360 {
+        let pa = pa - 360
+    }
+
+    # --------------------------------------------------------------------------
+    # 2. RENDER 3D PERSPECTIVE RAYCASTING
+    # --------------------------------------------------------------------------
+    # 160 ray slices (each 2 pixels wide)
+    let ray_i = 0
+    while ray_i < 160 {
+        # Ray angle: FOV is 60 degrees (-30 to +30)
+        let ray_offset = ray_i * 60
+        let ray_offset = ray_offset / 160
+        let ray_ang = pa - 30
+        let ray_ang = ray_ang + ray_offset
+        let ray_ang = ray_ang % 360
+        if ray_ang < 0 {
+            let ray_ang = ray_ang + 360
+        }
+
+        # Trigonometric direction vectors
+        let trig_angle = ray_ang
+        call trig_cos
+        let cos_r = trig_val
+        call trig_sin
+        let sin_r = trig_val
+
+        # Step vector: 1/32 of a tile unit
+        let step_x = cos_r / 32
+        let step_y = sin_r / 32
+
+        # Ray Marching Loop
+        let rx = px
+        let ry = py
+        let march_step = 0
+        let hit_tile = 0
+        let hit_dist = 5120
+        let marching = 1
+
+        while marching == 1 {
+            if march_step >= 160 {
+                let marching = 0
+            } else {
+                let rx = rx + step_x
+                let ry = ry + step_y
+                let gx = rx / 1024
+                let gy = ry / 1024
+
+                if gx >= 0 {
+                    if gx < 16 {
+                        if gy >= 0 {
+                            if gy < 16 {
+                                let m_off = gy * 16
+                                let m_off = m_off + gx
+                                let t_chk = load [world_map + m_off]
+                                if t_chk > 0 {
+                                    let hit_tile = t_chk
+                                    let hit_dist = march_step * 32
+                                    let marching = 0
+                                }
+                            }
+                        }
+                    }
+                }
+                let march_step = march_step + 1
+            }
+        }
+
+        let dist = hit_dist
+
+        # Fisheye correction: dist * cos(ray_ang - pa)
+        let diff_a = ray_ang - pa
+        let trig_angle = diff_a
+        call trig_cos
+        let c_dist = dist * trig_val
+        let c_dist = c_dist / 1024
+        if c_dist <= 32 {
+            let c_dist = 32
+        }
+
+        # Projected Wall Height
+        let wall_h = 1024 * 160
+        let wall_h = wall_h / c_dist
+        if wall_h > 240 {
+            let wall_h = 240
+        }
+
+        let half_h = wall_h / 2
+        let wall_top = 120 - half_h
+        let wall_bot = 120 + half_h
+
+        # Base Wall Colors: Red (1), Blue (2), Gold (3)
+        let w_r = 192
+        let w_g = 50
+        let w_b = 30
+        if hit_tile == 2 {
+            let w_r = 30
+            let w_g = 90
+            let w_b = 192
+        }
+        if hit_tile == 3 {
+            let w_r = 192
+            let w_g = 130
+            let w_b = 30
+        }
+
+        # Distance dimming
+        let dim = c_dist / 32
+        if dim > 140 {
+            let dim = 140
+        }
+        let w_r = w_r - dim
+        let w_g = w_g - dim
+        let w_b = w_b - dim
+        if w_r < 20 {
+            let w_r = 20
+        }
+        if w_g < 20 {
+            let w_g = 20
+        }
+        if w_b < 20 {
+            let w_b = 20
+        }
+
+        let fb_r = w_r
+        let fb_g = w_g
+        let fb_b = w_b
+        call fb_make_color
+        let col_wall = fb_col
+
+        # Draw Ceiling column (Dark Slate Gray)
+        let fb_x = ray_i * 2
+        let fb_y = 0
+        let fb_w = 2
+        let fb_h = wall_top
+        let fb_col = 1579044 # 0x00181824
+        call fb_draw_rect
+
+        # Draw Wall column
+        let fb_x = ray_i * 2
+        let fb_y = wall_top
+        let fb_w = 2
+        let fb_h = wall_h
+        let fb_col = col_wall
+        call fb_draw_rect
+
+        # Draw Floor column (Deep Moss Stone)
+        let fb_x = ray_i * 2
+        let fb_y = wall_bot
+        let fb_w = 2
+        let fb_h = 240 - wall_bot
+        let fb_col = 2633768 # 0x00283028
+        call fb_draw_rect
+
+        let ray_i = ray_i + 1
+    }
+
+    # --------------------------------------------------------------------------
+    # 3. 2D MINI-MAP RADAR OVERLAY (Top-Left 48x48)
+    # --------------------------------------------------------------------------
+    # Mini-map background border
+    let fb_x = 4
+    let fb_y = 4
+    let fb_w = 50
+    let fb_h = 50
+    let fb_col = 16777215 # White border
+    call fb_draw_rect
+
+    let fb_x = 5
+    let fb_y = 5
+    let fb_w = 48
+    let fb_h = 48
+    let fb_col = 0 # Black background
+    call fb_draw_rect
+
+    # Render mini-map tiles (3x3 pixels each)
+    let mmy = 0
+    while mmy < 16 {
+        let mmx = 0
+        while mmx < 16 {
+            let m_off = mmy * 16
+            let m_off = m_off + mmx
+            let t_chk = load [world_map + m_off]
+            if t_chk > 0 {
+                let fb_x = mmx * 3
+                let fb_x = fb_x + 5
+                let fb_y = mmy * 3
+                let fb_y = fb_y + 5
+                let fb_w = 3
+                let fb_h = 3
+                let fb_col = 8421504 # Gray 0x00808080
+                call fb_draw_rect
+            }
+            let mmx = mmx + 1
+        }
+        let mmy = mmy + 1
+    }
+
+    # Draw Player Dot on Mini-Map
+    let pm_x = px * 3
+    let pm_x = pm_x / 1024
+    let pm_x = pm_x + 5
+    let pm_y = py * 3
+    let pm_y = pm_y / 1024
+    let pm_y = pm_y + 5
+    let fb_x = pm_x
+    let fb_y = pm_y
+    let fb_w = 2
+    let fb_h = 2
+    let fb_col = 16768000 # Bright Gold
+    call fb_draw_rect
+
+    # Draw Player Sight Vector on Mini-Map
+    let trig_angle = pa
+    call trig_cos
+    let pdx = trig_val * 6
+    let pdx = pdx / 1024
+    call trig_sin
+    let pdy = trig_val * 6
+    let pdy = pdy / 1024
+    let fb_x0 = pm_x
+    let fb_y0 = pm_y
+    let fb_x1 = pm_x + pdx
+    let fb_y1 = pm_y + pdy
+    let fb_col = 16724530 # Red sight ray
+    call fb_draw_line
+
+    # --------------------------------------------------------------------------
+    # 4. HUD CROSSHAIR & BOTTOM STATUS BAR
+    # --------------------------------------------------------------------------
+    # Horizontal bar
+    let fb_x = 157
+    let fb_y = 120
+    let fb_w = 7
+    let fb_h = 1
+    let fb_col = 16777215 # White
+    call fb_draw_rect
+
+    # Vertical bar
+    let fb_x = 160
+    let fb_y = 117
+    let fb_w = 1
+    let fb_h = 7
+    let fb_col = 16777215 # White
+    call fb_draw_rect
+
+    # --------------------------------------------------------------------------
+    # 5. PRESENT TO HARDWARE (60 FPS PutImage Blit)
+    # --------------------------------------------------------------------------
+    call fb_present
+
+    # Auto-stop after 120 frames for automated verification
+    if frame >= 120 {
+        let running = 0
+    }
+}
+
+call x11_close

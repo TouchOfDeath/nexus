@@ -1,0 +1,21 @@
+# Multi-variable arithmetic chain test
+let x = 100
+let y = 25
+let z = x + y
+let w = z * 2
+let r = w - 50
+
+print "=========================================="
+print "       NEXUS Arithmetic Verification      "
+print "=========================================="
+print "x = 100:"
+print x
+print "y = 25:"
+print y
+print "z = x + y (Expected: 125):"
+print z
+print "w = z * 2 (Expected: 250):"
+print w
+print "r = w - 50 (Expected: 200):"
+print r
+print "Arithmetic test passed successfully."

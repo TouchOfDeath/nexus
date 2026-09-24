@@ -1,0 +1,38 @@
+# ==============================================================================
+#                  NEXUS EXAMPLE: NESTED LOOPS & BLOCK STACK
+#        Demonstrating arbitrary nesting: while inside while, if inside while
+# ==============================================================================
+
+print "--- Multi-Level Nested While Loops ---"
+let r = 1
+let t = 0
+while r <= 4 {
+    let c = 1
+    while c <= 5 {
+        let t = t + 1
+        let c = c + 1
+    }
+    let r = r + 1
+}
+
+print "Total 4x5 grid cells counted (expected 20):"
+print t
+
+print "--- Nested If/Else Inside While ---"
+let i = 1
+let e = 0
+let o = 0
+while i <= 10 {
+    let m = i % 2
+    if m == 0 {
+        let e = e + 1
+    } else {
+        let o = o + 1
+    }
+    let i = i + 1
+}
+
+print "Even count in 1..10 (expected 5):"
+print e
+print "Odd count in 1..10 (expected 5):"
+print o

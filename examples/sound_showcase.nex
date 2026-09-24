@@ -1,0 +1,39 @@
+# ==============================================================================
+#            NEXUS CHIPTUNE AUDIO SHOWCASE (sound_showcase.nex)
+#     0% C - 0% libc - 100% Native Linux Kernel Execution & Async Synthesis
+# ==============================================================================
+
+include "stdlib/sound.nex"
+
+# Sleep helper: nanosleep(sec, nsec)
+let sleep_ts = alloc 16
+
+fn sleep_half_sec {
+    store64 [sleep_ts + 0] 0
+    store64 [sleep_ts + 8] 500000000
+    let s = syscall2 35, sleep_ts, 0
+}
+
+print "=================================================="
+print "  NEXUS RETRO CHIPTUNE AUDIO SYNTHESIZER DEMO"
+print "=================================================="
+
+print "[1/4] Playing Jump SFX (Rising Square Wave)..."
+call snd_play_jump
+call sleep_half_sec
+
+print "[2/4] Playing Coin Ding SFX (Two-Tone Arpeggio)..."
+call snd_play_point
+call sleep_half_sec
+
+print "[3/4] Playing Laser Blaster SFX (Falling Sweep)..."
+call snd_play_laser
+call sleep_half_sec
+
+print "[4/4] Playing Collision Crash SFX (Noise Burst)..."
+call snd_play_hit
+call sleep_half_sec
+
+print "=================================================="
+print "[+] All 4 retro chiptune sounds synthesized and played!"
+print "=================================================="

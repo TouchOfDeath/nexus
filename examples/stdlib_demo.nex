@@ -1,0 +1,139 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY SHOWCASE
+#      Demonstrates the source-level stdlib: math, arrays and strings.
+#
+#      The whole library is loaded with ONE include line:
+#          include "stdlib/nstdlib.nex"
+#
+#      Convention: set nx_i0/nx_i1/nx_i2, call, read nx_r0.
+#      (Run from the project root so the include path resolves.)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+print "=== NEXUS STDLIB DEMO ==="
+
+# ------------------------- math module -------------------------
+print "[math]"
+
+let nx_i0 = 17
+let nx_i1 = 42
+call nx_max
+print "max(17, 42):"
+print nx_r0
+
+let nx_i0 = 2
+let nx_i1 = 16
+call nx_pow
+print "pow(2, 16):"
+print nx_r0
+
+let nx_i0 = 1000000
+call nx_isqrt
+print "isqrt(1000000):"
+print nx_r0
+
+let nx_i0 = 1071
+let nx_i1 = 462
+call nx_gcd
+print "gcd(1071, 462):"
+print nx_r0
+
+let nx_i0 = 0 - 15
+let nx_i1 = 0
+let nx_i2 = 10
+call nx_clamp
+print "clamp(-15, 0, 10):"
+print nx_r0
+
+let nx_i0 = 30
+call nx_fib
+print "fib(30):"
+print nx_r0
+
+let nx_i0 = 7919
+call nx_is_prime
+print "is_prime(7919):"
+print nx_r0
+
+# ------------------------- arrays module -------------------------
+# Byte arrays: element i of buffer p lives at [p + i], values 0..255.
+print "[arrays]"
+
+let arr = alloc 16
+let nx_i0 = arr
+let nx_i1 = 10
+call nx_arr_iota
+
+let nx_i0 = arr
+let nx_i1 = 10
+call nx_arr_sum
+print "sum(0..9):"
+print nx_r0
+
+let nx_i0 = arr
+let nx_i1 = 10
+call nx_arr_max
+print "max(0..9):"
+print nx_r0
+
+let nx_i0 = arr
+let nx_i1 = 10
+call nx_arr_reverse
+let e0 = load [arr + 0]
+print "first element after reverse:"
+print e0
+
+let nx_i0 = arr
+let nx_i1 = 10
+let nx_i2 = 7
+call nx_arr_index_of
+print "index of 7 after reverse:"
+print nx_r0
+
+# ------------------------- strings module -------------------------
+print "[strings]"
+
+let who = "NEXUS"
+let nx_i0 = who
+call nx_str_len
+print "len(NEXUS):"
+print nx_r0
+
+let buf = alloc 64
+let nx_i0 = who
+let nx_i1 = buf
+call nx_str_copy
+print_str buf
+
+let nx_i0 = buf
+let nx_i1 = 33
+call nx_str_chr
+print "index of '!' is expected -1, index of 'X':"
+let nx_i0 = buf
+let nx_i1 = 88
+call nx_str_chr
+print nx_r0
+
+let greeting = "hello "
+let target = "world"
+let out = alloc 32
+let nx_i0 = greeting
+let nx_i1 = target
+let nx_i2 = out
+call nx_str_concat
+print_str out
+
+let num_text = "2026"
+let nx_i0 = num_text
+call nx_str_to_int
+print "str_to_int(2026):"
+print nx_r0
+
+let nx_i0 = 0 - 9876
+let nx_i1 = buf
+call nx_int_to_str
+print "int_to_str(-9876):"
+print_str buf
+
+print "=== STDLIB DEMO COMPLETED ==="

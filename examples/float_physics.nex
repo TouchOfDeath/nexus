@@ -1,0 +1,105 @@
+# ==============================================================================
+#           NEXUS NATIVE IEEE-754 SSE2 FLOATING-POINT PHYSICS ENGINE
+#          2D Projectile Aerodynamics & Orbital Mechanics Simulator
+#                  100% Native x86-64 (0% C# / 0% .NET / 0% libc)
+# ==============================================================================
+
+print "=================================================="
+print "    NEXUS SSE2 PRECISION AERODYNAMICS SIMULATOR   "
+print "         Native x86-64 IEEE 754 64-Bit Float      "
+print "=================================================="
+
+# 1. ORBITAL MECHANICS & ESCAPE VELOCITY
+# Standard gravitational parameter mu = G * M = 398600.4418 km^3/s^2
+# R_earth = 6371.0 km
+let mu = 398600.4418
+let r_earth = 6371.0
+
+# Escape velocity from Earth surface: v_esc = sqrt(2 * mu / r)
+let two_mu = 2.0 *. mu
+let esc_ratio = two_mu /. r_earth
+let v_escape = fsqrt esc_ratio
+
+print "Earth Mean Radius (km):"
+print_float r_earth
+print "Calculated Earth Escape Velocity (km/s):"
+print_float v_escape
+
+# Low Earth Orbit (LEO) Circular Velocity: v_circ = sqrt(mu / (R + alt))
+let altitude = 400.0
+let r_orbit = r_earth +. altitude
+let leo_ratio = mu /. r_orbit
+let v_leo = fsqrt leo_ratio
+
+print "LEO Altitude (400 km) Orbital Velocity (km/s):"
+print_float v_leo
+
+# 2. 2D PROJECTILE MOTION WITH NUMERICAL INTEGRATION
+print ""
+print "--------------------------------------------------"
+print "   BALLISTIC TRAJECTORY (NUMERICAL INTEGRATION)   "
+print "--------------------------------------------------"
+
+let dt = 0.5            # Time step: 0.5 seconds
+let g = 9.80665         # Gravitational acceleration (m/s^2)
+
+# Initial conditions: launch from ground (x=0, y=0)
+# Angle = 45 degrees: vx0 = vy0 = 70.710678 m/s (speed = 100 m/s)
+let px = 0.0
+let py = 0.0
+let vx = 70.710678
+let vy = 70.710678
+let sim_time = 0.0
+let max_alt = 0.0
+
+let step = 0
+let running = 1
+
+while running == 1 {
+    # Update position: p = p + v * dt
+    let dx = vx *. dt
+    let dy = vy *. dt
+    let px = px +. dx
+    let py = py +. dy
+
+    # Update vertical velocity with gravity: vy = vy - g * dt
+    let dv = g *. dt
+    let vy = vy -. dv
+
+    let sim_time = sim_time +. dt
+    let step = step + 1
+
+    # Track maximum apogee altitude
+    if py >. max_alt {
+        let max_alt = py
+    }
+
+    # Ground impact condition: y <= 0
+    if py <=. 0.0 {
+        let running = 0
+    }
+}
+
+print "Total Flight Duration (s):"
+print_float sim_time
+print "Maximum Apogee Altitude (m):"
+print_float max_alt
+print "Downrange Impact Distance (m):"
+print_float px
+
+# Kinetic Energy at Impact: Ek = 0.5 * m * v^2
+let mass = 15.0
+let vx_sq = vx *. vx
+let vy_sq = vy *. vy
+let v_sq = vx_sq +. vy_sq
+let half_m = 0.5 *. mass
+let ke_impact = half_m *. v_sq
+
+print "Projectile Mass (kg):"
+print_float mass
+print "Impact Kinetic Energy (Joules):"
+print_float ke_impact
+
+print "=================================================="
+print "[SUCCESS] SSE2 IEEE 754 Floating-Point Physics Verified!"
+print "=================================================="

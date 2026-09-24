@@ -1,0 +1,69 @@
+# ==============================================================================
+#                 NEXUS TEST: ARBITRARY MULTI-LETTER VARIABLES
+#       Demonstrating multi-letter variable names, underscores, uppercase,
+#       chained expressions, conditionals, while loops, and memory ops
+# ==============================================================================
+
+print "--- Multi-Letter Variable Verification ---"
+
+# 1. Basic Multi-Letter Assignment & Arithmetic
+let counter = 10
+let velocity = 7800
+let step_size = 5
+let total_sum = counter + velocity * step_size
+print "Total Sum:"
+print total_sum
+
+# 2. Uppercase and Mixed Identifiers
+let Initial_Score = 150
+let BONUS_POINTS = 50
+let final_score = Initial_Score + BONUS_POINTS
+print "Final Score (expected 200):"
+print final_score
+
+# 3. Multi-Letter Variables in Conditionals (if/else)
+let threshold_value = 100
+if final_score > threshold_value {
+    print "Condition Passed: final_score > threshold_value"
+} else {
+    print "Condition Failed!"
+}
+
+# 4. Multi-Letter Variables in While Loops
+let loop_index = 0
+let accumulator = 0
+while loop_index < 5 {
+    let accumulator = accumulator + loop_index
+    let loop_index = loop_index + 1
+}
+print "Accumulator (0+1+2+3+4 = 10):"
+print accumulator
+
+# 5. Multi-Letter Variables in Heap Memory (alloc / store / load)
+let buffer_ptr = alloc 64
+let write_offset = 0
+let byte_val = 65
+
+while write_offset < 4 {
+    store [buffer_ptr + write_offset] byte_val
+    let byte_val = byte_val + 1
+    let write_offset = write_offset + 1
+}
+
+let read_offset = 2
+let loaded_byte = load [buffer_ptr + read_offset]
+print "Loaded Byte at index 2 (expected 67):"
+print loaded_byte
+
+# 6. Functions using Multi-Letter Variables
+fn compute_area {
+    let shape_area = rect_len * width_val
+}
+
+let rect_len = 12
+let width_val = 8
+call compute_area
+print "Shape Area (12 * 8 = 96):"
+print shape_area
+
+print "=== MULTI-LETTER VARIABLES VERIFIED SUCCESSFULLY ==="

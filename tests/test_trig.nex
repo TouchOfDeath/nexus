@@ -1,0 +1,33 @@
+include "stdlib/math_trig.nex"
+
+call init_trig_tables
+
+let trig_angle = 0
+call trig_sin
+print "sin(0): "
+print trig_val
+
+let trig_angle = 90
+call trig_sin
+print "sin(90): "
+print trig_val
+
+let trig_angle = 180
+call trig_sin
+print "sin(180): "
+print trig_val
+
+let trig_angle = 270
+call trig_sin
+print "sin(270): "
+print trig_val
+
+let trig_angle = 0
+call trig_cos
+print "cos(0): "
+print trig_val
+
+let trig_angle = 90
+call trig_cos
+print "cos(90): "
+print trig_val

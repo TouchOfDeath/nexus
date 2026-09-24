@@ -1,0 +1,200 @@
+# ==============================================================================
+#                       NEXUS STANDARD LIBRARY: 8x8 ARCADE FONT
+#                 stdlib/font.nex - Retro Bitmap Font & Text Engine
+#      0% C - 0% libc - 0% Xlib - 100% Pure Machine Code Rendering
+# ==============================================================================
+
+# Font memory and state
+let font_data = alloc 1024
+let font_initialized = 0
+let font_int_buf = alloc 32
+
+# Input parameter registers
+let draw_text_str = 0
+let draw_text_x = 0
+let draw_text_y = 0
+let draw_text_scale = 1
+let draw_text_r = 255
+let draw_text_g = 255
+let draw_text_b = 255
+
+# Single character registers
+let draw_char_code = 0
+let draw_char_x = 0
+let draw_char_y = 0
+
+# Integer printing register
+let draw_int_val = 0
+
+# ------------------------------------------------------------------------------
+# font_init: Decodes the embedded 8x8 font table (ASCII 32 to 127, 96 glyphs)
+# ------------------------------------------------------------------------------
+fn font_init {
+    let hex_font = "0000000000000000183c3c1818001800363600000000000036367f367f3636000c3e031e301f0c00006333180c6663001c361c6e3b336e000606030000000000180c0606060c1800060c1818180c060000663cff3c660000000c0c3f0c0c000000000000000c0c060000003f0000000000000000000c0c006030180c060301003e63737b6f673e000c0e0c0c0c0c3f001e33301c06333f001e33301c30331e00383c36337f3078003f031f3030331e001c06031f33331e003f3330180c0c0c001e33331e33331e001e33333e30180e00000c0c00000c0c00000c0c00000c0c06180c0603060c180000003f00003f0000060c1830180c06001e3330180c000c003e637b7b7b031e000c1e33333f3333003f66663e66663f003c66030303663c001f36666666361f007f46161e16467f007f46161e16060f003c66030373667c003333333f333333001e0c0c0c0c0c1e007830303033331e006766361e366667000f06060646667f0063777f7f6b63630063676f7b736363001c36636363361c003f66663e06060f001e3333333b1e38003f66663e366667001e33070e38331e003f2d0c0c0c0c1e003333333333333f0033333333331e0c006363636b7f7763006363361c1c3663003333331e0c0c1e007f6331184c667f001e06060606061e0003060c18306040001e18181818181e00081c36630000000000000000000000ff0c0c18000000000000001e303e336e000706063e66663b0000001e3303331e003830303e33336e0000001e333f031e001c36060f06060f0000006e33333e301f0706366e666667000c000e0c0c0c1e00300030303033331e070666361e3667000e0c0c0c0c0c1e000000337f7f6b630000001f333333330000001e3333331e0000003b66663e060f00006e33333e307800003b6e66060f0000003e031e301f00080c3e0c0c2c18000000333333336e0000003333331e0c000000636b7f7f3600000063361c36630000003333333e301f00003f190c263f00380c0c070c0c38001818180018181800070c0c380c0c07006e3b0000000000000000000000000000"
+
+    let f_hi = 0
+    let f_out = 0
+    while f_hi < 1536 {
+        # High nibble
+        let c1 = load [hex_font + f_hi]
+        let n1 = 0
+        if c1 >= 97 {
+            let n1 = c1 - 87
+        } else {
+            let n1 = c1 - 48
+        }
+
+        # Low nibble
+        let f_lo = f_hi + 1
+        let c2 = load [hex_font + f_lo]
+        let n2 = 0
+        if c2 >= 97 {
+            let n2 = c2 - 87
+        } else {
+            let n2 = c2 - 48
+        }
+
+        let f_byte = n1 * 16 + n2
+        store [font_data + f_out] f_byte
+
+        let f_hi = f_hi + 2
+        let f_out = f_out + 1
+    }
+    let font_initialized = 1
+}
+
+# ------------------------------------------------------------------------------
+# draw_char: Renders an 8x8 glyph scaled by draw_text_scale
+# Inputs: draw_char_code, draw_char_x, draw_char_y, draw_text_scale,
+#         draw_text_r, draw_text_g, draw_text_b
+# ------------------------------------------------------------------------------
+fn draw_char {
+    if font_initialized == 0 {
+        call font_init
+    }
+
+    # Space or non-printable ASCII: skip rendering
+    if draw_char_code < 33 {
+        return
+    }
+    if draw_char_code > 126 {
+        return
+    }
+
+    let glyph_idx = draw_char_code - 32
+    let glyph_off = glyph_idx * 8
+    let glyph_ptr = font_data + glyph_off
+
+    let f_row = 0
+    while f_row < 8 {
+        let row_byte = load [glyph_ptr + f_row]
+        if row_byte > 0 {
+            let bit_val = 1
+            let f_col = 0
+            while f_col < 8 {
+                let bit_on = row_byte / bit_val
+                let bit_on = bit_on % 2
+                if bit_on == 1 {
+                    let col_px = f_col * draw_text_scale
+                    let row_px = f_row * draw_text_scale
+                    let x11_rx = draw_char_x + col_px
+                    let x11_ry = draw_char_y + row_px
+                    let x11_rw = draw_text_scale
+                    let x11_rh = draw_text_scale
+                    let x11_r = draw_text_r
+                    let x11_g = draw_text_g
+                    let x11_b = draw_text_b
+                    call x11_fill_rect
+                }
+                let bit_val = bit_val * 2
+                let f_col = f_col + 1
+            }
+        }
+        let f_row = f_row + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# draw_text: Renders a null-terminated ASCII string
+# Inputs: draw_text_str, draw_text_x, draw_text_y, draw_text_scale,
+#         draw_text_r, draw_text_g, draw_text_b
+# ------------------------------------------------------------------------------
+fn draw_text {
+    if font_initialized == 0 {
+        call font_init
+    }
+
+    let cur_tx = draw_text_x
+    let cur_ty = draw_text_y
+    let char_adv = 8 * draw_text_scale
+    let line_adv = 10 * draw_text_scale
+
+    let s_idx = 0
+    let parsing_text = 1
+    while parsing_text == 1 {
+        let ch = load [draw_text_str + s_idx]
+        if ch == 0 {
+            let parsing_text = 0
+        } else if ch == 10 {
+            let cur_tx = draw_text_x
+            let cur_ty = cur_ty + line_adv
+            let s_idx = s_idx + 1
+        } else {
+            let draw_char_code = ch
+            let draw_char_x = cur_tx
+            let draw_char_y = cur_ty
+            call draw_char
+            let cur_tx = cur_tx + char_adv
+            let s_idx = s_idx + 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# draw_int: Formats a 64-bit integer into ASCII and renders it on screen
+# Inputs: draw_int_val, draw_text_x, draw_text_y, draw_text_scale,
+#         draw_text_r, draw_text_g, draw_text_b
+# ------------------------------------------------------------------------------
+fn draw_int {
+    let iv = draw_int_val
+    let is_neg = 0
+    if iv < 0 {
+        let is_neg = 1
+        let iv = 0 - iv
+    }
+
+    let temp_v = iv
+    let num_digits = 0
+    if temp_v == 0 {
+        let num_digits = 1
+    }
+    while temp_v > 0 {
+        let num_digits = num_digits + 1
+        let temp_v = temp_v / 10
+    }
+
+    let total_len = num_digits
+    if is_neg == 1 {
+        let total_len = total_len + 1
+    }
+
+    store [font_int_buf + total_len] 0
+
+    let pos = total_len - 1
+    if iv == 0 {
+        store [font_int_buf + pos] 48
+    }
+    while iv > 0 {
+        let rem = iv % 10
+        let dig_char = rem + 48
+        store [font_int_buf + pos] dig_char
+        let pos = pos - 1
+        let iv = iv / 10
+    }
+    if is_neg == 1 {
+        store [font_int_buf + 0] 45
+    }
+
+    let draw_text_str = font_int_buf
+    call draw_text
+}

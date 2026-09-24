@@ -1,0 +1,80 @@
+# ==============================================================================
+#   NEXUS Loop Control Test: break / continue / for
+#   Expected output (exact lines):
+#   10 / 20 / 30 / 40 / done / 02468 / 120 / 3628800 / 55 / 7 / 14 / 3
+# ==============================================================================
+
+# --- break in while ---
+let i = 0
+while i < 100 {
+    if i == 40 {
+        break
+    }
+    let i = i + 10
+}
+print i
+
+# --- break then post-loop code ---
+print "done"
+
+# --- continue in while (skip odds) ---
+let n = 0
+while n < 10 {
+    let n = n + 1
+    let m2 = n % 2
+    if m2 == 1 {
+        continue
+    }
+    print n
+}
+
+# --- basic for loop: sum 1..5 = 15... use factorial-style accumulate ---
+let acc = 1
+for i = 1, i <= 5, i = i + 1 {
+    let acc = acc * i
+}
+print acc
+
+# --- for loop counting down ---
+let pow = 1
+for j = 0, j < 10, j = j + 1 {
+    let pow = pow * 2
+}
+print pow
+
+# --- for with break ---
+let total = 0
+for k = 0, k < 100, k = k + 1 {
+    if total > 50 {
+        break
+    }
+    let total = total + 10
+}
+print total
+
+# --- nested for with continue in inner loop ---
+let hits = 0
+for a = 0, a < 5, a = a + 1 {
+    for b = 0, b < 5, b = b + 1 {
+        if b == 2 {
+            continue
+        }
+        let hits = hits + 1
+    }
+}
+print hits
+
+# --- while with continue that must not infinite-loop ---
+let c = 0
+let seen = 0
+while c < 6 {
+    let c = c + 1
+    if c == 3 {
+        continue
+    }
+    if c == 5 {
+        break
+    }
+    let seen = seen + 1
+}
+print seen

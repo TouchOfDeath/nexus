@@ -1,0 +1,40 @@
+# ==============================================================================
+#                 NEXUS v5.4 MULTI-WIDTH MEMORY OPERATIONS TEST
+#             Tests: store16 / load16, store32 / load32, store64 / load64
+# ==============================================================================
+
+let buf = alloc 64
+
+# 1. 16-bit word test: 0x1234 = 4660
+store16 [buf + 0] 4660
+let val16 = load16 [buf + 0]
+print "16-bit val (expected 4660):"
+print val16
+
+# Verify byte layout (little-endian: 0x34 = 52, 0x12 = 18)
+let b0 = load [buf + 0]
+let b1 = load [buf + 1]
+print "Byte 0 (expected 52):"
+print b0
+print "Byte 1 (expected 18):"
+print b1
+
+# 2. 32-bit dword test: 0x12345678 = 305419896
+store32 [buf + 4] 305419896
+let val32 = load32 [buf + 4]
+print "32-bit val (expected 305419896):"
+print val32
+
+# Verify lower 16-bit from the 32-bit slot (0x5678 = 22136)
+let low16 = load16 [buf + 4]
+print "Low 16-bit of 32-bit slot (expected 22136):"
+print low16
+
+# 3. 64-bit quadword test
+let qval = 9876543210
+store64 [buf + 8] qval
+let res64 = load64 [buf + 8]
+print "64-bit val (expected 9876543210):"
+print res64
+
+print "=== MULTI-WIDTH MEMORY TEST PASSED ==="

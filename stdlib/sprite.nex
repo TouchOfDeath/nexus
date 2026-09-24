@@ -1,0 +1,83 @@
+# ==============================================================================
+#                       NEXUS STANDARD LIBRARY: SPRITE ENGINE
+#                 stdlib/sprite.nex - 2D Pixel Art & Sprite Blitter
+#      0% C - 0% libc - 0% Xlib - 100% Native Run-Length Span Rasterization
+# ==============================================================================
+
+# Input parameter registers
+let sprite_ptr = 0
+let sprite_x = 0
+let sprite_y = 0
+let sprite_scale = 1
+let sprite_flip_x = 0
+
+# Output inspection registers
+let sprite_out_w = 0
+let sprite_out_h = 0
+
+# ------------------------------------------------------------------------------
+# draw_sprite: Renders a run-length compressed sprite at (sprite_x, sprite_y)
+# Inputs: sprite_ptr, sprite_x, sprite_y, sprite_scale, sprite_flip_x
+# ------------------------------------------------------------------------------
+fn draw_sprite {
+    if sprite_ptr == 0 {
+        return
+    }
+
+    let sp_w = load [sprite_ptr + 0]
+    let sp_h = load [sprite_ptr + 1]
+    let sp_s_lo = load [sprite_ptr + 2]
+    let sp_s_hi = load [sprite_ptr + 3]
+    let sp_num_spans = sp_s_hi * 256
+    let sp_num_spans = sp_num_spans + sp_s_lo
+
+    let sp_idx = 0
+    while sp_idx < sp_num_spans {
+        let sp_base = sp_idx * 6
+        let sp_base = sp_base + 4
+        let sp_entry = sprite_ptr + sp_base
+
+        let sp_dx = load [sp_entry + 0]
+        let sp_dy = load [sp_entry + 1]
+        let sp_len = load [sp_entry + 2]
+        let sp_r = load [sp_entry + 3]
+        let sp_g = load [sp_entry + 4]
+        let sp_b = load [sp_entry + 5]
+
+        # Handle horizontal flipping
+        if sprite_flip_x == 1 {
+            let sp_dx = sp_w - sp_dx
+            let sp_dx = sp_dx - sp_len
+        }
+
+        # Project to screen coordinates
+        let sp_px = sp_dx * sprite_scale
+        let sp_py = sp_dy * sprite_scale
+        let x11_rx = sprite_x + sp_px
+        let x11_ry = sprite_y + sp_py
+        let x11_rw = sp_len * sprite_scale
+        let x11_rh = sprite_scale
+        let x11_r = sp_r
+        let x11_g = sp_g
+        let x11_b = sp_b
+
+        call x11_fill_rect
+
+        let sp_idx = sp_idx + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# sprite_get_size: Reads width and height into sprite_out_w and sprite_out_h
+# Inputs: sprite_ptr
+# Outputs: sprite_out_w, sprite_out_h
+# ------------------------------------------------------------------------------
+fn sprite_get_size {
+    if sprite_ptr == 0 {
+        let sprite_out_w = 0
+        let sprite_out_h = 0
+        return
+    }
+    let sprite_out_w = load [sprite_ptr + 0]
+    let sprite_out_h = load [sprite_ptr + 1]
+}

@@ -1,0 +1,57 @@
+# ==============================================================================
+#                 NEXUS BARE-METAL KINEMATICS & PHYSICS ENGINE
+#          Simulating Multistage Rocket Launch to Low Earth Orbit
+#                  100% Native x86-64 (0% C# / 0% .NET)
+# ==============================================================================
+
+# Constants & Initial Conditions:
+let u = 0           # Initial Velocity (m/s)
+let h = 0           # Initial Altitude (m)
+
+# Stage 1 Burn:
+# Duration t = 120 seconds, Average Acceleration a = 25 m/s^2
+let t = 120
+let a = 25
+let v = a * t       # v1 = u + at = 25 * 120 = 3000 m/s
+
+# Altitude gained in Stage 1: s1 = 1/2 * a * t^2
+# In integer math: (a * t * t) / 2 -> since we have *, let's compute:
+let q = t * t       # 120 * 120 = 14400
+let w = q * a       # 14400 * 25 = 360000
+# Approximated midpoint displacement:
+let s = w - 180000  # Altitude at MECO = 180,000 meters (180 km)
+
+# Stage 2 Burn:
+# Final orbital insertion burn adds 4,800 m/s:
+let b = 4800
+let o = v + b       # Final Orbital Velocity = 3000 + 4800 = 7,800 m/s
+
+# Mass of Satellite: m = 1,500 kg
+let m = 1500
+# Momentum: p = m * v = 1500 * 7800 = 11,700,000 kg*m/s
+# (Let's compute in kilonewton-seconds / 1000):
+let p = o * 15      # 7800 * 15 = 117,000 kN*s
+
+print "=================================================="
+print "     NEXUS AEROSPACE & KINEMATICS SIMULATOR       "
+print "         100% Bare-Metal x86-64 Machine Code      "
+print "=================================================="
+print "Stage 1 Burn Duration (seconds):"
+print t
+print "Stage 1 Average Acceleration (m/s^2):"
+print a
+print "Stage 1 Cutoff Velocity (m/s):"
+print v
+print "Altitude at Main Engine Cutoff (meters):"
+print s
+print "Stage 2 Delta-V Added (m/s):"
+print b
+print "Final Orbital Velocity (m/s - Target: 7800):"
+print o
+print "Spacecraft Mass (kg):"
+print m
+print "Scaled Orbital Momentum (kN*s):"
+print p
+print "=================================================="
+print "Mission Telemetry: ORBIT INSERTION SUCCESSFUL!"
+print "=================================================="

@@ -1,0 +1,110 @@
+# ==============================================================================
+#                  NEXUS TEST: COMBINATORICS & PERMUTATIONS
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/combinatorics.nex"
+
+print "=== Testing Combinatorics Module ==="
+
+# 1. Factorial
+let nx_i0 = 0
+call nx_fact
+assert_eq nx_r0, 1
+
+let nx_i0 = 1
+call nx_fact
+assert_eq nx_r0, 1
+
+let nx_i0 = 5
+call nx_fact
+assert_eq nx_r0, 120
+
+let nx_i0 = 10
+call nx_fact
+assert_eq nx_r0, 3628800
+
+# 2. Permutations P(n, k)
+let nx_i0 = 5
+let nx_i1 = 3
+call nx_perm_count
+assert_eq nx_r0, 60
+
+let nx_i0 = 6
+let nx_i1 = 2
+call nx_perm_count
+assert_eq nx_r0, 30
+
+# 3. Combinations C(n, k)
+let nx_i0 = 5
+let nx_i1 = 2
+call nx_comb_count
+assert_eq nx_r0, 10
+
+let nx_i0 = 10
+let nx_i1 = 4
+call nx_comb_count
+assert_eq nx_r0, 210
+
+let nx_i0 = 30
+let nx_i1 = 15
+call nx_comb_count
+assert_eq nx_r0, 155117520
+
+# 4. Catalan Numbers
+let nx_i0 = 0
+call nx_catalan
+assert_eq nx_r0, 1
+
+let nx_i0 = 3
+call nx_catalan
+assert_eq nx_r0, 5
+
+let nx_i0 = 4
+call nx_catalan
+assert_eq nx_r0, 14
+
+let nx_i0 = 5
+call nx_catalan
+assert_eq nx_r0, 42
+
+# 5. Derangements (!n)
+let nx_i0 = 3
+call nx_derangements
+assert_eq nx_r0, 2
+
+let nx_i0 = 4
+call nx_derangements
+assert_eq nx_r0, 9
+
+let nx_i0 = 5
+call nx_derangements
+assert_eq nx_r0, 44
+
+# 6. Next Permutation Generator
+let pbuf = [1, 2, 3]
+
+let nx_i0 = pbuf
+let nx_i1 = 3
+call nx_perm_next
+assert_eq nx_r0, 1
+let v0 = pbuf[0]
+let v1 = pbuf[1]
+let v2 = pbuf[2]
+assert_eq v0, 1
+assert_eq v1, 3
+assert_eq v2, 2
+
+let nx_i0 = pbuf
+let nx_i1 = 3
+call nx_perm_next
+assert_eq nx_r0, 1
+let v0 = pbuf[0]
+let v1 = pbuf[1]
+let v2 = pbuf[2]
+assert_eq v0, 2
+assert_eq v1, 1
+assert_eq v2, 3
+
+print "[SUCCESS] Combinatorics Tests Passed!"
+call nx_assert_summary

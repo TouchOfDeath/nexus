@@ -1,0 +1,134 @@
+# ==============================================================================
+#                 NEXUS TEST: NUMBER THEORY & HYPEROPERATIONS
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/number_theory.nex"
+
+print "=== Testing Number Theory & Hyperoperations ==="
+
+# 1. Modular Exponentiation (base^exp mod m)
+# 3^13 mod 1000 = 1594323 % 1000 = 323
+let nx_i0 = 3
+let nx_i1 = 13
+let nx_i2 = 1000
+call nx_mod_pow
+assert_eq nx_r0, 323
+
+# 2^30 mod 1000000007 = 1073741824 % 1000000007 = 73741817
+let nx_i0 = 2
+let nx_i1 = 30
+let nx_i2 = 1000000007
+call nx_mod_pow
+assert_eq nx_r0, 73741817
+
+# 2. Extended Euclidean Algorithm (gcd(240, 46) = 2, 240*x + 46*y = 2)
+let gcd_out = alloc 24
+let nx_i0 = 240
+let nx_i1 = 46
+let nx_i2 = gcd_out
+call nx_ext_gcd
+assert_eq nx_r0, 2
+let g_val = gcd_out[0]
+let x_val = gcd_out[1]
+let y_val = gcd_out[2]
+assert_eq g_val, 2
+assert_eq x_val, -9
+assert_eq y_val, 47
+
+# 3. Modular Multiplicative Inverse (3 * 7 = 21 = 1 mod 10 => 3^-1 mod 10 = 7)
+let nx_i0 = 3
+let nx_i1 = 10
+call nx_mod_inv
+assert_eq nx_r0, 7
+
+let nx_i0 = 42
+let nx_i1 = 2017
+call nx_mod_inv
+# Verify: (42 * inv) % 2017 == 1
+let inv = nx_r0
+let check = 42 * inv
+let check = check % 2017
+assert_eq check, 1
+
+# 4. Euler's Totient phi(n)
+# phi(9) = 6 (1, 2, 4, 5, 7, 8)
+let nx_i0 = 9
+call nx_totient
+assert_eq nx_r0, 6
+
+# phi(13) = 12 (prime)
+let nx_i0 = 13
+call nx_totient
+assert_eq nx_r0, 12
+
+# phi(100) = 40
+let nx_i0 = 100
+call nx_totient
+assert_eq nx_r0, 40
+
+# 5. Tetration a ^^ b
+# 2 ^^ 1 = 2
+let nx_i0 = 2
+let nx_i1 = 1
+call nx_tetrate
+assert_eq nx_r0, 2
+
+# 2 ^^ 2 = 4
+let nx_i0 = 2
+let nx_i1 = 2
+call nx_tetrate
+assert_eq nx_r0, 4
+
+# 2 ^^ 3 = 16
+let nx_i0 = 2
+let nx_i1 = 3
+call nx_tetrate
+assert_eq nx_r0, 16
+
+# 2 ^^ 4 = 65536
+let nx_i0 = 2
+let nx_i1 = 4
+call nx_tetrate
+assert_eq nx_r0, 65536
+
+# 2 ^^ 5 -> overflows 64-bit int, returns -1
+let nx_i0 = 2
+let nx_i1 = 5
+call nx_tetrate
+assert_eq nx_r0, -1
+
+# 3 ^^ 2 = 27
+let nx_i0 = 3
+let nx_i1 = 2
+call nx_tetrate
+assert_eq nx_r0, 27
+
+# 6. Pentation a ^^^ b
+# 2 ^^^ 1 = 2
+let nx_i0 = 2
+let nx_i1 = 1
+call nx_pentate
+assert_eq nx_r0, 2
+
+# 2 ^^^ 2 = 4
+let nx_i0 = 2
+let nx_i1 = 2
+call nx_pentate
+assert_eq nx_r0, 4
+
+# 2 ^^^ 3 = 65536
+let nx_i0 = 2
+let nx_i1 = 3
+call nx_pentate
+assert_eq nx_r0, 65536
+
+# 7. Modular Tetration (2 ^^ 4 mod 1000 = 65536 % 1000 = 536)
+let nx_i0 = 2
+let nx_i1 = 4
+let nx_i2 = 1000
+call nx_mod_tetrate
+assert_eq nx_r0, 536
+
+print "[SUCCESS] Number Theory & Hyperoperations Tests Passed!"
+call nx_assert_summary

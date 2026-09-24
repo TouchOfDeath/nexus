@@ -1,0 +1,1861 @@
+# ==============================================================================
+#                 NEXC: The Native NEXUS Self-Hosting Compiler
+#                 Written in NEXUS Source Code (0% C# / 0% .NET)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. HELPER SUBROUTINES
+# ------------------------------------------------------------------------------
+
+# emit_b: writes byte 'b' into [t + p] and increments p
+fn emit_b {
+    store [t + p] b
+    let p = p + 1
+}
+
+# emit_d: writes 32-bit integer 'v' into [t + p] as 4 little-endian bytes
+fn emit_d {
+    if v < 0 {
+        let v = v + 2000000000
+        let v = v + 2000000000
+        let v = v + 294967296
+    }
+    let b = v % 256
+    call emit_b
+    let v = v / 256
+    let b = v % 256
+    call emit_b
+    let v = v / 256
+    let b = v % 256
+    call emit_b
+    let v = v / 256
+    let b = v % 256
+    call emit_b
+}
+
+# patch_t: patches 32-bit integer 'v' into [t + k] as 4 bytes
+fn patch_t {
+    if v < 0 {
+        let v = v + 2000000000
+        let v = v + 2000000000
+        let v = v + 294967296
+    }
+    let b = v % 256
+    store [t + k] b
+    let v = v / 256
+    let b = v % 256
+    let k = k + 1
+    store [t + k] b
+    let v = v / 256
+    let b = v % 256
+    let k = k + 1
+    store [t + k] b
+    let v = v / 256
+    let b = v % 256
+    let k = k + 1
+    store [t + k] b
+}
+
+# save_m: saves 32-bit integer 'v' into [m + k] as 4 bytes
+fn save_m {
+    let b = v % 256
+    store [m + k] b
+    let v = v / 256
+    let b = v % 256
+    let k = k + 1
+    store [m + k] b
+    let v = v / 256
+    let b = v % 256
+    let k = k + 1
+    store [m + k] b
+    let v = v / 256
+    let b = v % 256
+    let k = k + 1
+    store [m + k] b
+}
+
+# load_m: loads 32-bit integer from [m + k] into 'v'
+fn load_m {
+    let b = load [m + k]
+    let v = b
+    let k = k + 1
+    let b = load [m + k]
+    let v = b * 256 + v
+    let k = k + 1
+    let b = load [m + k]
+    let v = b * 65536 + v
+    let k = k + 1
+    let b = load [m + k]
+    let v = b * 16777216 + v
+}
+
+# skip_ws: skips whitespace, newlines, and comments at [s + i]
+fn skip_ws {
+    let y = 1
+    while y == 1 {
+        if i >= l {
+            let y = 0
+        } else {
+            let c = load [s + i]
+            let w = 0
+            if c == 32 {
+                let w = 1
+            }
+            if c == 9 {
+                let w = 1
+            }
+            if c == 13 {
+                let w = 1
+            }
+            if c == 10 {
+                let w = 1
+            }
+            if c == 35 {
+                let w = 1
+                let k = 1
+                while k == 1 {
+                    let i = i + 1
+                    if i >= l {
+                        let k = 0
+                    } else {
+                        let c = load [s + i]
+                        if c == 10 {
+                            let k = 0
+                        }
+                    }
+                }
+            }
+            if w == 1 {
+                let i = i + 1
+            } else {
+                let y = 0
+            }
+        }
+    }
+}
+
+# skip_sp: skips only horizontal spaces and tabs at [s + i] (never newlines)
+fn skip_sp {
+    let y = 1
+    while y == 1 {
+        if i >= l {
+            let y = 0
+        } else {
+            let c = load [s + i]
+            if c == 32 {
+                let i = i + 1
+            } else {
+                if c == 9 {
+                    let i = i + 1
+                } else {
+                    let y = 0
+                }
+            }
+        }
+    }
+}
+
+# parse_uint: parses unsigned integer at [s + i] into 'u'
+fn parse_uint {
+    let u = 0
+    let y = 1
+    while y == 1 {
+        if i >= l {
+            let y = 0
+        } else {
+            let c = load [s + i]
+            if c >= 48 {
+                if c <= 57 {
+                    let u = u * 10 + c - 48
+                    let i = i + 1
+                } else {
+                    let y = 0
+                }
+            } else {
+                let y = 0
+            }
+        }
+    }
+}
+
+# parse_ident: parses alphanumeric identifier at [s + i] into hash 'h'
+fn parse_ident {
+    let h = 0
+    let y = 1
+    while y == 1 {
+        if i >= l {
+            let y = 0
+        } else {
+            let c = load [s + i]
+            let w = 0
+            if c >= 97 {
+                if c <= 122 {
+                    let w = 1
+                }
+            }
+            if c >= 48 {
+                if c <= 57 {
+                    let w = 1
+                }
+            }
+            if c == 95 {
+                let w = 1
+            }
+            if w == 1 {
+                let h = h * 33 + c
+                let h = h % 2000000000
+                let i = i + 1
+            } else {
+                let y = 0
+            }
+        }
+    }
+}
+
+# parse_cond: parses condition <var> <relop> <op2> and emits inverted branch
+fn parse_cond {
+    call skip_ws
+    let c = load [s + i]
+    let a = c - 97 * 8 + 48
+    let i = i + 1
+    call skip_ws
+
+    # mov rax, [rbp + a] (48 8B 85 <a32>)
+    let b = 72
+    call emit_b
+    let b = 139
+    call emit_b
+    let b = 133
+    call emit_b
+    let v = a
+    call emit_d
+
+    # Relational operator: ==, !=, <, <=, >, >=
+    let c = load [s + i]
+    let o = 133
+    if c == 61 {
+        let o = 133
+        let i = i + 2
+    }
+    if c == 33 {
+        let o = 132
+        let i = i + 2
+    }
+    if c == 60 {
+        let k = i + 1
+        let n = load [s + k]
+        if n == 61 {
+            let o = 143
+            let i = i + 2
+        } else {
+            let o = 141
+            let i = i + 1
+        }
+    }
+    if c == 62 {
+        let k = i + 1
+        let n = load [s + k]
+        if n == 61 {
+            let o = 140
+            let i = i + 2
+        } else {
+            let o = 142
+            let i = i + 1
+        }
+    }
+
+    call skip_ws
+    let c = load [s + i]
+    if c <= 57 {
+        call parse_uint
+        # cmp rax, imm32 (48 3D <u32>)
+        let b = 72
+        call emit_b
+        let b = 61
+        call emit_b
+        let v = u
+        call emit_d
+    } else {
+        let w = c - 97 * 8 + 48
+        let i = i + 1
+        # cmp rax, [rbp + w] (48 3B 85 <w32>)
+        let b = 72
+        call emit_b
+        let b = 59
+        call emit_b
+        let b = 133
+        call emit_b
+        let v = w
+        call emit_d
+    }
+
+    call skip_ws
+    let c = load [s + i]
+    if c == 123 {
+        let i = i + 1
+    }
+
+    # Emit inverted jump: 0x0F, <o>, <00 00 00 00>
+    let b = 15
+    call emit_b
+    let b = o
+    call emit_b
+    let j = p
+    let v = 0
+    call emit_d
+
+    # Push to block stack at depth z
+    let k = z * 16
+    store [m + k] e
+    let k = k + 4
+    let v = h
+    call save_m
+    let k = z * 16 + 8
+    let v = j
+    call save_m
+    let z = z + 1
+}
+
+# ------------------------------------------------------------------------------
+# 2. MAIN COMPILER INITIALIZATION
+# ------------------------------------------------------------------------------
+
+# Allocate memory buffers
+let t = alloc 32768
+let s = alloc 131072
+let m = alloc 4096
+
+# Read template.bin (32,768 bytes)
+let f = file_open "template.bin"
+let n = file_read f t 32768
+file_close f
+
+# Read code.nex (source code to compile)
+let f = file_open "code.nex"
+let l = file_read f s 131072
+file_close f
+
+# Code emit offset starts at 564 (0x0234, right after appPrologue)
+let p = 564
+# String pool offset starts at 29184 (0x7200, RVA 0x8200)
+let q = 29184
+# Block stack depth starts at 0
+let z = 0
+# Source reading index
+let i = 0
+# Initialize function count in symbol table at m + 2040 to 0
+let k = 2040
+let v = 0
+call save_m
+
+print "=================================================="
+print "[NEXUS] NEXC Native Self-Hosting Compiler v4.5"
+print "Compiling code.nex -> app.exe..."
+
+# ------------------------------------------------------------------------------
+# 3. STATEMENT DISPATCHER LOOP
+# ------------------------------------------------------------------------------
+let r = 1
+while r == 1 {
+    call skip_ws
+    if i >= l {
+        let r = 0
+    } else {
+        let c = load [s + i]
+
+        # ----------------------------------------------------------------------
+        # PARSE 'let <dest> = ...'
+        # ----------------------------------------------------------------------
+        if c == 108 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 101 {
+                let k = i + 2
+                let n = load [s + k]
+                if n == 116 {
+                    let i = i + 3
+                    call skip_ws
+                    let c = load [s + i]
+                    let d = c - 97 * 8 + 48
+                    let i = i + 1
+                    call skip_ws
+                    let c = load [s + i]
+                    if c == 61 {
+                        let i = i + 1
+                    }
+                    call skip_ws
+
+                    let c = load [s + i]
+                    let g = 0
+                    if c == 97 {
+                        let k = i + 1
+                        let n = load [s + k]
+                        if n == 108 {
+                            let g = 1
+                        }
+                    }
+                    if c == 108 {
+                        let k = i + 1
+                        let n = load [s + k]
+                        if n == 111 {
+                            let g = 2
+                        }
+                    }
+                    if c == 102 {
+                        let k = i + 5
+                        let n = load [s + k]
+                        if n == 111 {
+                            let g = 3
+                        }
+                        if n == 99 {
+                            let g = 4
+                        }
+                        if n == 114 {
+                            let g = 5
+                        }
+                    }
+
+                    # --- CASE 1: 'alloc <size>' ---
+                    if g == 1 {
+                        let i = i + 5
+                        call skip_ws
+                        let c = load [s + i]
+
+                        # xor ecx, ecx (31 C9)
+                        let b = 49
+                        call emit_b
+                        let b = 201
+                        call emit_b
+
+                        if c <= 57 {
+                            call parse_uint
+                            # mov edx, imm32 (BA <u32>)
+                            let b = 186
+                            call emit_b
+                            let v = u
+                            call emit_d
+                        } else {
+                            let w = c - 97 * 8 + 48
+                            let i = i + 1
+                            # mov rdx, [rbp + w] (48 8B 95 <w32>)
+                            let b = 72
+                            call emit_b
+                            let b = 139
+                            call emit_b
+                            let b = 149
+                            call emit_b
+                            let v = w
+                            call emit_d
+                        }
+
+                        # mov r8d, 0x3000 (41 B8 00 30 00 00)
+                        let b = 65
+                        call emit_b
+                        let b = 184
+                        call emit_b
+                        let v = 12288
+                        call emit_d
+
+                        # mov r9d, 4 (41 B9 04 00 00 00)
+                        let b = 65
+                        call emit_b
+                        let b = 185
+                        call emit_b
+                        let v = 4
+                        call emit_d
+
+                        # call VirtualAlloc (FF 15 <disp32>) -> disp = 29252 - p
+                        let b = 255
+                        call emit_b
+                        let b = 21
+                        call emit_b
+                        let v = 29252 - p
+                        call emit_d
+
+                        # mov [rbp + d], rax (48 89 85 <d32>)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = d
+                        call emit_d
+                    }
+
+                    # --- CASE 2: 'load [<ptr> + <idx>]' ---
+                    if g == 2 {
+                        let i = i + 4
+                        call skip_ws
+                        let c = load [s + i]
+                        if c == 91 {
+                            let i = i + 1
+                        }
+                        call skip_ws
+                        let c = load [s + i]
+                        let a = c - 97 * 8 + 48
+                        let i = i + 1
+                        call skip_ws
+
+                        # mov r8, [rbp + a] (4C 8B 85 <a32>)
+                        let b = 76
+                        call emit_b
+                        let b = 139
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = a
+                        call emit_d
+
+                        let c = load [s + i]
+                        if c == 43 {
+                            let i = i + 1
+                            call skip_ws
+                            let c = load [s + i]
+                            if c <= 57 {
+                                call parse_uint
+                                # add r8, imm32 (49 81 C0 <u32>)
+                                let b = 73
+                                call emit_b
+                                let b = 129
+                                call emit_b
+                                let b = 192
+                                call emit_b
+                                let v = u
+                                call emit_d
+                            } else {
+                                let w = c - 97 * 8 + 48
+                                let i = i + 1
+                                # mov r9, [rbp + w] (4C 8B 8D <w32>)
+                                let b = 76
+                                call emit_b
+                                let b = 139
+                                call emit_b
+                                let b = 141
+                                call emit_b
+                                let v = w
+                                call emit_d
+                                # add r8, r9 (4D 01 C8)
+                                let b = 77
+                                call emit_b
+                                let b = 1
+                                call emit_b
+                                let b = 200
+                                call emit_b
+                            }
+                            call skip_ws
+                        }
+                        let c = load [s + i]
+                        if c == 93 {
+                            let i = i + 1
+                        }
+
+                        # movzx rax, byte ptr [r8] (49 0F B6 00)
+                        let b = 73
+                        call emit_b
+                        let b = 15
+                        call emit_b
+                        let b = 182
+                        call emit_b
+                        let b = 0
+                        call emit_b
+
+                        # mov [rbp + d], rax (48 89 85 <d32>)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = d
+                        call emit_d
+                    }
+
+                    # --- CASE 3: 'file_open "filename"' ---
+                    if g == 3 {
+                        let i = i + 9
+                        call skip_ws
+                        let c = load [s + i]
+                        if c == 34 {
+                            let i = i + 1
+                        }
+                        let x = q
+                        let y = 1
+                        while y == 1 {
+                            let c = load [s + i]
+                            let i = i + 1
+                            if c == 34 {
+                                let y = 0
+                            } else {
+                                store [t + q] c
+                                let q = q + 1
+                            }
+                        }
+                        store [t + q] 0
+                        let q = q + 1
+
+                        # lea rcx, [rip + disp32] (48 8D 0D <disp32>)
+                        let b = 72
+                        call emit_b
+                        let b = 141
+                        call emit_b
+                        let b = 13
+                        call emit_b
+                        let v = x - p + 508
+                        call emit_d
+
+                        # mov edx, 0x80000000 (BA 00 00 00 80)
+                        let b = 186
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                        let b = 128
+                        call emit_b
+
+                        # mov r8d, 1 (41 B8 01 00 00 00)
+                        let b = 65
+                        call emit_b
+                        let b = 184
+                        call emit_b
+                        let v = 1
+                        call emit_d
+
+                        # xor r9d, r9d (45 31 C9)
+                        let b = 69
+                        call emit_b
+                        let b = 49
+                        call emit_b
+                        let b = 201
+                        call emit_b
+
+                        # mov qword ptr [rsp + 0x20], 3 (48 C7 44 24 20 03 00 00 00)
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 32
+                        call emit_b
+                        let v = 3
+                        call emit_d
+
+                        # mov qword ptr [rsp + 0x28], 128 (0x80) (48 C7 44 24 28 80 00 00 00)
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 40
+                        call emit_b
+                        let v = 128
+                        call emit_d
+
+                        # mov qword ptr [rsp + 0x30], 0 (48 C7 44 24 30 00 00 00 00)
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 48
+                        call emit_b
+                        let v = 0
+                        call emit_d
+
+                        # call CreateFileA (FF 15 <29260 - p>)
+                        let b = 255
+                        call emit_b
+                        let b = 21
+                        call emit_b
+                        let v = 29260 - p
+                        call emit_d
+
+                        # mov [rbp + d], rax (48 89 85 <d32>)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = d
+                        call emit_d
+                    }
+
+                    # --- CASE 4: 'file_create "filename"' ---
+                    if g == 4 {
+                        let i = i + 11
+                        call skip_ws
+                        let c = load [s + i]
+                        if c == 34 {
+                            let i = i + 1
+                        }
+                        let x = q
+                        let y = 1
+                        while y == 1 {
+                            let c = load [s + i]
+                            let i = i + 1
+                            if c == 34 {
+                                let y = 0
+                            } else {
+                                store [t + q] c
+                                let q = q + 1
+                            }
+                        }
+                        store [t + q] 0
+                        let q = q + 1
+
+                        # lea rcx, [rip + disp32] (48 8D 0D <disp32>)
+                        let b = 72
+                        call emit_b
+                        let b = 141
+                        call emit_b
+                        let b = 13
+                        call emit_b
+                        let v = x - p + 508
+                        call emit_d
+
+                        # mov edx, 0x40000000 (BA 00 00 00 40)
+                        let b = 186
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                        let b = 64
+                        call emit_b
+
+                        # xor r8d, r8d (45 31 C0)
+                        let b = 69
+                        call emit_b
+                        let b = 49
+                        call emit_b
+                        let b = 192
+                        call emit_b
+
+                        # xor r9d, r9d (45 31 C9)
+                        let b = 69
+                        call emit_b
+                        let b = 49
+                        call emit_b
+                        let b = 201
+                        call emit_b
+
+                        # mov qword ptr [rsp + 0x20], 2 (48 C7 44 24 20 02 00 00 00)
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 32
+                        call emit_b
+                        let v = 2
+                        call emit_d
+
+                        # mov qword ptr [rsp + 0x28], 128 (0x80)
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 40
+                        call emit_b
+                        let v = 128
+                        call emit_d
+
+                        # mov qword ptr [rsp + 0x30], 0
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 48
+                        call emit_b
+                        let v = 0
+                        call emit_d
+
+                        # call CreateFileA (FF 15 <29260 - p>)
+                        let b = 255
+                        call emit_b
+                        let b = 21
+                        call emit_b
+                        let v = 29260 - p
+                        call emit_d
+
+                        # mov [rbp + d], rax (48 89 85 <d32>)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = d
+                        call emit_d
+                    }
+
+                    # --- CASE 5: 'file_read <fd> <buf> <len>' ---
+                    if g == 5 {
+                        let i = i + 9
+                        call skip_ws
+                        let c = load [s + i]
+                        let a = c - 97 * 8 + 48
+                        let i = i + 1
+                        call skip_ws
+                        let c = load [s + i]
+                        let o = c - 97 * 8 + 48
+                        let i = i + 1
+                        call skip_ws
+                        let c = load [s + i]
+
+                        # mov rcx, [rbp + a] (48 8B 8D <a32>)
+                        let b = 72
+                        call emit_b
+                        let b = 139
+                        call emit_b
+                        let b = 141
+                        call emit_b
+                        let v = a
+                        call emit_d
+
+                        # mov rdx, [rbp + o] (48 8B 95 <o32>)
+                        let b = 72
+                        call emit_b
+                        let b = 139
+                        call emit_b
+                        let b = 149
+                        call emit_b
+                        let v = o
+                        call emit_d
+
+                        # r8d: len
+                        if c <= 57 {
+                            call parse_uint
+                            # mov r8d, u (41 B8 <u32>)
+                            let b = 65
+                            call emit_b
+                            let b = 184
+                            call emit_b
+                            let v = u
+                            call emit_d
+                        } else {
+                            let n = c - 97 * 8 + 48
+                            let i = i + 1
+                            # mov r8d, [rbp + n] (44 8B 85 <n32>)
+                            let b = 68
+                            call emit_b
+                            let b = 139
+                            call emit_b
+                            let b = 133
+                            call emit_b
+                            let v = n
+                            call emit_d
+                        }
+
+                        # lea r9, [rsp + 0x28] (4C 8D 4C 24 28)
+                        let b = 76
+                        call emit_b
+                        let b = 141
+                        call emit_b
+                        let b = 76
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 40
+                        call emit_b
+
+                        # mov qword ptr [rsp + 0x20], 0
+                        let b = 72
+                        call emit_b
+                        let b = 199
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 32
+                        call emit_b
+                        let v = 0
+                        call emit_d
+
+                        # call ReadFile (FF 15 <29244 - p>)
+                        let b = 255
+                        call emit_b
+                        let b = 21
+                        call emit_b
+                        let v = 29244 - p
+                        call emit_d
+
+                        # mov eax, [rsp + 0x28] (8B 44 24 28)
+                        let b = 139
+                        call emit_b
+                        let b = 68
+                        call emit_b
+                        let b = 36
+                        call emit_b
+                        let b = 40
+                        call emit_b
+
+                        # cdqe (48 98)
+                        let b = 72
+                        call emit_b
+                        let b = 152
+                        call emit_b
+
+                        # mov [rbp + d], rax (48 89 85 <d32>)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = d
+                        call emit_d
+                    }
+
+                    # --- CASE 6: Standard Arithmetic / Assignment Expression ---
+                    if g == 0 {
+                        # 1. Load Op1 into rax
+                        if c <= 57 {
+                            call parse_uint
+                            # mov rax, imm32 (48 C7 C0 <u32>)
+                            let b = 72
+                            call emit_b
+                            let b = 199
+                            call emit_b
+                            let b = 192
+                            call emit_b
+                            let v = u
+                            call emit_d
+                        } else {
+                            let a = c - 97 * 8 + 48
+                            let i = i + 1
+                            # mov rax, [rbp + a] (48 8B 85 <a32>)
+                            let b = 72
+                            call emit_b
+                            let b = 139
+                            call emit_b
+                            let b = 133
+                            call emit_b
+                            let v = a
+                            call emit_d
+                        }
+
+                        # 2. Loop while next token is an operator (+, -, *, /, %)
+                        let j = 1
+                        while j == 1 {
+                            call skip_sp
+                            if i >= l {
+                                let j = 0
+                            } else {
+                                let c = load [s + i]
+                                let o = 0
+                                if c == 43 {
+                                    let o = 43
+                                }
+                                if c == 45 {
+                                    let o = 45
+                                }
+                                if c == 42 {
+                                    let o = 42
+                                }
+                                if c == 47 {
+                                    let o = 47
+                                }
+                                if c == 37 {
+                                    let o = 37
+                                }
+
+                                if o == 0 {
+                                    let j = 0
+                                } else {
+                                    let i = i + 1
+                                    call skip_sp
+                                    let c = load [s + i]
+
+                                    if c <= 57 {
+                                        # Op2 is immediate number
+                                        call parse_uint
+                                        if o == 43 {
+                                            # add rax, imm32 (48 05 <u32>)
+                                            let b = 72
+                                            call emit_b
+                                            let b = 5
+                                            call emit_b
+                                            let v = u
+                                            call emit_d
+                                        }
+                                        if o == 45 {
+                                            # sub rax, imm32 (48 2D <u32>)
+                                            let b = 72
+                                            call emit_b
+                                            let b = 45
+                                            call emit_b
+                                            let v = u
+                                            call emit_d
+                                        }
+                                        if o == 42 {
+                                            # imul rax, rax, imm32 (48 69 C0 <u32>)
+                                            let b = 72
+                                            call emit_b
+                                            let b = 105
+                                            call emit_b
+                                            let b = 192
+                                            call emit_b
+                                            let v = u
+                                            call emit_d
+                                        }
+                                        if o == 47 {
+                                            # mov rbx, imm32; cqo; idiv rbx
+                                            let b = 72
+                                            call emit_b
+                                            let b = 199
+                                            call emit_b
+                                            let b = 195
+                                            call emit_b
+                                            let v = u
+                                            call emit_d
+                                            let b = 72
+                                            call emit_b
+                                            let b = 153
+                                            call emit_b
+                                            let b = 72
+                                            call emit_b
+                                            let b = 247
+                                            call emit_b
+                                            let b = 251
+                                            call emit_b
+                                        }
+                                        if o == 37 {
+                                            # mov rbx, imm32; cqo; idiv rbx; mov rax, rdx
+                                            let b = 72
+                                            call emit_b
+                                            let b = 199
+                                            call emit_b
+                                            let b = 195
+                                            call emit_b
+                                            let v = u
+                                            call emit_d
+                                            let b = 72
+                                            call emit_b
+                                            let b = 153
+                                            call emit_b
+                                            let b = 72
+                                            call emit_b
+                                            let b = 247
+                                            call emit_b
+                                            let b = 251
+                                            call emit_b
+                                            let b = 72
+                                            call emit_b
+                                            let b = 137
+                                            call emit_b
+                                            let b = 208
+                                            call emit_b
+                                        }
+                                    } else {
+                                        # Op2 is variable
+                                        let w = c - 97 * 8 + 48
+                                        let i = i + 1
+
+                                        if o == 43 {
+                                            # add rax, [rbp + w] (48 03 85 <w32>)
+                                            let b = 72
+                                            call emit_b
+                                            let b = 3
+                                            call emit_b
+                                            let b = 133
+                                            call emit_b
+                                            let v = w
+                                            call emit_d
+                                        }
+                                        if o == 45 {
+                                            # sub rax, [rbp + w] (48 2B 85 <w32>)
+                                            let b = 72
+                                            call emit_b
+                                            let b = 43
+                                            call emit_b
+                                            let b = 133
+                                            call emit_b
+                                            let v = w
+                                            call emit_d
+                                        }
+                                        if o == 42 {
+                                            # imul rax, [rbp + w] (48 0F AF 85 <w32>)
+                                            let b = 72
+                                            call emit_b
+                                            let b = 15
+                                            call emit_b
+                                            let b = 175
+                                            call emit_b
+                                            let b = 133
+                                            call emit_b
+                                            let v = w
+                                            call emit_d
+                                        }
+                                        if o == 47 {
+                                            # cqo; mov rbx, [rbp + w]; idiv rbx
+                                            let b = 72
+                                            call emit_b
+                                            let b = 153
+                                            call emit_b
+                                            let b = 72
+                                            call emit_b
+                                            let b = 139
+                                            call emit_b
+                                            let b = 157
+                                            call emit_b
+                                            let v = w
+                                            call emit_d
+                                            let b = 72
+                                            call emit_b
+                                            let b = 247
+                                            call emit_b
+                                            let b = 251
+                                            call emit_b
+                                        }
+                                        if o == 37 {
+                                            # cqo; mov rbx, [rbp + w]; idiv rbx; mov rax, rdx
+                                            let b = 72
+                                            call emit_b
+                                            let b = 153
+                                            call emit_b
+                                            let b = 72
+                                            call emit_b
+                                            let b = 139
+                                            call emit_b
+                                            let b = 157
+                                            call emit_b
+                                            let v = w
+                                            call emit_d
+                                            let b = 72
+                                            call emit_b
+                                            let b = 247
+                                            call emit_b
+                                            let b = 251
+                                            call emit_b
+                                            let b = 72
+                                            call emit_b
+                                            let b = 137
+                                            call emit_b
+                                            let b = 208
+                                            call emit_b
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        # 3. Store result from rax into [rbp + d] (48 89 85 <d32>)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = d
+                        call emit_d
+                    }
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'store [<ptr> + <idx>] <val>'
+        # ----------------------------------------------------------------------
+        if c == 115 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 116 {
+                let k = i + 2
+                let n = load [s + k]
+                if n == 111 {
+                    let k = i + 3
+                    let n = load [s + k]
+                    if n == 114 {
+                        let k = i + 4
+                        let n = load [s + k]
+                        if n == 101 {
+                            let i = i + 5
+                            call skip_ws
+                            let c = load [s + i]
+                            if c == 91 {
+                                let i = i + 1
+                            }
+                            call skip_ws
+                            let c = load [s + i]
+                            let a = c - 97 * 8 + 48
+                            let i = i + 1
+                            call skip_ws
+
+                            # mov r8, [rbp + a] (4C 8B 85 <a32>)
+                            let b = 76
+                            call emit_b
+                            let b = 139
+                            call emit_b
+                            let b = 133
+                            call emit_b
+                            let v = a
+                            call emit_d
+
+                            let c = load [s + i]
+                            if c == 43 {
+                                let i = i + 1
+                                call skip_ws
+                                let c = load [s + i]
+                                if c <= 57 {
+                                    call parse_uint
+                                    # add r8, imm32 (49 81 C0 <u32>)
+                                    let b = 73
+                                    call emit_b
+                                    let b = 129
+                                    call emit_b
+                                    let b = 192
+                                    call emit_b
+                                    let v = u
+                                    call emit_d
+                                } else {
+                                    let w = c - 97 * 8 + 48
+                                    let i = i + 1
+                                    # mov r9, [rbp + w] (4C 8B 8D <w32>)
+                                    let b = 76
+                                    call emit_b
+                                    let b = 139
+                                    call emit_b
+                                    let b = 141
+                                    call emit_b
+                                    let v = w
+                                    call emit_d
+                                    # add r8, r9 (4D 01 C8)
+                                    let b = 77
+                                    call emit_b
+                                    let b = 1
+                                    call emit_b
+                                    let b = 200
+                                    call emit_b
+                                }
+                                call skip_ws
+                            }
+                            let c = load [s + i]
+                            if c == 93 {
+                                let i = i + 1
+                            }
+                            call skip_ws
+
+                            let c = load [s + i]
+                            if c <= 57 {
+                                call parse_uint
+                                # mov al, imm8 (B0 <u8>)
+                                let b = 176
+                                call emit_b
+                                let b = u % 256
+                                call emit_b
+                            } else {
+                                let w = c - 97 * 8 + 48
+                                let i = i + 1
+                                # mov al, [rbp + w] (8A 85 <w32>)
+                                let b = 138
+                                call emit_b
+                                let b = 133
+                                call emit_b
+                                let v = w
+                                call emit_d
+                            }
+
+                            # mov [r8], al (41 88 00)
+                            let b = 65
+                            call emit_b
+                            let b = 136
+                            call emit_b
+                            let b = 0
+                            call emit_b
+                        }
+                    }
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'print ...'
+        # ----------------------------------------------------------------------
+        if c == 112 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 114 {
+                let k = i + 2
+                let n = load [s + k]
+                if n == 105 {
+                    let k = i + 3
+                    let n = load [s + k]
+                    if n == 110 {
+                        let k = i + 4
+                        let n = load [s + k]
+                        if n == 116 {
+                            let i = i + 5
+                            call skip_ws
+                            let c = load [s + i]
+
+                            # 1. Print String Literal: starts with '"' (34)
+                            if c == 34 {
+                                let i = i + 1
+                                let x = q
+                                let y = 1
+                                while y == 1 {
+                                    let c = load [s + i]
+                                    let i = i + 1
+                                    if c == 34 {
+                                        let y = 0
+                                    } else {
+                                        store [t + q] c
+                                        let q = q + 1
+                                    }
+                                }
+                                # Append CRLF and null terminator: 13, 10, 0
+                                store [t + q] 13
+                                let q = q + 1
+                                store [t + q] 10
+                                let q = q + 1
+                                store [t + q] 0
+                                let q = q + 1
+                                let n = q - x - 1
+
+                                # mov rcx, r12 (4C 89 E1)
+                                let b = 76
+                                call emit_b
+                                let b = 137
+                                call emit_b
+                                let b = 225
+                                call emit_b
+
+                                # lea rdx, [rip + disp32] (48 8D 15 <disp32>)
+                                # disp32 = x - p + 508
+                                let b = 72
+                                call emit_b
+                                let b = 141
+                                call emit_b
+                                let b = 21
+                                call emit_b
+                                let v = x - p + 508
+                                call emit_d
+
+                                # mov r8d, len (41 B8 <len32>)
+                                let b = 65
+                                call emit_b
+                                let b = 184
+                                call emit_b
+                                let v = n
+                                call emit_d
+
+                                # lea r9, [rsp + 0x28] (4C 8D 4C 24 28)
+                                let b = 76
+                                call emit_b
+                                let b = 141
+                                call emit_b
+                                let b = 76
+                                call emit_b
+                                let b = 36
+                                call emit_b
+                                let b = 40
+                                call emit_b
+
+                                # mov qword ptr [rsp + 0x20], 0
+                                let b = 72
+                                call emit_b
+                                let b = 199
+                                call emit_b
+                                let b = 68
+                                call emit_b
+                                let b = 36
+                                call emit_b
+                                let b = 32
+                                call emit_b
+                                let v = 0
+                                call emit_d
+
+                                # call WriteFile (FF 15 <disp32>) -> disp = 29228 - p
+                                let b = 255
+                                call emit_b
+                                let b = 21
+                                call emit_b
+                                let v = 29228 - p
+                                call emit_d
+                            } else {
+                                # 2. Print integer (uint or variable)
+                                if c <= 57 {
+                                    call parse_uint
+                                    # mov rcx, imm32 (48 C7 C1 <u32>)
+                                    let b = 72
+                                    call emit_b
+                                    let b = 199
+                                    call emit_b
+                                    let b = 193
+                                    call emit_b
+                                    let v = u
+                                    call emit_d
+                                } else {
+                                    let a = c - 97 * 8 + 48
+                                    let i = i + 1
+                                    # mov rcx, [rbp + slot] (48 8B 8D <slot32>)
+                                    let b = 72
+                                    call emit_b
+                                    let b = 139
+                                    call emit_b
+                                    let b = 141
+                                    call emit_b
+                                    let v = a
+                                    call emit_d
+                                }
+
+                                # call print_int (E8 <disp32>) -> disp = 28284 - p
+                                let b = 232
+                                call emit_b
+                                let v = 28284 - p
+                                call emit_d
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'while <cond> {'
+        # ----------------------------------------------------------------------
+        if c == 119 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 104 {
+                let k = i + 2
+                let n = load [s + k]
+                if n == 105 {
+                    let k = i + 3
+                    let n = load [s + k]
+                    if n == 108 {
+                        let k = i + 4
+                        let n = load [s + k]
+                        if n == 101 {
+                            let i = i + 5
+                            let h = p
+                            let e = 3
+                            call parse_cond
+                        }
+                    }
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'if <cond> {'
+        # ----------------------------------------------------------------------
+        if c == 105 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 102 {
+                let i = i + 2
+                let h = 0
+                let e = 1
+                call parse_cond
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE '}' OR '} else {'
+        # ----------------------------------------------------------------------
+        if c == 125 {
+            let i = i + 1
+            let k = 1
+            while k == 1 {
+                if i >= l {
+                    let k = 0
+                } else {
+                    let c = load [s + i]
+                    if c == 32 {
+                        let i = i + 1
+                    } else {
+                        if c == 9 {
+                            let i = i + 1
+                        } else {
+                            let k = 0
+                        }
+                    }
+                }
+            }
+            let c = load [s + i]
+            let y = 0
+            if c == 101 {
+                let k = i + 1
+                let n = load [s + k]
+                if n == 108 {
+                    let k = i + 2
+                    let n = load [s + k]
+                    if n == 115 {
+                        let k = i + 3
+                        let n = load [s + k]
+                        if n == 101 {
+                            let y = 1
+                        }
+                    }
+                }
+            }
+
+            if y == 1 {
+                # --- CASE: '} else {' ---
+                let i = i + 4
+                call skip_ws
+                let c = load [s + i]
+                if c == 123 {
+                    let i = i + 1
+                }
+
+                # Pop IF frame
+                let z = z - 1
+                let k = z * 16 + 8
+                call load_m
+                let j = v
+
+                # Emit unconditional jump over else block: E9 <disp32>
+                let b = 233
+                call emit_b
+                let g = p
+                let v = 0
+                call emit_d
+
+                # Back-patch IF exit jump
+                let k = j
+                let v = p - j - 4
+                call patch_t
+
+                # Push ELSE frame (type = 2)
+                let k = z * 16
+                store [m + k] 2
+                let k = k + 8
+                let v = g
+                call save_m
+                let z = z + 1
+            } else {
+                # --- CASE: '}' (END OF BLOCK) ---
+                let z = z - 1
+                let k = z * 16
+                let e = load [m + k]
+                let k = k + 4
+                call load_m
+                let h = v
+                let k = z * 16 + 8
+                call load_m
+                let j = v
+
+                if e == 1 {
+                    # IF done: back-patch exit jump
+                    let k = j
+                    let v = p - j - 4
+                    call patch_t
+                }
+                if e == 2 {
+                    # ELSE done: back-patch else jump
+                    let k = j
+                    let v = p - j - 4
+                    call patch_t
+                }
+                if e == 3 {
+                    # WHILE done: emit backward jump to head (h)
+                    let b = 233
+                    call emit_b
+                    let v = h - p - 4
+                    call emit_d
+                    # Back-patch while exit jump
+                    let k = j
+                    let v = p - j - 4
+                    call patch_t
+                }
+                if e == 4 {
+                    # FUNCTION done: emit ret (C3)
+                    let b = 195
+                    call emit_b
+                    # Back-patch jump over function
+                    let k = j
+                    let v = p - j - 4
+                    call patch_t
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'fn <name> {' OR 'file_write ...' OR 'file_close ...'
+        # ----------------------------------------------------------------------
+        if c == 102 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 110 {
+                # --- CASE: 'fn <name> {' ---
+                let i = i + 2
+                call skip_ws
+                call parse_ident
+
+                # Skip whitespace to '{'
+                call skip_ws
+                let c = load [s + i]
+                if c == 123 {
+                    let i = i + 1
+                }
+
+                # Emit jmp over function: E9 <disp32>
+                let b = 233
+                call emit_b
+                let g = p
+                let v = 0
+                call emit_d
+
+                # Function entry point
+                let a = p
+
+                # Save into function table at m + 2048 + (fn_count * 16)
+                let k = 2040
+                call load_m
+                let n = v
+                let x = n * 16 + 2048
+                let k = x
+                let v = h
+                call save_m
+                let k = x + 8
+                let v = a
+                call save_m
+                let n = n + 1
+                let k = 2040
+                let v = n
+                call save_m
+
+                # Push FUNCTION frame to block stack (type = 4)
+                let k = z * 16
+                store [m + k] 4
+                let k = k + 8
+                let v = g
+                call save_m
+                let z = z + 1
+            }
+            if n == 105 {
+                let k = i + 5
+                let n = load [s + k]
+                if n == 119 {
+                    # --- CASE: 'file_write <fd> <buf> <len>' ---
+                    let i = i + 10
+                    call skip_ws
+                    let c = load [s + i]
+                    let a = c - 97 * 8 + 48
+                    let i = i + 1
+                    call skip_ws
+                    let c = load [s + i]
+                    let o = c - 97 * 8 + 48
+                    let i = i + 1
+                    call skip_ws
+                    let c = load [s + i]
+
+                    # mov rcx, [rbp + a] (48 8B 8D <a32>)
+                    let b = 72
+                    call emit_b
+                    let b = 139
+                    call emit_b
+                    let b = 141
+                    call emit_b
+                    let v = a
+                    call emit_d
+
+                    # mov rdx, [rbp + o] (48 8B 95 <o32>)
+                    let b = 72
+                    call emit_b
+                    let b = 139
+                    call emit_b
+                    let b = 149
+                    call emit_b
+                    let v = o
+                    call emit_d
+
+                    # r8d: len
+                    if c <= 57 {
+                        call parse_uint
+                        # mov r8d, u (41 B8 <u32>)
+                        let b = 65
+                        call emit_b
+                        let b = 184
+                        call emit_b
+                        let v = u
+                        call emit_d
+                    } else {
+                        let n = c - 97 * 8 + 48
+                        let i = i + 1
+                        # mov r8d, [rbp + n] (44 8B 85 <n32>)
+                        let b = 68
+                        call emit_b
+                        let b = 139
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = n
+                        call emit_d
+                    }
+
+                    # lea r9, [rsp + 0x28] (4C 8D 4C 24 28)
+                    let b = 76
+                    call emit_b
+                    let b = 141
+                    call emit_b
+                    let b = 76
+                    call emit_b
+                    let b = 36
+                    call emit_b
+                    let b = 40
+                    call emit_b
+
+                    # mov qword ptr [rsp + 0x20], 0
+                    let b = 72
+                    call emit_b
+                    let b = 199
+                    call emit_b
+                    let b = 68
+                    call emit_b
+                    let b = 36
+                    call emit_b
+                    let b = 32
+                    call emit_b
+                    let v = 0
+                    call emit_d
+
+                    # call WriteFile (FF 15 <29228 - p>)
+                    let b = 255
+                    call emit_b
+                    let b = 21
+                    call emit_b
+                    let v = 29228 - p
+                    call emit_d
+                }
+                if n == 99 {
+                    # --- CASE: 'file_close <fd>' ---
+                    let i = i + 10
+                    call skip_ws
+                    let c = load [s + i]
+                    let a = c - 97 * 8 + 48
+                    let i = i + 1
+
+                    # mov rcx, [rbp + a] (48 8B 8D <a32>)
+                    let b = 72
+                    call emit_b
+                    let b = 139
+                    call emit_b
+                    let b = 141
+                    call emit_b
+                    let v = a
+                    call emit_d
+
+                    # call CloseHandle (FF 15 <29268 - p>)
+                    let b = 255
+                    call emit_b
+                    let b = 21
+                    call emit_b
+                    let v = 29268 - p
+                    call emit_d
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'call <name>'
+        # ----------------------------------------------------------------------
+        if c == 99 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 97 {
+                let k = i + 2
+                let n = load [s + k]
+                if n == 108 {
+                    let i = i + 4
+                    call skip_ws
+                    call parse_ident
+
+                    # Look up hash 'h' in function table
+                    let k = 2040
+                    call load_m
+                    let n = v
+                    let u = 0
+                    let j = 0
+                    while j < n {
+                        let x = j * 16 + 2048
+                        let k = x
+                        call load_m
+                        if v == h {
+                            let k = x + 8
+                            call load_m
+                            let u = v
+                        }
+                        let j = j + 1
+                    }
+
+                    # Emit call <disp32>: E8 <disp32>
+                    let b = 232
+                    call emit_b
+                    let v = u - p - 4
+                    call emit_d
+                }
+            }
+        }
+
+        # Advance past any leftover characters on line
+        let k = 1
+        while k == 1 {
+            if i >= l {
+                let k = 0
+            } else {
+                let c = load [s + i]
+                let i = i + 1
+                if c == 10 {
+                    let k = 0
+                }
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# 4. EMIT EPILOGUE & WRITE app.exe
+# ------------------------------------------------------------------------------
+
+# xor ecx, ecx (31 C9)
+let b = 49
+call emit_b
+let b = 201
+call emit_b
+
+# call ExitProcess (FF 15 <disp32>) -> disp = 29236 - p
+let b = 255
+call emit_b
+let b = 21
+call emit_b
+let v = 29236 - p
+call emit_d
+
+# Write 32,768 bytes from t to "app.exe"
+let f = file_create "app.exe"
+file_write f t 32768
+file_close f
+
+print "[+] Compilation Succeeded! Standalone app.exe generated."
+print "=================================================="

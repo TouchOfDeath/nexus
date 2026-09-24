@@ -1,0 +1,66 @@
+# ==============================================================================
+#   NEXUS Test Suite: Array Literals & Bracket Indexing
+# ==============================================================================
+
+# 1. Standard Integer Array Literal
+let arr = [10, 20, 30]
+let v0 = arr[0]
+let v1 = arr[1]
+let v2 = arr[2]
+assert_eq v0, 10
+assert_eq v1, 20
+assert_eq v2, 30
+
+# 2. Reading in Expressions
+let sum = arr[0] + arr[1] + arr[2]
+assert_eq sum, 60
+
+# 3. Direct Indexed Write
+arr[1] = 99
+let new_mid = arr[1]
+assert_eq new_mid, 99
+
+# 4. Compound Assignment on Elements
+arr[0] += 5
+assert_eq arr[0], 15
+arr[2] *= 3
+assert_eq arr[2], 90
+
+# 5. Indexed Reading in Loop
+let loop_arr = [1, 2, 3, 4, 5]
+let total = 0
+for i = 0, i < 5, i += 1 {
+    total += loop_arr[i]
+}
+assert_eq total, 15
+
+# 6. Multi-Line Array Literal with Comments
+let multi = [
+    100, # first element
+    200, # second element
+    300  # third element
+]
+assert_eq multi[0], 100
+assert_eq multi[1], 200
+assert_eq multi[2], 300
+
+# 7. Function Parameter Passing & Array Return
+fn sum_pair(a) {
+    return a[0] + a[1]
+}
+let pair = [40, 2]
+let pair_sum = call sum_pair(pair)
+assert_eq pair_sum, 42
+
+# 8. Floating-Point Array
+let farr = [1.5, 2.5, 4.0]
+let f0 = farr[0]
+let f1 = farr[1]
+let f2 = farr[2]
+let fsum = f0 +. f1 +. f2
+# 1.5 + 2.5 + 4.0 = 8.0
+let isum = ftoi fsum
+assert_eq isum, 8
+
+# Exit code 42
+print 42

@@ -1,0 +1,150 @@
+# ==============================================================================
+#                  NEXUS STANDARD LIBRARY: TRIGONOMETRY ENGINE
+#             stdlib/math_trig.nex - Fixed-Point Sine / Cosine LUT
+#      0% C - 0% libc - 100% Native Integer Math (1.0 = 1024 Fixed-Point)
+# ==============================================================================
+
+let trig_quarter = alloc 256
+let trig_angle = 0
+let trig_val = 0
+
+fn init_trig_tables {
+    store16 [trig_quarter + 0] 0
+    store16 [trig_quarter + 2] 18
+    store16 [trig_quarter + 4] 36
+    store16 [trig_quarter + 6] 54
+    store16 [trig_quarter + 8] 71
+    store16 [trig_quarter + 10] 89
+    store16 [trig_quarter + 12] 107
+    store16 [trig_quarter + 14] 125
+    store16 [trig_quarter + 16] 143
+    store16 [trig_quarter + 18] 160
+    store16 [trig_quarter + 20] 178
+    store16 [trig_quarter + 22] 195
+    store16 [trig_quarter + 24] 213
+    store16 [trig_quarter + 26] 230
+    store16 [trig_quarter + 28] 248
+    store16 [trig_quarter + 30] 265
+    store16 [trig_quarter + 32] 282
+    store16 [trig_quarter + 34] 299
+    store16 [trig_quarter + 36] 316
+    store16 [trig_quarter + 38] 333
+    store16 [trig_quarter + 40] 350
+    store16 [trig_quarter + 42] 367
+    store16 [trig_quarter + 44] 384
+    store16 [trig_quarter + 46] 400
+    store16 [trig_quarter + 48] 416
+    store16 [trig_quarter + 50] 433
+    store16 [trig_quarter + 52] 449
+    store16 [trig_quarter + 54] 465
+    store16 [trig_quarter + 56] 481
+    store16 [trig_quarter + 58] 496
+    store16 [trig_quarter + 60] 512
+    store16 [trig_quarter + 62] 527
+    store16 [trig_quarter + 64] 543
+    store16 [trig_quarter + 66] 558
+    store16 [trig_quarter + 68] 573
+    store16 [trig_quarter + 70] 587
+    store16 [trig_quarter + 72] 602
+    store16 [trig_quarter + 74] 616
+    store16 [trig_quarter + 76] 630
+    store16 [trig_quarter + 78] 644
+    store16 [trig_quarter + 80] 658
+    store16 [trig_quarter + 82] 672
+    store16 [trig_quarter + 84] 685
+    store16 [trig_quarter + 86] 698
+    store16 [trig_quarter + 88] 711
+    store16 [trig_quarter + 90] 724
+    store16 [trig_quarter + 92] 737
+    store16 [trig_quarter + 94] 749
+    store16 [trig_quarter + 96] 761
+    store16 [trig_quarter + 98] 773
+    store16 [trig_quarter + 100] 784
+    store16 [trig_quarter + 102] 796
+    store16 [trig_quarter + 104] 807
+    store16 [trig_quarter + 106] 818
+    store16 [trig_quarter + 108] 828
+    store16 [trig_quarter + 110] 839
+    store16 [trig_quarter + 112] 849
+    store16 [trig_quarter + 114] 859
+    store16 [trig_quarter + 116] 868
+    store16 [trig_quarter + 118] 878
+    store16 [trig_quarter + 120] 887
+    store16 [trig_quarter + 122] 896
+    store16 [trig_quarter + 124] 904
+    store16 [trig_quarter + 126] 912
+    store16 [trig_quarter + 128] 920
+    store16 [trig_quarter + 130] 928
+    store16 [trig_quarter + 132] 935
+    store16 [trig_quarter + 134] 943
+    store16 [trig_quarter + 136] 949
+    store16 [trig_quarter + 138] 956
+    store16 [trig_quarter + 140] 962
+    store16 [trig_quarter + 142] 968
+    store16 [trig_quarter + 144] 974
+    store16 [trig_quarter + 146] 979
+    store16 [trig_quarter + 148] 984
+    store16 [trig_quarter + 150] 989
+    store16 [trig_quarter + 152] 994
+    store16 [trig_quarter + 154] 998
+    store16 [trig_quarter + 156] 1002
+    store16 [trig_quarter + 158] 1005
+    store16 [trig_quarter + 160] 1008
+    store16 [trig_quarter + 162] 1011
+    store16 [trig_quarter + 164] 1014
+    store16 [trig_quarter + 166] 1016
+    store16 [trig_quarter + 168] 1018
+    store16 [trig_quarter + 170] 1020
+    store16 [trig_quarter + 172] 1022
+    store16 [trig_quarter + 174] 1023
+    store16 [trig_quarter + 176] 1023
+    store16 [trig_quarter + 178] 1024
+    store16 [trig_quarter + 180] 1024
+
+}
+
+# ------------------------------------------------------------------------------
+# trig_sin: returns sin(trig_angle) * 1024 in trig_val
+# ------------------------------------------------------------------------------
+fn trig_sin {
+    let t_ang = trig_angle % 360
+    if t_ang < 0 {
+        let t_ang = t_ang + 360
+    }
+
+    if t_ang <= 90 {
+        let t_off = t_ang * 2
+        let trig_val = load16 [trig_quarter + t_off]
+        return
+    }
+
+    if t_ang <= 180 {
+        let t_sub = 180 - t_ang
+        let t_off = t_sub * 2
+        let trig_val = load16 [trig_quarter + t_off]
+        return
+    }
+
+    if t_ang <= 270 {
+        let t_sub = t_ang - 180
+        let t_off = t_sub * 2
+        let t_raw = load16 [trig_quarter + t_off]
+        let trig_val = 0 - t_raw
+        return
+    }
+
+    let t_sub = 360 - t_ang
+    let t_off = t_sub * 2
+    let t_raw = load16 [trig_quarter + t_off]
+    let trig_val = 0 - t_raw
+}
+
+# ------------------------------------------------------------------------------
+# trig_cos: returns cos(trig_angle) * 1024 in trig_val
+# ------------------------------------------------------------------------------
+fn trig_cos {
+    let orig_ang = trig_angle
+    let trig_angle = orig_ang + 90
+    call trig_sin
+    let trig_angle = orig_ang
+}

@@ -1,0 +1,64 @@
+# ==============================================================================
+#                      NEXUS TEST: STATISTICS & PRNG ENGINE
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/statistics.nex"
+
+print "=== Testing Statistics & Random Module ==="
+
+# 1. PRNG determinism & range
+let nx_i0 = 42
+call nx_rand_seed
+
+let nx_i0 = 10
+let nx_i1 = 20
+call nx_rand_range
+let r_val = nx_r0
+assert_ne r_val, 0
+if r_val >= 10 {
+    let in_range = 1
+} else {
+    let in_range = 0
+}
+assert_eq in_range, 1
+
+if r_val <= 20 {
+    let in_range2 = 1
+} else {
+    let in_range2 = 0
+}
+assert_eq in_range2, 1
+
+# 2. Descriptive Statistics
+# Dataset: [10, 20, 30, 40, 50]
+# Mean = (10 + 20 + 30 + 40 + 50) / 5 = 150 / 5 = 30
+# Variance = ((10-30)^2 + (20-30)^2 + (30-30)^2 + (40-30)^2 + (50-30)^2) / 5
+#          = (400 + 100 + 0 + 100 + 400) / 5 = 1000 / 5 = 200
+# Stdev = floor(sqrt(200)) = 14
+# Median = 30
+let data = [10, 20, 30, 40, 50]
+
+let nx_i0 = data
+let nx_i1 = 5
+call nx_stat_mean
+assert_eq nx_r0, 30
+
+let nx_i0 = data
+let nx_i1 = 5
+call nx_stat_variance
+assert_eq nx_r0, 200
+
+let nx_i0 = data
+let nx_i1 = 5
+call nx_stat_stdev
+assert_eq nx_r0, 14
+
+let unsorted = [50, 10, 40, 20, 30]
+let nx_i0 = unsorted
+let nx_i1 = 5
+call nx_stat_median
+assert_eq nx_r0, 30
+
+print "[SUCCESS] Statistics Tests Passed!"
+call nx_assert_summary

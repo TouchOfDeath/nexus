@@ -1,0 +1,211 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: qarrays.nex
+#       64-bit (qword) array utilities over native heap buffers
+# ==============================================================================
+#
+# QWORD ARRAYS store one signed 64-bit integer per 8-byte slot using the
+# compiler's native load64 / store64 operations with scaled indexing:
+#
+#   element i of buffer p is at address [p + i * 8]
+#   full signed 64-bit range per element (no 0..255 byte limit)
+#   memory from 'alloc' is guaranteed zero-initialized on both targets
+#
+# Example:
+#   let a = alloc 24          # room for 3 qwords
+#   store64 [a + 0 * 8] 42
+#   store64 [a + 1 * 8] 7
+#   store64 [a + 2 * 8] 19
+#   let nx_i0 = a
+#   let nx_i1 = 3
+#   call nx_qarr_sort
+#
+# CALLING CONVENTION: see math.nex header.
+#   nx_i0 = buffer pointer, nx_i1 = element count,
+#   nx_i2 = element value or search key (per function)
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_fill : fill nx_i0[0..nx_i1) with qword nx_i2
+# ------------------------------------------------------------------------------
+fn nx_qarr_fill {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = 0
+    while s3 < s1 {
+        store64 [s0 + s3 * 8] s2
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_iota : fill nx_i0[0..nx_i1) with 0, 1, 2, ...
+# ------------------------------------------------------------------------------
+fn nx_qarr_iota {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 0
+    while s3 < s1 {
+        store64 [s0 + s3 * 8] s3
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_sum : nx_r0 = sum of qwords nx_i0[0..nx_i1)
+# ------------------------------------------------------------------------------
+fn nx_qarr_sum {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load64 [s0 + s3 * 8]
+        let nx_r0 = nx_r0 + s5
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_max : nx_r0 = largest qword in nx_i0[0..nx_i1)
+#                  Empty array (n <= 0) returns 0.
+# ------------------------------------------------------------------------------
+fn nx_qarr_max {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load64 [s0 + s3 * 8]
+        if s5 > nx_r0 {
+            let nx_r0 = s5
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_min : nx_r0 = smallest qword in nx_i0[0..nx_i1)
+#                  Empty array (n <= 0) returns 0.
+# ------------------------------------------------------------------------------
+fn nx_qarr_min {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load64 [s0 + s3 * 8]
+        if s3 == 0 {
+            let nx_r0 = s5
+        }
+        if s5 < nx_r0 {
+            let nx_r0 = s5
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_index_of : nx_r0 = first index of qword nx_i2 in nx_i0[0..nx_i1),
+#                       or -1 when absent
+# ------------------------------------------------------------------------------
+fn nx_qarr_index_of {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = 0 - 1
+    let s3 = 0
+    while s3 < s1 {
+        if nx_r0 < 0 {
+            let s5 = load64 [s0 + s3 * 8]
+            if s5 == s2 {
+                let nx_r0 = s3
+            }
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_reverse : reverse qwords nx_i0[0..nx_i1) in place
+# ------------------------------------------------------------------------------
+fn nx_qarr_reverse {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 0
+    let s6 = s1 - 1
+    while s3 < s6 {
+        let s7 = load64 [s0 + s3 * 8]
+        let s2 = load64 [s0 + s6 * 8]
+        store64 [s0 + s3 * 8] s2
+        store64 [s0 + s6 * 8] s7
+        let s3 = s3 + 1
+        let s6 = s6 - 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_count : nx_r0 = how many qwords of nx_i0[0..nx_i1) equal nx_i2
+# ------------------------------------------------------------------------------
+fn nx_qarr_count {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load64 [s0 + s3 * 8]
+        if s5 == s2 {
+            let nx_r0 = nx_r0 + 1
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_sort : insertion sort, ascending, in place over nx_i0[0..nx_i1)
+# ------------------------------------------------------------------------------
+fn nx_qarr_sort {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 1
+    while s3 < s1 {
+        let s4 = s3
+        let s7 = load64 [s0 + s4 * 8]
+        let s5 = 1
+        while s5 == 1 {
+            if s4 == 0 {
+                let s5 = 0
+            } else {
+                let s6 = s4 - 1
+                let s6 = load64 [s0 + s6 * 8]
+                if s6 > s7 {
+                    store64 [s0 + s4 * 8] s6
+                    let s4 = s4 - 1
+                } else {
+                    let s5 = 0
+                }
+            }
+        }
+        store64 [s0 + s4 * 8] s7
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_qarr_avg : nx_r0 = floor(mean of qwords nx_i0[0..nx_i1))
+#                  Empty array (n <= 0) returns 0.
+# ------------------------------------------------------------------------------
+fn nx_qarr_avg {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load64 [s0 + s3 * 8]
+        let nx_r0 = nx_r0 + s5
+        let s3 = s3 + 1
+    }
+    if s1 > 0 {
+        let nx_r0 = nx_r0 / s1
+    }
+}

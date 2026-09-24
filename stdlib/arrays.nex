@@ -1,0 +1,206 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: arrays.nex
+#        Byte array utilities over native heap buffers (alloc + store)
+# ==============================================================================
+#
+# ARRAYS IN NEXUS ARE RAW MEMORY BLOCKS from 'alloc'. The compiler's load and
+# store operate on single bytes ('movzx' / 'mov al'), so stdlib arrays are
+# BYTE arrays:
+#
+#   element i of buffer p is at address [p + i]
+#   valid element values are 0..255 (unsigned bytes)
+#   memory from 'alloc' is guaranteed zero-initialized on both build targets
+#
+# A "qword array" helper needs compiler-level load64/store64 and is planned
+# for a future stage; these byte primitives cover chars, flags, lookup
+# tables, buffers and small integer sets today.
+#
+# CALLING CONVENTION: see math.nex header.
+#   nx_i0 = buffer pointer, nx_i1 = element count,
+#   nx_i2 = element value or search char (per function)
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_fill : fill nx_i0[0..nx_i1) with byte value nx_i2 (0..255)
+# ------------------------------------------------------------------------------
+fn nx_arr_fill {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = 0
+    while s3 < s1 {
+        store [s0 + s3] s2
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_iota : fill nx_i0[0..nx_i1) with 0, 1, 2, ... (supports n <= 256)
+# ------------------------------------------------------------------------------
+fn nx_arr_iota {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 0
+    while s3 < s1 {
+        store [s0 + s3] s3
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_sum : nx_r0 = sum of bytes nx_i0[0..nx_i1)
+#                 (the 64-bit accumulator can hold far beyond 255)
+# ------------------------------------------------------------------------------
+fn nx_arr_sum {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load [s0 + s3]
+        let nx_r0 = nx_r0 + s5
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_max : nx_r0 = largest byte in nx_i0[0..nx_i1)
+#                 Empty array (n <= 0) returns 0.
+# ------------------------------------------------------------------------------
+fn nx_arr_max {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load [s0 + s3]
+        if s5 > nx_r0 {
+            let nx_r0 = s5
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_min : nx_r0 = smallest byte in nx_i0[0..nx_i1)
+#                 Empty array (n <= 0) returns 255.
+# ------------------------------------------------------------------------------
+fn nx_arr_min {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 255
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load [s0 + s3]
+        if s5 < nx_r0 {
+            let nx_r0 = s5
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_index_of : nx_r0 = first index of byte nx_i2 in nx_i0[0..nx_i1),
+#                      or -1 when absent
+# ------------------------------------------------------------------------------
+fn nx_arr_index_of {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = 0 - 1
+    let s3 = 0
+    while s3 < s1 {
+        if nx_r0 < 0 {
+            let s5 = load [s0 + s3]
+            if s5 == s2 {
+                let nx_r0 = s3
+            }
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_reverse : reverse bytes nx_i0[0..nx_i1) in place
+# ------------------------------------------------------------------------------
+fn nx_arr_reverse {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 0
+    let s6 = s1 - 1
+    while s3 < s6 {
+        let s7 = load [s0 + s3]
+        let s2 = load [s0 + s6]
+        store [s0 + s3] s2
+        store [s0 + s6] s7
+        let s3 = s3 + 1
+        let s6 = s6 - 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_count : nx_r0 = how many bytes of nx_i0[0..nx_i1) equal nx_i2
+# ------------------------------------------------------------------------------
+fn nx_arr_count {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load [s0 + s3]
+        if s5 == s2 {
+            let nx_r0 = nx_r0 + 1
+        }
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_sort : insertion sort, ascending, in place over bytes
+#                  nx_i0[0..nx_i1). For full 64-bit elements see qarrays.nex.
+# ------------------------------------------------------------------------------
+fn nx_arr_sort {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s3 = 1
+    while s3 < s1 {
+        let s4 = s3
+        let s7 = load [s0 + s4]
+        let s5 = 1
+        while s5 == 1 {
+            if s4 == 0 {
+                let s5 = 0
+            } else {
+                let s6 = s4 - 1
+                let s6 = load [s0 + s6]
+                if s6 > s7 {
+                    store [s0 + s4] s6
+                    let s4 = s4 - 1
+                } else {
+                    let s5 = 0
+                }
+            }
+        }
+        store [s0 + s4] s7
+        let s3 = s3 + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arr_avg : nx_r0 = floor(mean of bytes nx_i0[0..nx_i1))
+#                 Empty array (n <= 0) returns 0.
+# ------------------------------------------------------------------------------
+fn nx_arr_avg {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 0
+    let s3 = 0
+    while s3 < s1 {
+        let s5 = load [s0 + s3]
+        let nx_r0 = nx_r0 + s5
+        let s3 = s3 + 1
+    }
+    if s1 > 0 {
+        let nx_r0 = nx_r0 / s1
+    }
+}

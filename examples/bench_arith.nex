@@ -1,0 +1,40 @@
+; ==============================================================================
+;   NEXUS Arithmetic Benchmark (optimizer A/B workload)
+;   Fixed integer workload: 40M iterations of add/mul/div/shift chain.
+;   Run: ./nexus bench        (or: time ./nexus run examples/bench_arith.nex)
+; ==============================================================================
+
+print "=== NEXUS ARITHMETIC BENCHMARK ==="
+
+; --- phase 1: update chain (add + imul + sar reduction on variables) ---
+let i = 0
+let acc = 12345
+while i < 20000000 {
+    let acc = acc + i
+    let acc = acc * 2
+    let acc = acc / 4
+    let i = i + 1
+}
+print acc
+
+; --- phase 2: literal-heavy arithmetic (constant folding path) ---
+let j = 0
+let sum = 0
+while j < 20000000 {
+    let sum = sum + 1
+    let j = j + 1
+}
+print sum
+
+; --- phase 3: condition-heavy loop (imm8 compare + folded bodies) ---
+let k = 0
+let hits = 0
+while k < 10000000 {
+    if k > 100 {
+        let hits = hits + 2
+    }
+    let k = k + 1
+}
+print hits
+
+print "=== BENCHMARK DONE ==="

@@ -1,0 +1,683 @@
+# ==============================================================================
+#              NEXUS STANDARD LIBRARY - COMPREHENSIVE TEST SUITE
+#       Exercises every stdlib function and asserts exact expected results.
+#                 Run with:  ./nexus run tests/stdlib_test.nex
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+print "=============================================="
+print "  NEXUS STDLIB TEST SUITE"
+print "=============================================="
+
+let passes = 0
+let fails = 0
+
+# check_eq: compares nx_i0 (actual) against nx_i1 (expected).
+# Touches only nx_i0/nx_i1, so nx_r0 from the function under test survives.
+fn check_eq {
+    if nx_i0 == nx_i1 {
+        let passes = passes + 1
+    } else {
+        let fails = fails + 1
+        print "  FAIL got:"
+        print nx_i0
+        print "  FAIL expected:"
+        print nx_i1
+    }
+}
+
+# ------------------------------ nx_max ---------------------------------------
+print "[math] nx_max"
+let nx_i0 = 17
+let nx_i1 = 42
+call nx_max
+let nx_i0 = nx_r0
+let nx_i1 = 42
+call check_eq
+let nx_i0 = 0 - 5
+let nx_i1 = 0 - 9
+call nx_max
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 5
+call check_eq
+
+# ------------------------------ nx_min ---------------------------------------
+print "[math] nx_min"
+let nx_i0 = 17
+let nx_i1 = 42
+call nx_min
+let nx_i0 = nx_r0
+let nx_i1 = 17
+call check_eq
+let nx_i0 = 0 - 5
+let nx_i1 = 0 - 9
+call nx_min
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 9
+call check_eq
+
+# ------------------------------ nx_clamp -------------------------------------
+print "[math] nx_clamp"
+let nx_i0 = 15
+let nx_i1 = 0
+let nx_i2 = 10
+call nx_clamp
+let nx_i0 = nx_r0
+let nx_i1 = 10
+call check_eq
+let nx_i0 = 0 - 3
+let nx_i1 = 0
+let nx_i2 = 10
+call nx_clamp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 5
+let nx_i1 = 0
+let nx_i2 = 10
+call nx_clamp
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+
+# ------------------------------ nx_sign --------------------------------------
+print "[math] nx_sign"
+let nx_i0 = 0 - 7
+call nx_sign
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 1
+call check_eq
+let nx_i0 = 0
+call nx_sign
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 9
+call nx_sign
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+
+# ------------------------------ nx_pow ---------------------------------------
+print "[math] nx_pow"
+let nx_i0 = 2
+let nx_i1 = 10
+call nx_pow
+let nx_i0 = nx_r0
+let nx_i1 = 1024
+call check_eq
+let nx_i0 = 5
+let nx_i1 = 0
+call nx_pow
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 3
+let nx_i1 = 3
+call nx_pow
+let nx_i0 = nx_r0
+let nx_i1 = 27
+call check_eq
+let nx_i0 = 2
+let nx_i1 = 0 - 1
+call nx_pow
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 0 - 3
+let nx_i1 = 3
+call nx_pow
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 27
+call check_eq
+
+# ------------------------------ nx_isqrt -------------------------------------
+print "[math] nx_isqrt"
+let nx_i0 = 0
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 1
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 8
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 2
+call check_eq
+let nx_i0 = 9
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 3
+call check_eq
+let nx_i0 = 10
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 3
+call check_eq
+let nx_i0 = 16
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 4
+call check_eq
+let nx_i0 = 24
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 4
+call check_eq
+let nx_i0 = 25
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = 26
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = 1000000
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 1000
+call check_eq
+let nx_i0 = 0 - 4
+call nx_isqrt
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 1
+call check_eq
+
+# ------------------------------ nx_gcd ---------------------------------------
+print "[math] nx_gcd"
+let nx_i0 = 12
+let nx_i1 = 18
+call nx_gcd
+let nx_i0 = nx_r0
+let nx_i1 = 6
+call check_eq
+let nx_i0 = 17
+let nx_i1 = 5
+call nx_gcd
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 0
+let nx_i1 = 5
+call nx_gcd
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = 0
+let nx_i1 = 0
+call nx_gcd
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 0 - 12
+let nx_i1 = 18
+call nx_gcd
+let nx_i0 = nx_r0
+let nx_i1 = 6
+call check_eq
+
+# ------------------------------ nx_lcm ---------------------------------------
+print "[math] nx_lcm"
+let nx_i0 = 4
+let nx_i1 = 6
+call nx_lcm
+let nx_i0 = nx_r0
+let nx_i1 = 12
+call check_eq
+let nx_i0 = 3
+let nx_i1 = 5
+call nx_lcm
+let nx_i0 = nx_r0
+let nx_i1 = 15
+call check_eq
+let nx_i0 = 0
+let nx_i1 = 7
+call nx_lcm
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 0 - 4
+let nx_i1 = 6
+call nx_lcm
+let nx_i0 = nx_r0
+let nx_i1 = 12
+call check_eq
+
+# ------------------------------ nx_fib ---------------------------------------
+print "[math] nx_fib"
+let nx_i0 = 0
+call nx_fib
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 1
+call nx_fib
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 2
+call nx_fib
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 7
+call nx_fib
+let nx_i0 = nx_r0
+let nx_i1 = 13
+call check_eq
+let nx_i0 = 10
+call nx_fib
+let nx_i0 = nx_r0
+let nx_i1 = 55
+call check_eq
+let nx_i0 = 20
+call nx_fib
+let nx_i0 = nx_r0
+let nx_i1 = 6765
+call check_eq
+
+# ------------------------------ nx_is_prime ----------------------------------
+print "[math] nx_is_prime"
+let nx_i0 = 0 - 7
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 0
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 1
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 2
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 3
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 4
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 5
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 9
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 17
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 25
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 97
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 7919
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 7917
+call nx_is_prime
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_digits ------------------------------------
+print "[math] nx_digits"
+let nx_i0 = 0
+call nx_digits
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 5
+call nx_digits
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 42
+call nx_digits
+let nx_i0 = nx_r0
+let nx_i1 = 2
+call check_eq
+let nx_i0 = 999
+call nx_digits
+let nx_i0 = nx_r0
+let nx_i1 = 3
+call check_eq
+let nx_i0 = 1000
+call nx_digits
+let nx_i0 = nx_r0
+let nx_i1 = 4
+call check_eq
+let nx_i0 = 0 - 42
+call nx_digits
+let nx_i0 = nx_r0
+let nx_i1 = 2
+call check_eq
+
+# ------------------------------ array setup ----------------------------------
+let buf_a = alloc 80
+let buf_b = alloc 80
+let buf_c = alloc 32
+
+# ------------------------------ nx_arr_fill / nx_arr_sum ---------------------
+print "[arrays] nx_arr_fill + nx_arr_sum"
+let nx_i0 = buf_a
+let nx_i1 = 5
+let nx_i2 = 7
+call nx_arr_fill
+let nx_i0 = buf_a
+let nx_i1 = 5
+call nx_arr_sum
+let nx_i0 = nx_r0
+let nx_i1 = 35
+call check_eq
+
+# ------------------------------ nx_arr_iota ----------------------------------
+print "[arrays] nx_arr_iota"
+let nx_i0 = buf_b
+let nx_i1 = 6
+call nx_arr_iota
+let s = load [buf_b + 0]
+let nx_i0 = s
+let nx_i1 = 0
+call check_eq
+let s = load [buf_b + 5]
+let nx_i0 = s
+let nx_i1 = 5
+call check_eq
+let nx_i0 = buf_b
+let nx_i1 = 6
+call nx_arr_sum
+let nx_i0 = nx_r0
+let nx_i1 = 15
+call check_eq
+
+# ------------------------------ nx_arr_max / nx_arr_min ----------------------
+print "[arrays] nx_arr_max / nx_arr_min"
+let nx_i0 = buf_b
+let nx_i1 = 6
+call nx_arr_max
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = buf_b
+let nx_i1 = 6
+call nx_arr_min
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+store [buf_c + 0] 200
+store [buf_c + 1] 9
+store [buf_c + 2] 42
+let nx_i0 = buf_c
+let nx_i1 = 3
+call nx_arr_max
+let nx_i0 = nx_r0
+let nx_i1 = 200
+call check_eq
+let nx_i0 = buf_c
+let nx_i1 = 3
+call nx_arr_min
+let nx_i0 = nx_r0
+let nx_i1 = 9
+call check_eq
+
+# ------------------------------ nx_arr_index_of ------------------------------
+print "[arrays] nx_arr_index_of"
+let nx_i0 = buf_b
+let nx_i1 = 6
+let nx_i2 = 4
+call nx_arr_index_of
+let nx_i0 = nx_r0
+let nx_i1 = 4
+call check_eq
+let nx_i0 = buf_b
+let nx_i1 = 6
+let nx_i2 = 99
+call nx_arr_index_of
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 1
+call check_eq
+
+# ------------------------------ nx_arr_reverse -------------------------------
+print "[arrays] nx_arr_reverse"
+let nx_i0 = buf_b
+let nx_i1 = 6
+call nx_arr_reverse
+let s = load [buf_b + 0]
+let nx_i0 = s
+let nx_i1 = 5
+call check_eq
+let s = load [buf_b + 1]
+let nx_i0 = s
+let nx_i1 = 4
+call check_eq
+let s = load [buf_b + 5]
+let nx_i0 = s
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_arr_count ---------------------------------
+print "[arrays] nx_arr_count"
+let nx_i0 = buf_a
+let nx_i1 = 5
+let nx_i2 = 7
+call nx_arr_fill
+let nx_i0 = buf_a
+let nx_i1 = 5
+let nx_i2 = 7
+call nx_arr_count
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = buf_a
+let nx_i1 = 5
+let nx_i2 = 8
+call nx_arr_count
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ string setup ---------------------------------
+let s_hello = "hello"
+let s_empty = ""
+let s_abc = "abc"
+let s_abd = "abd"
+let s_foo = "foo"
+let s_bar = "bar"
+let s_num = "1234"
+let s_neg = "-56"
+let s_zero = "007"
+let s_zero1 = "0"
+let buf_s = alloc 64
+
+# ------------------------------ nx_str_len -----------------------------------
+print "[strings] nx_str_len"
+let nx_i0 = s_hello
+call nx_str_len
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = s_empty
+call nx_str_len
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_copy ----------------------------------
+print "[strings] nx_str_copy"
+let nx_i0 = s_hello
+let nx_i1 = buf_s
+call nx_str_copy
+print_str buf_s
+let nx_i0 = buf_s
+let nx_i1 = s_hello
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_cmp -----------------------------------
+print "[strings] nx_str_cmp"
+let nx_i0 = s_abc
+let nx_i1 = s_abd
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 1
+call check_eq
+let nx_i0 = s_abc
+let nx_i1 = s_abc
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_abd
+let nx_i1 = s_abc
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_abc
+let nx_i1 = s_empty
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+
+# ------------------------------ nx_str_concat --------------------------------
+print "[strings] nx_str_concat"
+let nx_i0 = s_foo
+let nx_i1 = s_bar
+let nx_i2 = buf_s
+call nx_str_concat
+print_str buf_s
+let nx_i0 = buf_s
+call nx_str_len
+let nx_i0 = nx_r0
+let nx_i1 = 6
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_foo
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+
+# ------------------------------ nx_str_chr -----------------------------------
+print "[strings] nx_str_chr"
+let nx_i0 = s_hello
+let nx_i1 = 108
+call nx_str_chr
+let nx_i0 = nx_r0
+let nx_i1 = 2
+call check_eq
+let nx_i0 = s_hello
+let nx_i1 = 122
+call nx_str_chr
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 1
+call check_eq
+
+# ------------------------------ nx_str_to_int --------------------------------
+print "[strings] nx_str_to_int"
+let nx_i0 = s_num
+call nx_str_to_int
+let nx_i0 = nx_r0
+let nx_i1 = 1234
+call check_eq
+let nx_i0 = s_neg
+call nx_str_to_int
+let nx_i0 = nx_r0
+let nx_i1 = 0 - 56
+call check_eq
+let nx_i0 = s_zero
+call nx_str_to_int
+let nx_i0 = nx_r0
+let nx_i1 = 7
+call check_eq
+let nx_i0 = s_empty
+call nx_str_to_int
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_int_to_str --------------------------------
+print "[strings] nx_int_to_str"
+let nx_i0 = 0
+let nx_i1 = buf_s
+call nx_int_to_str
+print_str buf_s
+let nx_i0 = buf_s
+let nx_i1 = s_zero1
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = 7
+let nx_i1 = buf_s
+call nx_int_to_str
+let nx_i0 = buf_s
+call nx_str_len
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = 123456
+let nx_i1 = buf_s
+call nx_int_to_str
+let nx_i0 = buf_s
+call nx_str_len
+let nx_i0 = nx_r0
+let nx_i1 = 6
+call check_eq
+let nx_i0 = 0 - 42
+let nx_i1 = buf_s
+call nx_int_to_str
+print_str buf_s
+let nx_i0 = buf_s
+call nx_str_len
+let nx_i0 = nx_r0
+let nx_i1 = 3
+call check_eq
+
+# ------------------------------ summary --------------------------------------
+print "=============================================="
+print "  ASSERTIONS PASSED:"
+print passes
+print "  ASSERTIONS FAILED:"
+print fails
+if fails == 0 {
+    print "  [SUCCESS] ALL STDLIB TESTS PASSED!"
+} else {
+    print "  [FAILURE] SOME STDLIB TESTS FAILED!"
+}
+print "=============================================="

@@ -1,0 +1,205 @@
+# NEXUS Language Ecosystem Roadmap
+# Discussion Notes - What Every Language Needs
+# =============================================
+#
+# STATUS UPDATE (v5.3 ecosystem sweep): every item below is now ADDRESSED.
+# See CHANGES.md for the full delivery list and docs/ for the new material.
+#   1. Error messages ....... DONE - line/column reporting across 11 error classes;
+#                             break/continue/for diagnostics added in v5.3
+#   2. Documentation ........ DONE - docs/ suite (reference, tutorial, builtins)
+#   3. Standard library ..... DONE - stdlib/ (39 functions, 94 assertions + nextest suites)
+#   4. Syntax highlighting .. DONE - editors/vscode-nexus/ (VS Code grammar, v5.3 keywords)
+#   5. REPL ................. DONE - ./nexus repl (stateful, stdlib preloaded)
+#   6. Build system ......... DONE (v5.3) - ./nexus build <file> incremental builds with
+#                             .nexuscache dependency tracking; ./nexus build = full pipeline
+#
+# NEW IN v5.3:
+#   7. Language ............. break / continue / C-style for (comma separators)
+#                             added to the SELF-HOSTING compiler; new bit-for-bit
+#                             fixed point at 49,152 bytes (PE) / 57,951 bytes (ELF)
+#   8. Testing .............. bin/nextest native runner + assert_eq/assert_ne
+#                             preprocessor macros + stdlib/assert.nex; run one file
+#                             with ./nexus test --file <test.nex>
+#
+# NEW IN v5.4:
+#   - Language .............. Interactive Console Input ('read <var>') re-implemented
+#                             in the self-hosting compiler (nexc.nex). Calls in-binary
+#                             read_int helper at offset 0xA880; verified on both Windows
+#                             PE32+ and Linux bare-metal ELF64 with 0% loader.
+#   - Diagnostics ........... New diagnostic w=11: 'Expected variable name in read statement'.
+#                             Validates variable start character (a-z, A-Z, _).
+#   - Self-Hosting .......... Bit-for-bit parity proven: Gen 2 == Gen 3 == Gen 4 across
+#                             all 49,152 bytes (PE) and 57,951 bytes (ELF).
+#   - Verification .......... 10B direct ELF execution enabled in build_all.sh; 3/3 interactive
+#                             tests added to ./nexus test.
+#
+# NEW IN v5.5:
+#   - Floating-Point (SSE2) . Native 64-bit IEEE 754 float math: fadd, fsub, fmul, fdiv,
+#                             fsqrt, fneg, itof, ftoi, print_float, float literals (3.14).
+#   - Conditions & Loops .... if_f, while_f, else if_f with float comparison (ucomisd).
+#   - Infix Syntax Sugar .... nexprep desugars +., -., *., /., <., <=., >., >=., ==., !=.
+#   - Verified .............. 22 example suites, 13/13 diagnostics, 25/25 foundation tests,
+#                             3/3 interactive tests, 94/94 stdlib assertions.
+#                             Bit-for-bit convergence: Gen 2 == Gen 3 == Gen 4 (0 diffs).
+#
+# NEW IN v5.6:
+#   - Function Parameters ... Parameterized functions 'fn <name>(p0, p1, ...) {'.
+#   - Return Values ......... Clean return expressions 'return <expr>' with early returns.
+#   - Call Expressions ...... Assignment from call 'let res = call <name>(arg0, arg1, ...)'.
+#   - Arbitrary Nesting ..... Hoisted temporary sequential evaluation for nested calls.
+#   - Backward Compatible ... Legacy parameterless subroutines (fn name {) 100% supported.
+#   - Compound Assignment ... In-place operators (+=, -=, *=, /=, %=, +=., -=.) and for headers.
+#   - Verified .............. 23 example suites, 13/13 diagnostics, 31/31 foundation tests,
+#                             3/3 interactive tests, 94/94 stdlib assertions.
+#                             Bit-for-bit convergence: Gen 2 == Gen 3 == Gen 4 (0 diffs).
+#
+# NEW IN v5.7:
+#   - Array Literals ........ 'let arr = [10, 20, 30]' allocates N×8 bytes heap storage.
+#   - Multi-line Arrays ..... Opening '[' without ']' accumulates continuation lines.
+#   - Bracket Reads ......... 'let x = arr[0]', 'let y = arr[i]' -> load64 with scale.
+#   - Bracket Writes ........ 'arr[0] = 99', 'arr[i] = val' -> store64 with scale.
+#   - Compound Element Ops .. 'arr[0] += 5', 'arr[i] *= 2' -> read-modify-write.
+#   - Expression Hoisting ... 'let dot = arr[0]*brr[0]' auto-hoists indexed reads.
+#   - Float Arrays .......... Float literals in array elements stored as IEEE-754 doubles.
+#   - Verified .............. 24 example suites, 13/13 diagnostics, 36/36 foundation tests,
+#                             3/3 interactive tests, 94/94 stdlib assertions.
+#                             Bit-for-bit convergence: Gen 2 == Gen 3 == Gen 4 (0 diffs).
+#
+# NEXT (v5.7+ candidates, in rough priority order):
+#   - nexrep pack manager: versioned, hash-pinned stdlib/module registry
+#   - trigonometric math routines in stdlib (sin, cos, atan2 via Taylor series / CORDIC)
+#   - string interpolation 'print_fmt "val={x}"'
+#
+## Current State (Stage 5 Complete, v5.7 Active)
+- Compiler:       nexc.exe (self-hosted, 49,152 byte output PE / 57,951 byte ELF)
+- Toolchain:      nexload, nexelf, nexprep, nextest, nexdisasm, nexgfx
+- Examples:       24 .nex programs in /examples
+- Self-hosting:   PROVEN (Gen 2 == Gen 3 == Gen 4, bit-for-bit, 0 differences)
+- Self-hosting:   PROVEN (nexc3.exe == nexc4.exe, bit-for-bit, all 49,152 bytes)
+
+## The Ecosystem Gap — Things NOT Part Of The Language Itself
+## (Priority ordered — what would immediately boost the language)
+
+─────────────────────────────────────────────────────────────
+1. MEANINGFUL ERROR MESSAGES                    [RESOLVED - v5.2]
+─────────────────────────────────────────────────────────────
+Status: RESOLVED - The compiler reports line and column coordinates for all syntax errors,
+rejects invalid condition expressions and missing opening braces, gates execution binary
+synthesis upon error, and provides targeted diagnostics:
+  - Line / column coordinates on all errors
+  - Unrecognized statement keywords
+  - Missing '=' in let assignments
+  - Undefined function names in call statements
+  - Unclosed blocks (missing '}') at EOF
+  - Unmatched '}' (no block open)
+  - Invalid relational operators / condition expression trap (`if a * a > n`, `if a = 5`)
+  - Expected '{' after condition head
+  - Output binary gating (app.exe never emitted on failure)
+
+What it should look like:
+  code.nex:47:12: error: expected '}' to close 'while' block opened on line 43
+  code.nex:102:5: error: undefined variable 'count' (declared vars: counter, total)
+
+Why it matters more than anything else:
+  - Features help you build things.
+  - Error messages help you when things go wrong — which is MOST of the time.
+  - A language people CAN use vs one they WANT to use.
+
+─────────────────────────────────────────────────────────────
+2. DOCUMENTATION                                [HIGH]
+─────────────────────────────────────────────────────────────
+Current state:
+  - AI_HANDOFF.md: Written for AI engineers, not users.
+  - No language reference.
+  - No keyword list.
+  - No syntax guide.
+  - No tutorial.
+
+What's needed:
+  - NEXUS Language Reference (complete keyword + syntax listing)
+  - "Hello World to Functions" step-by-step tutorial
+  - Built-in operations reference (alloc, load, store, file_*)
+  - Known limitations / gotchas (e.g. single-letter variables only right now)
+
+Without docs, nobody — including the developer in 6 months — can use the 
+language without reading the compiler source code line by line.
+
+─────────────────────────────────────────────────────────────
+3. STANDARD LIBRARY                             [HIGH]
+─────────────────────────────────────────────────────────────
+Current state:
+  - ZERO built-in utility functions.
+  - Every program starts from absolute zero.
+  - No abs(), no max(), no min(), no string utilities, nothing.
+
+What a minimal stdlib for NEXUS would look like:
+  Math:      abs, max, min, clamp, pow (integer)
+  Memory:    memcopy, memset, memcmp
+  Strings:   str_len, str_copy, int_to_str, str_to_int (once strings exist)
+  I/O:       print_str (once strings exist), print_newline, print_hex
+  Array:     arr_fill, arr_sum, arr_max, arr_min
+
+Note: Requires Stage 6 string literals before some of these are possible.
+      But math/memory utilities can be done RIGHT NOW.
+
+─────────────────────────────────────────────────────────────
+4. EDITOR SUPPORT (Syntax Highlighting)         [MEDIUM]
+─────────────────────────────────────────────────────────────
+Current state:
+  - .nex files appear as plain text in every editor.
+  - No keyword coloring, no comment highlighting, no structure visibility.
+
+What's needed:
+  - A VS Code grammar file (.tmLanguage.json or .tmGrammar) for .nex files
+  - Highlights: keywords (let, while, if, else, fn, call, return, print, read,
+                alloc, load, store, file_*), numbers, comments (#), operators
+
+Effort: ~1 weekend. Impact: massive psychological difference in writing NEXUS.
+
+─────────────────────────────────────────────────────────────
+5. REPL / INTERACTIVE MODE                      [MEDIUM]
+─────────────────────────────────────────────────────────────
+Current state:
+  - Edit code.nex → run nexc.exe → run app.exe → repeat.
+  - Minimum 3 steps and ~200ms per experiment.
+  - No way to quickly test a one-liner.
+
+What a NEXUS REPL would do:
+  - Accept one NEXUS statement at a time.
+  - Compile and execute it immediately.
+  - Show the result.
+  - Maintain variable state between lines.
+
+Architecturally: The REPL wraps the compiler in a loop. Each input gets 
+appended to a running program, recompiled, and the new output (if any) is shown.
+
+─────────────────────────────────────────────────────────────
+6. BUILD SYSTEM / PROJECT FILES                 [LOWER]
+─────────────────────────────────────────────────────────────
+Right now compilation is: copy your code to code.nex, run nexc.exe.
+As multi-file support (Stage 6) arrives, this becomes unmanageable.
+
+What's needed eventually:
+  - A nexus.project file format (JSON or NEXUS-native)
+  - A nexbuild.exe that reads it and orchestrates compilation
+  - Dependency tracking (only recompile changed files)
+
+─────────────────────────────────────────────────────────────
+SUMMARY TABLE
+─────────────────────────────────────────────────────────────
+Priority  | Item                   | Effort  | Impact
+----------|------------------------|---------|--------
+1         | Error Messages         | Medium  | CRITICAL
+2         | Documentation          | Low     | HIGH
+3         | Standard Library       | Medium  | HIGH
+4         | Syntax Highlighting    | Low     | MEDIUM
+5         | REPL                   | High    | MEDIUM
+6         | Build System           | High    | LOWER (wait for multi-file)
+
+─────────────────────────────────────────────────────────────
+STAGE 6 LANGUAGE FEATURES (separate from ecosystem)
+─────────────────────────────────────────────────────────────
+These ARE part of the language itself (tracked in AI_HANDOFF.md):
+  1. Global String Literals & String Functions
+  2. User-Defined Structs & Record Types
+  3. Multi-File Compilation & Modular Linking

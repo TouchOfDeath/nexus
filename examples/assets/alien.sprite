@@ -1,0 +1,19 @@
+name: alien
+palette:
+  . = transparent
+  G = #22c55e
+  L = #86efac
+  W = #ffffff
+  B = #000000
+  P = #a855f7
+
+pixels:
+  . . . P . . . . P . . .
+  . . . . P . . P . . . .
+  . . . P P P P P P . . .
+  . . P P W P P W P P . .
+  . P P P B P P B P P P .
+  P P P P P P P P P P P P
+  P . P P P P P P P P . P
+  P . P . . . . . . P . P
+  . . . P P . . P P . . .

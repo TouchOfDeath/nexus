@@ -1,0 +1,82 @@
+# ==============================================================================
+#                 NEXUS USER-DEFINED STRUCTS & RECORD TYPES
+#       Demonstrating composite records, automatic offsets, member dot-access,
+#       size constants, field constants, and native memory representation.
+#       0% C#  -  0% .NET Runtime  -  100% Native x86-64 Machine Code
+# ==============================================================================
+
+print "--- NEXUS User-Defined Structs Showcase ---"
+
+# 1. Declare Struct Definitions
+struct Point {
+    x
+    y
+}
+
+struct Color {
+    r
+    g
+    b
+}
+
+# 2. Inspect Size & Field Offset Constants
+let pt_size = Point.size
+let pt_off_y = Point.y
+print "Point.size (expected 16):"
+print pt_size
+print "Point.y offset (expected 8):"
+print pt_off_y
+
+# 3. Dynamic Struct Allocation & Member Assignment
+let pt1 = alloc Point.size
+pt1.x = 25
+pt1.y = 50
+
+print "Point 1 Initial Coordinates:"
+let x1 = pt1.x
+let y1 = pt1.y
+print x1
+print y1
+
+# 4. In-Place Member Mutation
+pt1.x = pt1.x + 15
+print "Point 1 X after mutation (+15, expected 40):"
+print pt1.x
+
+# 5. Multiple Struct Instances
+let pt2 = alloc Point.size
+pt2.x = 100
+pt2.y = 200
+
+print "Point 2 Coordinates (expected 100, 200):"
+print pt2.x
+print pt2.y
+
+# 6. Struct Operations with Subroutines
+fn translate_point {
+    let cur_x = pt1.x
+    let cur_y = pt1.y
+    pt1.x = cur_x + dx
+    pt1.y = cur_y + dy
+}
+
+let dx = 10
+let dy = 20
+call translate_point
+
+print "Point 1 after translation (expected 50, 70):"
+print pt1.x
+print pt1.y
+
+# 7. Multi-Field Struct (Color RGB)
+let rgb = alloc Color.size
+rgb.r = 255
+rgb.g = 128
+rgb.b = 64
+
+print "Color RGB Channels (expected 255, 128, 64):"
+print rgb.r
+print rgb.g
+print rgb.b
+
+print "=== STRUCT DEMO COMPLETED SUCCESSFULLY ==="

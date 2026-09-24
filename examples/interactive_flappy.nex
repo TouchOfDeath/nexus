@@ -1,0 +1,260 @@
+# ==============================================================================
+#                 NEXUS NATIVE BARE-METAL FLAPPY BIRD v1.0
+#           0% C#  -  0% .NET Runtime  -  100% Native x86-64 Machine Code
+# ==============================================================================
+
+# Stack slot 0 reservation (prevents print_str scratch overwrite):
+let stdin_fd = 0
+
+let screen = alloc 2048
+let inbuf = alloc 64
+
+# Game Constants & State
+let bird_x = 6
+let bird_y = 5
+let pipe_x = 24
+let gap_y = 4
+let score = 0
+let high_score = 0
+let alive = 1
+let seed = 777
+let frame_count = 0
+let max_frames = 60
+
+print "=================================================="
+print "       NEXUS BARE-METAL FLAPPY BIRD v1.0          "
+print "   100% Native x86-64  -  0% C#  -  0% Runtime    "
+print "=================================================="
+print "Choose Game Mode:"
+print "  [1] Interactive Mode (You play via terminal)"
+print "  [2] AI Autopilot Mode (Watch autonomous agent)"
+print "Enter choice (1 or 2):"
+
+let nread = file_read stdin_fd inbuf 16
+let mode_choice = 1
+if nread > 0 {
+    let mode_byte = load [inbuf + 0]
+    if mode_byte == 50 {
+        let mode_choice = 2
+    }
+}
+
+if mode_choice == 2 {
+    print "[+] AI Autopilot Mode Activated! Running autonomous agent..."
+} else {
+    print "[+] Interactive Mode Activated! Get ready..."
+    print "Controls: [f] = Flap Up  |  [Enter/g] = Glide  |  [q] = Quit"
+    print "Press Enter to start!"
+    let ready_wait = file_read stdin_fd inbuf 16
+}
+
+while alive == 1 {
+    let frame_count = frame_count + 1
+
+    # --------------------------------------------------------------------------
+    # 1. RENDER GAME FRAME INTO BUFFER
+    # --------------------------------------------------------------------------
+    let p = 0
+
+    # ANSI Clear Screen (\x1b[2J\x1b[H)
+    store [screen + p] 27
+    let p = p + 1
+    store [screen + p] 91
+    let p = p + 1
+    store [screen + p] 50
+    let p = p + 1
+    store [screen + p] 74
+    let p = p + 1
+    store [screen + p] 27
+    let p = p + 1
+    store [screen + p] 91
+    let p = p + 1
+    store [screen + p] 72
+    let p = p + 1
+
+    # Render Rows 0 to 11 (Width = 30)
+    for r = 0, r < 12, r = r + 1 {
+        for c = 0, c < 30, c = c + 1 {
+            let ch = 32
+
+            # Top ceiling and bottom ground: '=' (61)
+            if r == 0 {
+                let ch = 61
+            } else if r == 11 {
+                let ch = 61
+            } else if c == 0 {
+                let ch = 124
+            } else if c == 29 {
+                let ch = 124
+            } else {
+                # Pipe Rendering
+                let is_pipe = 0
+                if c == pipe_x {
+                    let is_pipe = 1
+                }
+                let px1 = pipe_x + 1
+                if c == px1 {
+                    let is_pipe = 1
+                }
+
+                if is_pipe == 1 {
+                    let in_gap = 0
+                    if r >= gap_y {
+                        let gy_end = gap_y + 3
+                        if r < gy_end {
+                            let in_gap = 1
+                        }
+                    }
+                    if in_gap == 0 {
+                        let ch = 35
+                    }
+                }
+
+                # Bird Rendering: '@' (64)
+                if r == bird_y {
+                    if c == bird_x {
+                        let ch = 64
+                    }
+                }
+            }
+
+            store [screen + p] ch
+            let p = p + 1
+        }
+        # Newline (10)
+        store [screen + p] 10
+        let p = p + 1
+    }
+
+    # Null terminator
+    store [screen + p] 0
+    print_str screen
+
+    # Print Status HUD
+    print "SCORE:"
+    print score
+
+    # --------------------------------------------------------------------------
+    # 2. INPUT & DECISION LOGIC
+    # --------------------------------------------------------------------------
+    let flapped = 0
+
+    if mode_choice == 2 {
+        # AI AUTOPILOT:
+        # Target the center of the approaching gap
+        let target_y = gap_y + 1
+        if bird_y > target_y {
+            let flapped = 1
+            print ">> AI: FLAP! (Climbing to gap)"
+        } else {
+            let flapped = 0
+            print ">> AI: GLIDE (Maintaining trajectory)"
+        }
+
+        # Smooth spin delay for terminal animation (~10 FPS)
+        for delay = 0, delay < 35000000, delay = delay + 1 {
+            let dummy_spin = delay
+        }
+
+        # Cap autonomous run length to prevent infinite loops in tests
+        if frame_count >= max_frames {
+            print ">> AI Demonstration target of 60 frames achieved!"
+            let alive = 0
+            break
+        }
+    } else {
+        # INTERACTIVE PLAYER:
+        print "[f] Flap  |  [Enter/g] Glide  |  [q] Quit"
+        print "Your move:"
+        let nread = file_read stdin_fd inbuf 16
+        let cmd = 0
+        if nread > 0 {
+            let cmd = load [inbuf + 0]
+        }
+
+        # 'q' = 113 -> Quit
+        if cmd == 113 {
+            let alive = 0
+            break
+        }
+
+        # 'f' = 102, 'w' = 119, '1' = 49, ' ' = 32 -> Flap
+        if cmd == 102 {
+            let flapped = 1
+        } else if cmd == 119 {
+            let flapped = 1
+        } else if cmd == 49 {
+            let flapped = 1
+        } else if cmd == 32 {
+            let flapped = 1
+        }
+    }
+
+    # --------------------------------------------------------------------------
+    # 3. PHYSICS & MOVEMENT
+    # --------------------------------------------------------------------------
+    if flapped == 1 {
+        let bird_y = bird_y - 2
+    } else {
+        let bird_y = bird_y + 1
+    }
+
+    # Advance pipe toward the left
+    let pipe_x = pipe_x - 1
+    if pipe_x <= 1 {
+        let pipe_x = 26
+        let score = score + 1
+
+        # LCG Pseudo-Random generator for gap position (between row 2 and 6)
+        let seed = seed * 1103515245
+        let seed = seed + 12345
+        let raw_mod = seed % 5
+        if raw_mod < 0 {
+            let raw_mod = 0 - raw_mod
+        }
+        let gap_y = raw_mod + 2
+    }
+
+    # --------------------------------------------------------------------------
+    # 4. COLLISION DETECTION
+    # --------------------------------------------------------------------------
+    # Ceiling & Ground
+    if bird_y <= 0 {
+        let alive = 0
+    }
+    if bird_y >= 11 {
+        let alive = 0
+    }
+
+    # Pipe Collision
+    let hit_pipe = 0
+    if pipe_x == bird_x {
+        let hit_pipe = 1
+    }
+    let px1 = pipe_x + 1
+    if px1 == bird_x {
+        let hit_pipe = 1
+    }
+
+    if hit_pipe == 1 {
+        let in_gap = 0
+        if bird_y >= gap_y {
+            let gy_end = gap_y + 3
+            if bird_y < gy_end {
+                let in_gap = 1
+            }
+        }
+        if in_gap == 0 {
+            let alive = 0
+        }
+    }
+}
+
+print "**************************************************"
+print "                   GAME OVER!                     "
+print "**************************************************"
+print "Final Score:"
+print score
+print "Total Frames Survived:"
+print frame_count
+print "NEXUS Bare-Metal Engine: Execution Completed."

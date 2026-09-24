@@ -1,0 +1,39 @@
+# builtins_demo.nex: Demonstrates Python-style built-in functions: len and abs
+
+fn test_len {
+    print "--- Testing len() Built-in ---"
+    let greeting = "Hello, NEXUS World!"
+    let l1 = len greeting
+    print l1
+
+    let l2 = len "Self-Hosting"
+    print l2
+
+    let l3 = len ""
+    print l3
+}
+
+fn test_abs {
+    print "--- Testing abs() Built-in ---"
+    let delta = 0 - 42
+    let a1 = abs delta
+    print a1
+
+    let score = 100
+    let a2 = abs score
+    print a2
+
+    let a3 = abs -99
+    print a3
+
+    let a4 = abs 77
+    print a4
+
+    let zero = 0
+    let a5 = abs zero
+    print a5
+}
+
+call test_len
+call test_abs
+print "=== BUILTINS DEMO COMPLETED ==="

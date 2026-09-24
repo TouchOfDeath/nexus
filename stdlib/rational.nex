@@ -1,0 +1,169 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: rational.nex
+#             Exact Fraction (Rational) Arithmetic Engine (Zero Float Drift)
+# ==============================================================================
+#
+# Represents rational numbers as pairs of 64-bit integers [numerator, denominator]
+# where denominator > 0 and gcd(|num|, den) == 1 (canonical irreducible form).
+# Eliminates all floating-point rounding errors.
+#
+# Memory Layout:
+#   Rational array of 2 quadwords:
+#     [rat + 0] = numerator
+#     [rat + 8] = denominator
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2, nx_i3, nx_i4
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_rat_create : Creates reduced canonical rational num/den
+#   Inputs: nx_i0 = num, nx_i1 = den, nx_i2 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_rat_create {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+
+    if s1 < 0 {
+        let s0 = 0 - s0
+        let s1 = 0 - s1
+    }
+
+    # Compute gcd(|s0|, s1)
+    let s3 = s0
+    if s3 < 0 {
+        let s3 = 0 - s3
+    }
+    let s4 = s1
+    while s4 != 0 {
+        let s5 = s3 / s4
+        let s5 = s5 * s4
+        let s5 = s3 - s5
+        let s3 = s4
+        let s4 = s5
+    }
+
+    if s3 > 1 {
+        let s0 = s0 / s3
+        let s1 = s1 / s3
+    }
+
+    store64 [s2 + 0] s0
+    store64 [s2 + 8] s1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rat_add : (n1/d1) + (n2/d2) = (n1*d2 + n2*d1) / (d1*d2)
+#   Inputs: nx_i0 = n1, nx_i1 = d1, nx_i2 = n2, nx_i3 = d2, nx_i4 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_rat_add {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+
+    # num = n1 * d2 + n2 * d1
+    let s5 = s0 * s3
+    let s6 = s2 * s1
+    let r_num = s5 + s6
+
+    # den = d1 * d2
+    let r_den = s1 * s3
+
+    let nx_i0 = r_num
+    let nx_i1 = r_den
+    let nx_i2 = s4
+    call nx_rat_create
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rat_sub : (n1/d1) - (n2/d2) = (n1*d2 - n2*d1) / (d1*d2)
+#   Inputs: nx_i0 = n1, nx_i1 = d1, nx_i2 = n2, nx_i3 = d2, nx_i4 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_rat_sub {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+
+    let s5 = s0 * s3
+    let s6 = s2 * s1
+    let r_num = s5 - s6
+    let r_den = s1 * s3
+
+    let nx_i0 = r_num
+    let nx_i1 = r_den
+    let nx_i2 = s4
+    call nx_rat_create
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rat_mul : (n1/d1) * (n2/d2) = (n1*n2) / (d1*d2)
+#   Inputs: nx_i0 = n1, nx_i1 = d1, nx_i2 = n2, nx_i3 = d2, nx_i4 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_rat_mul {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+
+    let r_num = s0 * s2
+    let r_den = s1 * s3
+
+    let nx_i0 = r_num
+    let nx_i1 = r_den
+    let nx_i2 = s4
+    call nx_rat_create
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rat_div : (n1/d1) / (n2/d2) = (n1*d2) / (d1*n2)
+#   Inputs: nx_i0 = n1, nx_i1 = d1, nx_i2 = n2, nx_i3 = d2, nx_i4 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_rat_div {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+
+    let r_num = s0 * s3
+    let r_den = s1 * s2
+
+    let nx_i0 = r_num
+    let nx_i1 = r_den
+    let nx_i2 = s4
+    call nx_rat_create
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rat_cmp : Compares (n1/d1) and (n2/d2)
+#   Returns -1 if (n1/d1) < (n2/d2), 0 if equal, 1 if (n1/d1) > (n2/d2)
+#   Inputs: nx_i0 = n1, nx_i1 = d1, nx_i2 = n2, nx_i3 = d2
+#   Output: nx_r0 = -1, 0, or 1
+# ------------------------------------------------------------------------------
+fn nx_rat_cmp {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+
+    # Cross-multiply: n1 * d2 vs n2 * d1
+    let s4 = s0 * s3
+    let s5 = s2 * s1
+    if s4 == s5 {
+        let nx_r0 = 0
+    } else {
+        if s4 < s5 {
+            let nx_r0 = -1
+        } else {
+            let nx_r0 = 1
+        }
+    }
+}

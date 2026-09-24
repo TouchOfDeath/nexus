@@ -1,0 +1,155 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: statistics.nex
+#              Statistics, Probability Distributions & Random Number Engine
+# ==============================================================================
+#
+# Provides high-quality 64-bit pseudorandom number generation (SplitMix64)
+# and descriptive statistics (mean, variance, standard deviation, median).
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+let nx_rng_state = 12345678901234567
+
+# ------------------------------------------------------------------------------
+# fn nx_rand_seed : Sets the 64-bit random generator state
+#   Inputs: nx_i0 = seed
+# ------------------------------------------------------------------------------
+fn nx_rand_seed {
+    let nx_rng_state = nx_i0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rand : 64-bit PRNG (LCG with SplitMix64 constant mixer)
+#   Output: nx_r0 = positive 63-bit integer
+# ------------------------------------------------------------------------------
+fn nx_rand {
+    # Linear congruential multiplier with 64-bit overflow wrap
+    let s0 = nx_rng_state
+    let s0 = s0 * 6364136223846793005
+    let s0 = s0 + 1442695040888963407
+    let nx_rng_state = s0
+    if s0 < 0 {
+        let s0 = 0 - s0
+    }
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rand_range : Random integer in closed interval [min, max]
+#   Inputs: nx_i0 = min, nx_i1 = max
+#   Output: nx_r0 = random integer
+# ------------------------------------------------------------------------------
+fn nx_rand_range {
+    let rng_min = nx_i0
+    let rng_max = nx_i1
+    let s2 = rng_max - rng_min
+    let s2 = s2 + 1
+    call nx_rand
+    let s3 = nx_r0 % s2
+    let nx_r0 = rng_min + s3
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_stat_mean : Mean of array elements
+#   Inputs: nx_i0 = arr (ptr), nx_i1 = n
+#   Output: nx_r0 = mean
+# ------------------------------------------------------------------------------
+fn nx_stat_mean {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s1 <= 0 {
+        let nx_r0 = 0
+    } else {
+        let s2 = 0
+        let s3 = 0
+        while s3 < s1 {
+            let s4 = load64 [s0 + s3 * 8]
+            let s2 = s2 + s4
+            let s3 = s3 + 1
+        }
+        let nx_r0 = s2 / s1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_stat_variance : Sample variance: sum((x_i - mean)^2) / n
+#   Inputs: nx_i0 = arr (ptr), nx_i1 = n
+#   Output: nx_r0 = variance
+# ------------------------------------------------------------------------------
+fn nx_stat_variance {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s1 <= 1 {
+        let nx_r0 = 0
+    } else {
+        # First compute mean
+        let s2 = 0
+        let s3 = 0
+        while s3 < s1 {
+            let s4 = load64 [s0 + s3 * 8]
+            let s2 = s2 + s4
+            let s3 = s3 + 1
+        }
+        let m = s2 / s1
+
+        # Sum squared deviations
+        let s2 = 0
+        let s3 = 0
+        while s3 < s1 {
+            let s4 = load64 [s0 + s3 * 8]
+            let s5 = s4 - m
+            let s6 = s5 * s5
+            let s2 = s2 + s6
+            let s3 = s3 + 1
+        }
+        let nx_r0 = s2 / s1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_stat_stdev : Standard deviation = floor(sqrt(variance))
+#   Inputs: nx_i0 = arr (ptr), nx_i1 = n
+#   Output: nx_r0 = standard deviation
+# ------------------------------------------------------------------------------
+fn nx_stat_stdev {
+    call nx_stat_variance
+    let nx_i0 = nx_r0
+    call nx_isqrt
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_stat_median : Median of array elements (requires copy or in-place sort)
+#   Inputs: nx_i0 = arr (ptr), nx_i1 = n
+#   Output: nx_r0 = median value
+# ------------------------------------------------------------------------------
+fn nx_stat_median {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    if s1 <= 0 {
+        let nx_r0 = 0
+    } else {
+        # Sort in-place using bubble sort
+        let s2 = 0
+        while s2 < s1 {
+            let s3 = 0
+            let s4 = s1 - 1
+            while s3 < s4 {
+                let s5 = load64 [s0 + s3 * 8]
+                let s6 = s3 + 1
+                let s7 = load64 [s0 + s6 * 8]
+                if s5 > s7 {
+                    store64 [s0 + s3 * 8] s7
+                    store64 [s0 + s6 * 8] s5
+                }
+                let s3 = s3 + 1
+            }
+            let s2 = s2 + 1
+        }
+        let s2 = s1 / 2
+        let nx_r0 = load64 [s0 + s2 * 8]
+    }
+}

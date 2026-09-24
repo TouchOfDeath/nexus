@@ -1,0 +1,67 @@
+# Test sys_fork and sys_execve in NEXUS native code
+
+let cmd_path = alloc 64
+let arg_file = alloc 64
+let argv_arr = alloc 32
+let envp_arr = alloc 16
+
+# "/usr/bin/paplay"
+store [cmd_path + 0] 47   # /
+store [cmd_path + 1] 117  # u
+store [cmd_path + 2] 115  # s
+store [cmd_path + 3] 114  # r
+store [cmd_path + 4] 47   # /
+store [cmd_path + 5] 98   # b
+store [cmd_path + 6] 105  # i
+store [cmd_path + 7] 110  # n
+store [cmd_path + 8] 47   # /
+store [cmd_path + 9] 112  # p
+store [cmd_path + 10] 97  # a
+store [cmd_path + 11] 112 # p
+store [cmd_path + 12] 108 # l
+store [cmd_path + 13] 97  # a
+store [cmd_path + 14] 121 # y
+store [cmd_path + 15] 0   # \0
+
+# "/tmp/test_jump.wav"
+store [arg_file + 0] 47   # /
+store [arg_file + 1] 116  # t
+store [arg_file + 2] 109  # m
+store [arg_file + 3] 112  # p
+store [arg_file + 4] 47   # /
+store [arg_file + 5] 116  # t
+store [arg_file + 6] 101  # e
+store [arg_file + 7] 115  # s
+store [arg_file + 8] 116  # t
+store [arg_file + 9] 95   # _
+store [arg_file + 10] 106 # j
+store [arg_file + 11] 117 # u
+store [arg_file + 12] 109 # m
+store [arg_file + 13] 112 # p
+store [arg_file + 14] 46  # .
+store [arg_file + 15] 119 # w
+store [arg_file + 16] 97  # a
+store [arg_file + 17] 118 # v
+store [arg_file + 18] 0   # \0
+
+# argv = [cmd_path, arg_file, NULL]
+store64 [argv_arr + 0] cmd_path
+store64 [argv_arr + 8] arg_file
+store64 [argv_arr + 16] 0
+
+# envp = [NULL]
+store64 [envp_arr + 0] 0
+
+print "[+] Forking child to play sound..."
+let pid = syscall0 57
+
+if pid == 0 {
+    # In child: execve("/usr/bin/paplay", argv, envp)
+    let res = syscall3 59, cmd_path, argv_arr, envp_arr
+    # Exit if exec fails
+    syscall1 60, 1
+}
+
+print "[+] Parent process continues immediately without blocking!"
+print "Child PID: "
+print pid

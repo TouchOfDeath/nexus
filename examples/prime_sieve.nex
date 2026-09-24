@@ -1,0 +1,31 @@
+include "stdlib/nstdlib.nex"
+
+let n = 100
+let sieve = alloc n
+store [sieve + 0] 1
+store [sieve + 1] 1
+
+let i = 2
+while i < n {
+    let is_p = load [sieve + i]
+    if is_p == 0 {
+        let m = i * i
+        while m < n {
+            store [sieve + m] 1
+            let m = m + i
+        }
+    }
+    let i = i + 1
+}
+
+let count = 0
+let i = 2
+while i < n {
+    let is_p = load [sieve + i]
+    if is_p == 0 {
+        let count = count + 1
+    }
+    let i = i + 1
+}
+print "primes below 100:"
+print count

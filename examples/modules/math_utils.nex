@@ -1,0 +1,18 @@
+# ==============================================================================
+#                 NEXUS MODULE: math_utils.nex
+#             Reusable mathematical routines for NEXUS programs
+# ==============================================================================
+
+fn calc_square {
+    let sq_res = in_val * in_val
+}
+
+fn calc_cube {
+    let cube_res = in_val * in_val * in_val
+}
+
+fn calc_hypotenuse_sq {
+    let leg_a_sq = leg_a * leg_a
+    let leg_b_sq = leg_b * leg_b
+    let hyp_sq = leg_a_sq + leg_b_sq
+}

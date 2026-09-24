@@ -1,0 +1,78 @@
+# ==============================================================================
+#                  NEXUS TEST: COMPLEX NUMBERS & FRACTAL ENGINE
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/complex.nex"
+
+print "=== Testing Complex Numbers Module ==="
+
+let cxOut = alloc 16
+
+# 1. Complex Addition: (3 + 4i) + (1 + 2i) = 4 + 6i
+let nx_i0 = 3
+let nx_i1 = 4
+let nx_i2 = 1
+let nx_i3 = 2
+let nx_i4 = cxOut
+call nx_cx_add
+
+let r_add = cxOut[0]
+let i_add = cxOut[1]
+assert_eq r_add, 4
+assert_eq i_add, 6
+
+# 2. Complex Subtraction: (5 + 7i) - (2 + 3i) = 3 + 4i
+let nx_i0 = 5
+let nx_i1 = 7
+let nx_i2 = 2
+let nx_i3 = 3
+let nx_i4 = cxOut
+call nx_cx_sub
+
+let r_sub = cxOut[0]
+let i_sub = cxOut[1]
+assert_eq r_sub, 3
+assert_eq i_sub, 4
+
+# 3. Gaussian Integer Multiplication: (2 + 3i) * (4 + 5i)
+# = (2*4 - 3*5) + (2*5 + 3*4)i = (8 - 15) + (10 + 12)i = -7 + 22i
+let nx_i0 = 2
+let nx_i1 = 3
+let nx_i2 = 4
+let nx_i3 = 5
+let nx_i4 = 1
+let nx_i5 = cxOut
+call nx_cx_mul
+
+let r_mul = cxOut[0]
+let i_mul = cxOut[1]
+assert_eq r_mul, -7
+assert_eq i_mul, 22
+
+# 4. Complex Magnitude Squared: |3 + 4i|^2 = 9 + 16 = 25
+let nx_i0 = 3
+let nx_i1 = 4
+call nx_cx_mag_sq
+assert_eq nx_r0, 25
+
+# 5. Mandelbrot Iteration
+# Point (0, 0) should never escape (reaches max_iter = 50)
+let nx_i0 = 0
+let nx_i1 = 0
+let nx_i2 = 50
+let nx_i3 = 1000
+call nx_mandelbrot_iter
+assert_eq nx_r0, 50
+
+# Point (2.0, 2.0) -> (2000, 2000) at scale 1000 should escape immediately (iter <= 2)
+let nx_i0 = 2000
+let nx_i1 = 2000
+let nx_i2 = 50
+let nx_i3 = 1000
+call nx_mandelbrot_iter
+let esc = nx_r0
+assert_eq esc, 1
+
+print "[SUCCESS] Complex Numbers Tests Passed!"
+call nx_assert_summary

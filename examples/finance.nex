@@ -1,0 +1,34 @@
+# ==============================================================================
+#                     NEXUS CORPORATE FINANCE ENGINE
+#                  Revenue, Cost & Profit/Loss Modeler
+# ==============================================================================
+
+let u = 450         # Units Sold (450 Enterprise Licenses)
+let p = 200         # Price per Unit ($200)
+let r = u * p       # Total Gross Revenue = $90,000
+
+let c = 32000       # Fixed Operating Costs ($32,000)
+let g = r - c       # Gross Operating Margin = $58,000
+
+let t = 12000       # Corporate Taxes & Compliance ($12,000)
+let n = g - t       # Net Profit After Tax = $46,000
+
+print "=================================================="
+print "        NEXUS CORPORATE FINANCIAL REPORT          "
+print "=================================================="
+print "Units Sold:"
+print u
+print "Unit Price ($):"
+print p
+print "Gross Revenue ($):"
+print r
+print "Operating Expenses ($):"
+print c
+print "Operating Margin ($):"
+print g
+print "Tax Liabilities ($):"
+print t
+print "NET BOTTOM-LINE PROFIT ($):"
+print n
+print "=================================================="
+print "Status: PROFITABLE QUARTER CONFIRMED"

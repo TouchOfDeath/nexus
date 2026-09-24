@@ -1,0 +1,145 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: complex.nex
+#              Complex Numbers & Fractal Geometry Engine (Fixed-Point)
+# ==============================================================================
+#
+# Represents complex numbers z = a + bi as pairs of 64-bit coordinates [re, im].
+# Supports exact integer Gaussian arithmetic as well as fixed-point scaling
+# for numerical stability and real-time fractal iteration.
+#
+# CALLING CONVENTION:
+#   Inputs : nx_i0, nx_i1, nx_i2, nx_i3, nx_i4, nx_i5
+#   Result : nx_r0
+#   Scratch: s0..s7 (clobbered)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_cx_add : (ar + ai*i) + (br + bi*i)
+#   Inputs: nx_i0 = ar, nx_i1 = ai, nx_i2 = br, nx_i3 = bi, nx_i4 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_cx_add {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let s5 = s0 + s2
+    let s6 = s1 + s3
+    store64 [s4 + 0] s5
+    store64 [s4 + 8] s6
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_cx_sub : (ar + ai*i) - (br + bi*i)
+#   Inputs: nx_i0 = ar, nx_i1 = ai, nx_i2 = br, nx_i3 = bi, nx_i4 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_cx_sub {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let s5 = s0 - s2
+    let s6 = s1 - s3
+    store64 [s4 + 0] s5
+    store64 [s4 + 8] s6
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_cx_mul : Complex Multiplication: (ar + ai*i) * (br + bi*i)
+#   Scaled for fixed-point arithmetic: res = ((ac - bd) / scale) + ((ad + bc) / scale)*i
+#   If scale == 1: exact Gaussian integer multiplication.
+#   Inputs: nx_i0 = ar, nx_i1 = ai, nx_i2 = br, nx_i3 = bi, nx_i4 = scale, nx_i5 = out_ptr
+# ------------------------------------------------------------------------------
+fn nx_cx_mul {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = nx_i3
+    let s4 = nx_i4
+    let s5 = nx_i5
+
+    # Real part: (ar * br - ai * bi) / scale
+    let s6 = s0 * s2
+    let s7 = s1 * s3
+    let d = s6 - s7
+    if s4 > 1 {
+        let d = d / s4
+    }
+    store64 [s5 + 0] d
+
+    # Imag part: (ar * bi + ai * br) / scale
+    let s6 = s0 * s3
+    let s7 = s1 * s2
+    let d = s6 + s7
+    if s4 > 1 {
+        let d = d / s4
+    }
+    store64 [s5 + 8] d
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_cx_mag_sq : Magnitude Squared: |z|^2 = re^2 + im^2
+#   Inputs: nx_i0 = re, nx_i1 = im
+#   Output: nx_r0 = re^2 + im^2
+# ------------------------------------------------------------------------------
+fn nx_cx_mag_sq {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = s0 * s0
+    let s3 = s1 * s1
+    let nx_r0 = s2 + s3
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_mandelbrot_iter : Mandelbrot escape-time iteration for coordinate (cr, ci)
+#   Iterates z = z^2 + c until |z|^2 > 4 * scale^2 or max_iter reached.
+#   Inputs: nx_i0 = cr (fixed-point), nx_i1 = ci (fixed-point)
+#           nx_i2 = max_iter, nx_i3 = scale (e.g. 1000)
+#   Output: nx_r0 = escape iteration count (in range 1..max_iter)
+# ------------------------------------------------------------------------------
+fn nx_mandelbrot_iter {
+    let m_cr = nx_i0
+    let m_ci = nx_i1
+    let m_max = nx_i2
+    let m_scale = nx_i3
+
+    let zr = 0
+    let zi = 0
+    let iter = 0
+    let nx_r0 = m_max
+
+    let threshold = 4 * m_scale
+    let threshold = threshold * m_scale
+
+    let escaped = 0
+    while iter < m_max {
+        if escaped == 0 {
+            # zr2 = zr * zr, zi2 = zi * zi
+            let zr2 = zr * zr
+            let zi2 = zi * zi
+            let mag = zr2 + zi2
+            if mag > threshold {
+                let nx_r0 = iter
+                let escaped = 1
+            } else {
+                # next_zr = (zr2 - zi2) / scale + cr
+                let diff = zr2 - zi2
+                let next_zr = diff / m_scale
+                let next_zr = next_zr + m_cr
+
+                # next_zi = (2 * zr * zi) / scale + ci
+                let prod = 2 * zr
+                let prod = prod * zi
+                let next_zi = prod / m_scale
+                let next_zi = next_zi + m_ci
+
+                let zr = next_zr
+                let zi = next_zi
+                let iter = iter + 1
+            }
+        } else {
+            let iter = m_max
+        }
+    }
+}

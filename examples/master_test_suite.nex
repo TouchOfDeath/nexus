@@ -1,0 +1,151 @@
+# ==============================================================================
+#                 NEXUS MASTER REGRESSION TEST SUITE (STAGE 3)
+#        Covers Arithmetic, Chaining, Loops, Nested Blocks, and Functions
+# ==============================================================================
+
+fn square {
+    let q = v * v
+}
+
+fn clamp {
+    if w > 50 {
+        let w = 50
+        return
+    }
+}
+
+# 1. Division & Modulo
+let a = 100 / 4
+print a
+
+let b = 100 % 30
+print b
+
+# 2. Expression Chaining & Multi-Division
+let c = 5 + 3 * 10 - 4 / 2
+print c
+
+let d = 50 / 2 / 5
+print d
+
+# 3. Basic While Loop
+let s = 0
+let i = 1
+while i <= 5 {
+    let s = s + i
+    let i = i + 1
+}
+print s
+
+# 4. Conditionals & Inversions
+let x = 42
+if x == 42 {
+    print "If Check: Equal (42 == 42)"
+}
+
+let y = 100
+if y >= 50 {
+    print "If-Else Check 1: Greater/Equal Branch (Expected)"
+} else {
+    print "If-Else Check 1: Failed"
+}
+
+let z = 20
+if z >= 50 {
+    print "If-Else Check 2: Failed"
+} else {
+    print "If-Else Check 2: Else Branch (Expected)"
+}
+
+if a != 99 {
+    print "Not Equal Check (25 != 99)"
+}
+
+# 5. Countdown Loop
+let k = 3
+while k > 0 {
+    print k
+    let k = k - 1
+}
+print "Liftoff!"
+
+# 6. Nested While Loops (3 x 4 grid = 12)
+let r = 1
+let t = 0
+while r <= 3 {
+    let j = 1
+    while j <= 4 {
+        let t = t + 1
+        let j = j + 1
+    }
+    let r = r + 1
+}
+print t
+
+# 7. Nested If/Else Inside While (1..6: 3 even, 3 odd)
+let u = 1
+let e = 0
+let o = 0
+while u <= 6 {
+    let m = u % 2
+    if m == 0 {
+        let e = e + 1
+    } else {
+        let o = o + 1
+    }
+    let u = u + 1
+}
+print e
+print o
+
+# 8. Functions & Subroutines
+let v = 7
+call square
+print q
+
+let w = 99
+call clamp
+print w
+
+# 9. Stage 4 Heap Memory & Array Operations
+let p = alloc 256
+store [p + 0] 42
+store [p + 1] 84
+let a = load [p + 0]
+print a
+let b = load [p + 1]
+print b
+store64 [p + 8] 123456789
+let x = load64 [p + 8]
+print x
+let i = 2
+store64 [p + i * 8] 777
+let y = load64 [p + i * 8]
+print y
+let k = load [p + 0] + 10 * 2
+print k
+
+# 10. Stage 4 Native File I/O
+let f = file_create "stage4_master_io.txt"
+let m = alloc 32
+store [m + 0] 78
+store [m + 1] 69
+store [m + 2] 88
+store [m + 3] 85
+store [m + 4] 83
+store [m + 5] 52
+file_write f m 6
+file_close f
+
+let g = file_open "stage4_master_io.txt"
+let r = alloc 32
+let n = file_read g r 32
+file_close g
+print n
+let c = load [r + 0]
+print c
+let d = load [r + 5]
+print d
+
+print "=== ALL TESTS COMPLETED ==="
+

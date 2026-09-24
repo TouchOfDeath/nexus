@@ -1,0 +1,36 @@
+{
+  "name": "vscode-nexus",
+  "displayName": "NEXUS Language Support",
+  "description": "Syntax highlighting for the NEXUS native self-hosting systems language (.nex files)",
+  "version": "1.0.0",
+  "publisher": "nexus-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "nexus",
+        "aliases": [
+          "NEXUS",
+          "nexus"
+        ],
+        "extensions": [
+          ".nex"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nexus",
+        "scopeName": "source.nexus",
+        "path": "./syntaxes/nexus.tmLanguage.json"
+      }
+    ]
+  }
+}

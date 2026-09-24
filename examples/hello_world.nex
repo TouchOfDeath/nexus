@@ -1,0 +1,6 @@
+# Minimal Hello World Test
+print "===================================="
+print "Hello, Bare-Metal x86-64 World!"
+print "Zero Percent C#, Zero Percent .NET!"
+print "Compiled Ahead-Of-Time by NEXUS"
+print "===================================="

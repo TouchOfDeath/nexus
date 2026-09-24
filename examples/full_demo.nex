@@ -1,0 +1,45 @@
+# NEXUS Full Feature Demonstration (v1.5 Hardened)
+# Native 64-bit AOT Compiler (0% C# / 0% .NET Runtime)
+
+let a = 12
+let b = 8
+let c = a + b
+let d = c * 5
+let e = d - 25
+let p = e + 100
+let q = p * 2
+let z = q - 50
+
+# Negative and Zero testing (Hardened signed itoa)
+let m = 10 - 35
+let n = m + 25
+let k = 0 - 500
+
+print "=========================================="
+print "      NEXUS NATIVE AOT LANGUAGE v1.5      "
+print "   0% C#  -  0% .NET Runtime  -  Pure x64 "
+print "=========================================="
+print "Running Arithmetic Pipeline:"
+print "  a = 12"
+print "  b = 8"
+print "  c = a + b (Expected: 20):"
+print c
+print "  d = c * 5 (Expected: 100):"
+print d
+print "  e = d - 25 (Expected: 75):"
+print e
+print "  p = e + 100 (Expected: 175):"
+print p
+print "  q = p * 2 (Expected: 350):"
+print q
+print "  z = q - 50 (Expected: 300):"
+print z
+print "Testing Signed & Zero Arithmetic:"
+print "  m = 10 - 35 (Expected: -25):"
+print m
+print "  n = m + 25 (Expected: 0):"
+print n
+print "  k = 0 - 500 (Expected: -500):"
+print k
+print "=========================================="
+print "Pipeline execution complete! Status: OK"

@@ -1,0 +1,49 @@
+# Flappy Bird animated sprite (2 frames: down and up)
+name: flappy_bird_down
+palette:
+  . = transparent
+  K = #000000
+  Y = #f7c020
+  L = #ffea78
+  W = #ffffff
+  E = #000000
+  O = #f75a00
+  R = #d03000
+pixels:
+  . . . . . K K K K K K . . . . . .
+  . . . K K Y Y Y Y Y Y K . . . . .
+  . . K Y Y Y Y Y Y W W W K . . . .
+  . K Y Y Y Y Y Y W W W E W K . . .
+  . K Y Y K K K K W W W E W K K K .
+  K Y Y K L L L L K W W W K O O O K
+  K Y Y K L L L L K K K K O O O O K
+  K Y Y K L L L L K Y Y Y O R R R K
+  K Y Y Y K K K K Y Y Y Y O O O O K
+  . K Y Y Y Y Y Y Y Y Y Y K K K K .
+  . . K K Y Y Y Y Y Y Y K . . . . .
+  . . . . K K K K K K K . . . . . .
+
+---
+name: flappy_bird_up
+palette:
+  . = transparent
+  K = #000000
+  Y = #f7c020
+  L = #ffea78
+  W = #ffffff
+  E = #000000
+  O = #f75a00
+  R = #d03000
+pixels:
+  . . . K K K K K . . . . . . . . .
+  . . K L L L L L K K K K K K . . .
+  . K L L L L L L K Y Y Y Y Y K . .
+  . K L L L L L L K Y Y W W W K . .
+  . . K K K K K K Y Y W W E W K . .
+  . K Y Y Y Y Y Y Y Y W W E W K K .
+  K Y Y Y Y Y Y Y Y Y W W W K O O K
+  K Y Y Y Y Y Y Y Y Y K K K O O O K
+  K Y Y Y Y Y Y Y Y Y Y Y Y O R R K
+  . K Y Y Y Y Y Y Y Y Y Y K O O O K
+  . . K K Y Y Y Y Y Y Y K . K K K .
+  . . . . K K K K K K K . . . . . .

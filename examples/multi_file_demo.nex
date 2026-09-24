@@ -1,0 +1,31 @@
+# ==============================================================================
+#                 NEXUS MULTI-FILE ARCHITECTURE DEMO
+#       Demonstrating source-level modular inclusion across directories,
+#       function sharing, and multi-file cross-call execution.
+# ==============================================================================
+
+include "modules/display_utils.nex"
+include "modules/math_utils.nex"
+
+# Display header from display_utils module
+call show_banner
+
+# Test math functions from math_utils module
+let in_val = 7
+call calc_square
+print "Square of 7 (expected 49):"
+print sq_res
+
+let in_val = 5
+call calc_cube
+print "Cube of 5 (expected 125):"
+print cube_res
+
+let leg_a = 3
+let leg_b = 4
+call calc_hypotenuse_sq
+print "Hypotenuse squared for 3,4 (expected 25):"
+print hyp_sq
+
+# Display footer from display_utils module
+call show_footer

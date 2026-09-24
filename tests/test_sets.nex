@@ -1,0 +1,122 @@
+# ==============================================================================
+#                      NEXUS TEST: SET THEORY MODULE
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/sets.nex"
+
+print "=== Testing Set Theory Module ==="
+
+let setA = [1, 3, 5, 7, 9]
+let setB = [3, 4, 5, 6, 7]
+let outSet = alloc 128
+
+# 1. Membership (Binary search)
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = 5
+call nx_set_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = 4
+call nx_set_contains
+assert_eq nx_r0, 0
+
+# 2. Set Union (A U B) -> [1, 3, 4, 5, 6, 7, 9] (7 elements)
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = setB
+let nx_i3 = 5
+let nx_i4 = outSet
+call nx_set_union
+assert_eq nx_r0, 7
+let u0 = outSet[0]
+let u1 = outSet[1]
+let u2 = outSet[2]
+let u6 = outSet[6]
+assert_eq u0, 1
+assert_eq u1, 3
+assert_eq u2, 4
+assert_eq u6, 9
+
+# 3. Set Intersection (A n B) -> [3, 5, 7] (3 elements)
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = setB
+let nx_i3 = 5
+let nx_i4 = outSet
+call nx_set_intersect
+assert_eq nx_r0, 3
+let i0 = outSet[0]
+let i1 = outSet[1]
+let i2 = outSet[2]
+assert_eq i0, 3
+assert_eq i1, 5
+assert_eq i2, 7
+
+# 4. Set Difference (A \ B) -> [1, 9] (2 elements)
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = setB
+let nx_i3 = 5
+let nx_i4 = outSet
+call nx_set_diff
+assert_eq nx_r0, 2
+let d0 = outSet[0]
+let d1 = outSet[1]
+assert_eq d0, 1
+assert_eq d1, 9
+
+# 5. Symmetric Difference A Delta B -> [1, 4, 6, 9] (4 elements)
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = setB
+let nx_i3 = 5
+let nx_i4 = outSet
+call nx_set_sym_diff
+assert_eq nx_r0, 4
+let s0_val = outSet[0]
+let s1_val = outSet[1]
+let s2_val = outSet[2]
+let s3_val = outSet[3]
+assert_eq s0_val, 1
+assert_eq s1_val, 4
+assert_eq s2_val, 6
+assert_eq s3_val, 9
+
+# 6. Subset test
+let sub = [3, 5]
+let nx_i0 = sub
+let nx_i1 = 2
+let nx_i2 = setA
+let nx_i3 = 5
+call nx_set_is_subset
+assert_eq nx_r0, 1
+
+let nx_i0 = setB
+let nx_i1 = 5
+let nx_i2 = setA
+let nx_i3 = 5
+call nx_set_is_subset
+assert_eq nx_r0, 0
+
+# 7. Disjoint test
+let disj = [20, 30]
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = disj
+let nx_i3 = 2
+call nx_set_is_disjoint
+assert_eq nx_r0, 1
+
+let nx_i0 = setA
+let nx_i1 = 5
+let nx_i2 = setB
+let nx_i3 = 5
+call nx_set_is_disjoint
+assert_eq nx_r0, 0
+
+print "[SUCCESS] Set Theory Tests Passed!"
+call nx_assert_summary
