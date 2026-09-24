@@ -45,9 +45,12 @@
 ---
 
 ## 3. Work In Progress / Next Roadmap Goals
-1. **Quiet Test Runner**: Add `--quiet` / `-q` flag to `./nexus test` for fast, low-token verification.
-2. **2D Matrix Literals & Native Neural Net**: Build a pure NEXUS 2-layer perceptron demo (`examples/neural_network.nex`).
-3. **String Interpolation**: Implement `print_fmt "Epoch {e}: Loss = {l}"`.
+1. **Cross-Platform & Architecture Expansion (Upcoming Focus)**:
+   - **Track A: Native Windows Graphics (`stdlib/win32_window.nex`)**: Implement Win32 GDI windowing (`USER32.dll` / `GDI32.dll` via `CreateWindowExA` and `BitBlt`/`StretchDIBits`) so all 37 games, 3D raycasters, and simulations run natively on Windows without X11.
+   - **Track B: macOS & ARM64 Architecture Pipeline**: Design the Mach-O 64-bit header layout, ARM64 32-bit fixed-width instruction encoder, `libSystem.dylib` syscall bridge, and ad-hoc code-signing pipeline for Apple Silicon.
+2. **Quiet Test Runner**: Add `--quiet` / `-q` flag to `./nexus test` for fast, low-token verification.
+3. **2D Matrix Literals & Native Neural Net**: Build a pure NEXUS 2-layer perceptron demo (`examples/neural_network.nex`).
+4. **String Ergonomics**: Implement inline format string helper (`print_fmt` or `print_raw`).
 
 ---
 
