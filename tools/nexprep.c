@@ -93,7 +93,7 @@ static int is_nexus_keyword(const char *tok) {
         "break", "continue", "alloc", "store", "store64", "store32", "store16",
         "load", "load64", "load32", "load16", "fload", "fstore",
         "file_open", "file_create", "file_read", "file_write", "file_close",
-        "assert_eq", "assert_ne", NULL
+        "assert_eq", "assert_ne", "os_argc", "os_argv", NULL
     };
     for (int i = 0; kw[i]; i++) {
         if (!strcmp(tok, kw[i])) return 1;
@@ -2294,7 +2294,8 @@ static int desugar_constant_folding(const char *in, char *out, size_t cap) {
         !strncmp(rhs, "fsqrt", 5) || !strncmp(rhs, "fneg", 4) ||
         !strncmp(rhs, "ftoi", 4) || !strncmp(rhs, "itof", 4) ||
         !strncmp(rhs, "load", 4) || !strncmp(rhs, "alloc", 5) ||
-        !strncmp(rhs, "file_", 5) || !strncmp(rhs, "syscall", 7)) {
+        !strncmp(rhs, "file_", 5) || !strncmp(rhs, "syscall", 7) ||
+        !strncmp(rhs, "os_argc", 7) || !strncmp(rhs, "os_argv", 7)) {
         return 0;
     }
 

@@ -658,7 +658,7 @@ fn parse_syscall_args {
         } else {
             call parse_ident
             call resolve_var
-            let b = 73
+            let b = 76
             call emit_b
             let b = 139
             call emit_b
@@ -1585,6 +1585,40 @@ while r == 1 {
                     if c == 34 {
                         let g = 6
                     }
+                    # os_argc (111 115 95 97 114 103 99) -> g=19
+                    # os_argv (111 115 95 97 114 103 118) -> g=20
+                    if c == 111 {
+                        let k = i + 1
+                        let n = load [s + k]
+                        if n == 115 {
+                            let k = i + 2
+                            let n = load [s + k]
+                            if n == 95 {
+                                let k = i + 3
+                                let n = load [s + k]
+                                if n == 97 {
+                                    let k = i + 4
+                                    let n = load [s + k]
+                                    if n == 114 {
+                                        let k = i + 5
+                                        let n = load [s + k]
+                                        if n == 103 {
+                                            let k = i + 6
+                                            let n = load [s + k]
+                                            if n == 99 {
+                                                let g = 19
+                                                let i = i + 7
+                                            }
+                                            if n == 118 {
+                                                let g = 20
+                                                let i = i + 7
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     # --- CASE 1: 'alloc <size>' ---
                     if g == 1 {
@@ -2303,6 +2337,87 @@ while r == 1 {
                         let b = 192
                         call emit_b
                         call st_xmm0
+                    }
+                    # --- CASE 19: 'os_argc' - read argc from Linux entry stack ---
+                    if g == 19 {
+                        # lea r8, [rbp + 0x828] (4C 8D 85 28 08 00 00)
+                        let b = 76
+                        call emit_b
+                        let b = 141
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = 2088
+                        call emit_d
+                        # mov rax, [r8] (49 8B 00)
+                        let b = 73
+                        call emit_b
+                        let b = 139
+                        call emit_b
+                        let b = 0
+                        call emit_b
+                    }
+                    # --- CASE 20: 'os_argv <idx>' - read argv[idx] pointer from entry stack ---
+                    if g == 20 {
+                        call skip_ws
+                        let c = load [s + i]
+                        # lea r8, [rbp + 0x830] (argv[0] = rbp + 0x828 + 8) (4C 8D 85 30 08 00 00)
+                        let b = 76
+                        call emit_b
+                        let b = 141
+                        call emit_b
+                        let b = 133
+                        call emit_b
+                        let v = 2096
+                        call emit_d
+                        if c <= 57 {
+                            call parse_uint
+                            # idx is immediate: r8 += u * 8
+                            let v = u * 8
+                            # add r8, imm32 (49 81 C0 <v32>)
+                            let b = 73
+                            call emit_b
+                            let b = 129
+                            call emit_b
+                            let b = 192
+                            call emit_b
+                            call emit_d
+                        } else {
+                            call parse_ident
+                            call resolve_var
+                            # mov r9, [rbp + w] (4C 8B 8D <w32>)
+                            let b = 76
+                            call emit_b
+                            let b = 139
+                            call emit_b
+                            let b = 141
+                            call emit_b
+                            let v = w
+                            call emit_d
+                            # shl r9, 3 (49 C1 E1 03)
+                            let b = 73
+                            call emit_b
+                            let b = 193
+                            call emit_b
+                            let b = 225
+                            call emit_b
+                            let b = 3
+                            call emit_b
+                            # add r8, r9 (4D 01 C8)
+                            let b = 77
+                            call emit_b
+                            let b = 1
+                            call emit_b
+                            let b = 200
+                            call emit_b
+                        }
+                        # mov rax, [r8] (49 8B 00)
+                        let b = 73
+                        call emit_b
+                        let b = 139
+                        call emit_b
+                        let b = 0
+                        call emit_b
                     }
                     # --- CASE 0: Standard Arithmetic / Assignment Expression ---
                     if g == 0 {

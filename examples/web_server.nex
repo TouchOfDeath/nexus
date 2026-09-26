@@ -1,0 +1,126 @@
+# ==============================================================================
+#                 NEXUS NATIVE HTTP/1.1 WEB SERVER SHOWCASE
+#                  examples/web_server.nex - Bare-Metal Web App
+#       0% C - 0% libc - 0% Node.js - 100% Native Linux Kernel Syscalls
+# ==============================================================================
+
+include "stdlib/http.nex"
+
+# HTML Dashboard Payload (uses single quotes to keep string clean)
+let html_head = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>NEXUS Web</title><style>body{background:#0d1117;color:#c9d1d9;font-family:sans-serif;padding:30px;max-width:640px;margin:auto}h1{color:#58a6ff}.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin:16px 0}.badge{background:#238636;color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;margin:2px}.val{color:#79c0ff;font-family:monospace}a{color:#58a6ff}</style></head><body>"
+
+let html_body = "<h1>&#x26A1; NEXUS Web Server</h1><p>Native HTTP/1.1 Engine &bull; <span class='badge'>0% libc</span><span class='badge'>Direct Syscalls</span><span class='badge'>v5.7</span></p><div class='card'><h3>System Telemetry</h3><p>Architecture: <span class='val'>x86-64 / arm64</span></p><p>Protocol: <span class='val'>Linux sys_socket</span></p><p>Status: <span class='val' style='color:#3fb950;'>&#x25CF; Online</span></p></div><div class='card'><h3>API Endpoints</h3><p><a href='/api/status'>GET /api/status</a> - JSON Telemetry</p><p><a href='/api/calc'>GET /api/calc</a> - Fibonacci Compute</p></div><p style='color:#484f58;font-size:11px'>NEXUS Compiler &bull; Bare-Metal Systems</p></body></html>"
+
+# JSON Response Templates (Single-quotes converted to double-quotes at runtime)
+let json_status_tmpl = "{'status':'online','server':'NEXUS-Native-HTTP/1.0','architecture':'x86-64','runtime':'0% libc - Direct Kernel Execution','language':'NEXUS v5.7'}"
+
+let json_calc_tmpl = "{'operation':'fibonacci_sequence','terms':10,'result':[0,1,1,2,3,5,8,13,21,34],'execution':'pure_native_registers'}"
+
+# 404 Response
+let html_404 = "<!DOCTYPE html><html><head><title>404</title></head><body style='background:#0d1117;color:#f85149;padding:40px;font-family:sans-serif;text-align:center;'><h1>404 Not Found</h1><p style='color:#8b949e'>Route not configured.</p><p><a href='/' style='color:#58a6ff'>Return to Home</a></p></body></html>"
+
+# ------------------------------------------------------------------------------
+# Server Entry Point
+# ------------------------------------------------------------------------------
+print "=================================================="
+print "       NEXUS NATIVE HTTP/1.1 WEB SERVER          "
+print "   0% C - 0% libc - 100% Direct Kernel Execution "
+print "=================================================="
+
+call http_init_server
+
+print ""
+print "[*] Open in your browser: http://localhost:8080/"
+print "[*] Or query with curl:   curl -i http://localhost:8080/api/status"
+print "[*] Server is active and waiting for incoming requests..."
+print "--------------------------------------------------"
+
+# Main Event Loop (Serves requests continuously)
+let max_requests = 1000
+let req_num = 0
+
+while http_is_running == 1 {
+    call http_accept_client
+
+    if http_client_fd >= 3 {
+        let req_num = req_num + 1
+        print "[HTTP] Incoming Request #"
+        print req_num
+
+        call http_read_request
+
+        # Determine Route from Request Buffer:
+        # Offset 4 is start of path in "GET <path> ..."
+        let c4 = load [http_req_buf + 4]
+        let c5 = load [http_req_buf + 5]
+        let c6 = load [http_req_buf + 6]
+        let c7 = load [http_req_buf + 7]
+        let c8 = load [http_req_buf + 8]
+        let c9 = load [http_req_buf + 9]
+
+        let routed = 0
+
+        # Route 1: GET /api/...
+        if c4 == 47 {
+            if c5 == 97 {
+                if c6 == 112 {
+                    if c7 == 105 {
+                        if c8 == 47 {
+                            if c9 == 115 {
+                                # Matched /api/s... -> /api/status
+                                call http_send_json_headers
+                                let http_json_src = json_status_tmpl
+                                call http_prepare_json
+                                let wr = syscall3 1, http_client_fd, http_json_buf, http_json_len
+                                print "       -> Dispatched: /api/status (JSON 200 OK)"
+                                let routed = 1
+                            }
+                            if c9 == 99 {
+                                # Matched /api/c... -> /api/calc
+                                call http_send_json_headers
+                                let http_json_src = json_calc_tmpl
+                                call http_prepare_json
+                                let wr = syscall3 1, http_client_fd, http_json_buf, http_json_len
+                                print "       -> Dispatched: /api/calc (JSON 200 OK)"
+                                let routed = 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        # Route 2: GET / (Root Dashboard)
+        # / followed by ' ' (32)
+        if routed == 0 {
+            if c4 == 47 {
+                if c5 == 32 {
+                    call http_send_html_headers
+                    let http_str_ptr = html_head
+                    call http_send_str
+                    let http_str_ptr = html_body
+                    call http_send_str
+                    print "       -> Dispatched: / (HTML Dashboard 200 OK)"
+                    let routed = 1
+                }
+            }
+        }
+
+        # Route 3: 404 Not Found
+        if routed == 0 {
+            call http_send_404_headers
+            let http_str_ptr = html_404
+            call http_send_str
+            print "       -> Dispatched: 404 Not Found"
+        }
+
+        call http_close_client
+    }
+
+    if req_num >= max_requests {
+        let http_is_running = 0
+    }
+}
+
+call http_close_server
+print "[+] Server shut down cleanly."

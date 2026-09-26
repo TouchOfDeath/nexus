@@ -9,6 +9,7 @@ core
 # Root compilation outputs
 /app.exe
 /app.elf
+/app.macho
 /prologue.bin
 /code.nex
 
@@ -19,3 +20,5 @@ compiler/test_io_out.txt
 compiler/vars_test.dat
 compiler/app.exe
 compiler/app.elf
+compiler/app.macho
+compiler/app.macho.s

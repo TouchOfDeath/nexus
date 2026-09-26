@@ -1,0 +1,249 @@
+# ==============================================================================
+#                       NEXUS STANDARD LIBRARY: HTTP SERVER
+#                 stdlib/http.nex - Pure Native HTTP/1.1 Engine
+#      0% C - 0% libc - 100% Raw Linux Syscalls & Direct TCP Socket Networking
+# ==============================================================================
+
+# Global state for HTTP server
+let http_server_fd = 0
+let http_client_fd = 0
+let http_port = 8080
+let http_req_count = 0
+let http_req_len = 0
+let http_is_running = 1
+
+# Socket address buffers
+let http_sock_addr = alloc 16
+let http_client_addr = alloc 16
+let http_client_len = alloc 8
+let http_req_buf = alloc 2048
+let http_crlf = alloc 4
+let http_json_buf = alloc 2048
+let http_json_len = 0
+let http_json_src = 0
+let http_str_ptr = 0
+let http_opt_reuse = alloc 8
+
+# Initialize CRLF bytes
+store [http_crlf + 0] 13
+store [http_crlf + 1] 10
+store [http_crlf + 2] 0
+
+# Initialize SO_REUSEADDR option value (int 1)
+store [http_opt_reuse + 0] 1
+store [http_opt_reuse + 1] 0
+store [http_opt_reuse + 2] 0
+store [http_opt_reuse + 3] 0
+
+# Constant headers
+let http_str_200 = "HTTP/1.1 200 OK"
+let http_str_404 = "HTTP/1.1 404 Not Found"
+let http_str_ctype_html = "Content-Type: text/html; charset=UTF-8"
+let http_str_ctype_json = "Content-Type: application/json; charset=UTF-8"
+let http_str_server = "Server: NEXUS-Native/1.0 (Linux x86-64 direct syscalls)"
+let http_str_conn_close = "Connection: close"
+
+# ------------------------------------------------------------------------------
+# http_init_server: Creates, binds, and listens on http_port (default 8080)
+# ------------------------------------------------------------------------------
+fn http_init_server {
+    # 1. Create IPv4 TCP Stream Socket (AF_INET=2, SOCK_STREAM=1, protocol=0)
+    let http_server_fd = syscall3 41, 2, 1, 0
+    if http_server_fd < 3 {
+        print "[-] Error: Failed to create socket"
+        syscall1 60, 1
+    }
+
+    # 1b. Enable SO_REUSEADDR (SOL_SOCKET=1, SO_REUSEADDR=2, optval=&http_opt_reuse, optlen=4)
+    let r_res = syscall5 54, http_server_fd, 1, 2, http_opt_reuse, 4
+
+    # 2. Configure sockaddr_in structure (16 bytes)
+    # sin_family = AF_INET (2)
+    store [http_sock_addr + 0] 2
+    store [http_sock_addr + 1] 0
+
+    # sin_port in big-endian network byte order
+    let p_hi = http_port / 256
+    let p_lo = http_port % 256
+    store [http_sock_addr + 2] p_hi
+    store [http_sock_addr + 3] p_lo
+
+    # sin_addr = 0.0.0.0 (INADDR_ANY)
+    store [http_sock_addr + 4] 0
+    store [http_sock_addr + 5] 0
+    store [http_sock_addr + 6] 0
+    store [http_sock_addr + 7] 0
+
+    # 3. Bind socket to address
+    let b_res = syscall3 49, http_server_fd, http_sock_addr, 16
+    if b_res != 0 {
+        print "[-] Error: Failed to bind to port"
+        syscall1 60, 1
+    }
+
+    # 4. Listen on socket (backlog = 16)
+    let l_res = syscall2 50, http_server_fd, 16
+    if l_res != 0 {
+        print "[-] Error: Failed to listen on socket"
+        syscall1 60, 1
+    }
+
+    print "[+] NEXUS HTTP Server listening on port:"
+    print http_port
+}
+
+# ------------------------------------------------------------------------------
+# http_accept_client: Blocks and waits for incoming client connection
+# ------------------------------------------------------------------------------
+fn http_accept_client {
+    store64 [http_client_len + 0] 16
+    let http_client_fd = syscall3 43, http_server_fd, http_client_addr, http_client_len
+    if http_client_fd >= 3 {
+        let http_req_count = http_req_count + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# http_read_request: Reads incoming HTTP request bytes into http_req_buf
+# ------------------------------------------------------------------------------
+fn http_read_request {
+    let http_req_len = syscall3 0, http_client_fd, http_req_buf, 1024
+    if http_req_len > 0 {
+        # Null-terminate buffer
+        store [http_req_buf + http_req_len] 0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# http_send_crlf: Sends \r\n to active client socket
+# ------------------------------------------------------------------------------
+fn http_send_crlf {
+    let wr = syscall3 1, http_client_fd, http_crlf, 2
+}
+
+# ------------------------------------------------------------------------------
+# http_send_str: Sends null-terminated string at http_str_ptr to active client
+# ------------------------------------------------------------------------------
+fn http_send_str {
+    if http_client_fd >= 3 {
+        let p = http_str_ptr
+        let l_count = 0
+        let ch = load [p + 0]
+        while ch != 0 {
+            let l_count = l_count + 1
+            let ch = load [p + l_count]
+        }
+        let wr = syscall3 1, http_client_fd, http_str_ptr, l_count
+    }
+}
+
+# ------------------------------------------------------------------------------
+# http_prepare_json: Transforms template string with single quotes (') into
+# valid RFC-8259 JSON with double quotes (") in http_json_buf
+# ------------------------------------------------------------------------------
+fn http_prepare_json {
+    let p_src = http_json_src
+    let cur_len = 0
+    let ch = load [p_src + 0]
+    while ch != 0 {
+        if ch == 39 {
+            store [http_json_buf + cur_len] 34
+        } else {
+            store [http_json_buf + cur_len] ch
+        }
+        let cur_len = cur_len + 1
+        let ch = load [p_src + cur_len]
+    }
+    store [http_json_buf + cur_len] 0
+    let http_json_len = cur_len
+}
+
+# ------------------------------------------------------------------------------
+# http_send_html_headers: Emits standard HTTP 200 OK headers for HTML
+# ------------------------------------------------------------------------------
+fn http_send_html_headers {
+    let http_str_ptr = http_str_200
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_ctype_html
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_server
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_conn_close
+    call http_send_str
+    call http_send_crlf
+
+    # Double CRLF to terminate HTTP headers
+    call http_send_crlf
+}
+
+# ------------------------------------------------------------------------------
+# http_send_json_headers: Emits standard HTTP 200 OK headers for JSON
+# ------------------------------------------------------------------------------
+fn http_send_json_headers {
+    let http_str_ptr = http_str_200
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_ctype_json
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_server
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_conn_close
+    call http_send_str
+    call http_send_crlf
+
+    call http_send_crlf
+}
+
+# ------------------------------------------------------------------------------
+# http_send_404_headers: Emits HTTP 404 Not Found headers
+# ------------------------------------------------------------------------------
+fn http_send_404_headers {
+    let http_str_ptr = http_str_404
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_ctype_html
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_server
+    call http_send_str
+    call http_send_crlf
+
+    let http_str_ptr = http_str_conn_close
+    call http_send_str
+    call http_send_crlf
+
+    call http_send_crlf
+}
+
+# ------------------------------------------------------------------------------
+# http_close_client: Closes current client socket
+# ------------------------------------------------------------------------------
+fn http_close_client {
+    if http_client_fd >= 3 {
+        let cl = syscall1 3, http_client_fd
+        let http_client_fd = 0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# http_close_server: Shuts down listening server socket
+# ------------------------------------------------------------------------------
+fn http_close_server {
+    if http_server_fd >= 3 {
+        let cl = syscall1 3, http_server_fd
+        let http_server_fd = 0
+    }
+}
