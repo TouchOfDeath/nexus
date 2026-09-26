@@ -132,8 +132,32 @@ let f_val = itof 42         # integer -> float (42.0)
 let i_val = ftoi f_val      # float -> integer truncate (42)
 ```
 
-#### Infix Syntax Sugar (via `nexprep`)
-The multi-file preprocessor (`nexprep`) transparently desugars infix float operators with standard operator precedence (`*.`, `/.` over `+.`, `-.`) and arbitrary parenthesis nesting:
+#### Unified Arithmetic Operators & Basic Type Inference (v6.0)
+NEXUS features automatic type inference across lexical scopes, enabling standard arithmetic operators (`+`, `-`, `*`, `/`) without dot notation:
+```nex
+let a = 10.5 + 4.5                 # automatically inferred as float arithmetic
+let b = 20.0 - 5.5
+let c = 3.0 * 4.5
+let d = 15.0 / 2.0
+let e = a + b                      # inferred float variables: uses fadd
+let f = (a + 5.0) * 2.0            # parentheses & operator precedence (* before +)
+```
+
+#### Mixed-Type Promotion
+When an expression mixes float and integer operands, NEXUS promotes integers to 64-bit IEEE floats automatically:
+- **Integer literals** in float expressions are promoted to float literals (`2` → `2.0`):
+  ```nex
+  let h = a + 2                    # 15.0 + 2.0 = 17.0
+  let j = 5 * b                    # 5.0 * 14.5 = 72.5
+  ```
+- **Integer variables** mixed with float expressions are promoted via `itof`:
+  ```nex
+  let count = 10                   # TY_INT
+  let total = a + count            # count promoted via let _f_prom = itof count
+  ```
+
+#### Explicit Infix Sugar & Primitives (Backwards Compatible)
+The original dotted syntax (`+.`, `-.`, `*.`, `/.`) and prefix primitives (`fadd`, `fsub`, `fmul`, `fdiv`, `fsqrt`, `fneg`, `itof`, `ftoi`) remain 100% supported:
 ```nex
 let c = a +. b                     # desugars to: let c = fadd a b
 let d = a -. b                     # desugars to: let d = fsub a b
@@ -141,7 +165,6 @@ let e = a *. b                     # desugars to: let e = fmul a b
 let f = a /. b                     # desugars to: let f = fdiv a b
 let z = a +. b *. c                # precedence: evaluates b *. c first
 let w = (a +. b) *. (c -. d)       # parenthesized subexpressions
-let inv = 1.0 /. (1.0 +. e)        # complex nested expressions
 ```
 
 #### Memory Stores with Float Literals
@@ -248,6 +271,7 @@ read a            # read one integer line from stdin into variable a
 ```
 
 Notes:
+- `print` automatically adapts to inferred variable types: if a variable is inferred as a float, or an argument is a float literal, `print` automatically formats it as a 6-decimal-place float. Explicit `print_float` is also supported.
 - `print` on a string variable prints the pointer value; use `print_str` for
   string contents.
 - Output line endings are CRLF (`\r\n`) on both targets.
@@ -268,8 +292,26 @@ Operators: `==  !=  <  <=  >  >=` (signed). The left side must be a variable;
 load memory or compute expressions into a temporary variable first. There is no boolean type — use 0/1
 integers, and no `and`/`or` — use nested `if`.
 
-### 5.1.1 Floating-point conditions (SSE2)
-Floating-point comparisons use `if_f`, `while_f`, and `else if_f` with 64-bit float operands:
+### 5.1.1 Floating-point conditions (SSE2 / NEON)
+
+#### Unified Standard Conditions (v6.0)
+With type inference, standard relational operators (`<`, `<=`, `>`, `>=`, `==`, `!=`) work directly in `if`, `else if`, and `while` blocks without requiring dot notation:
+```nex
+if a > 10.0 {
+    print "above threshold"
+} else if a <= 5.5 {
+    print "low"
+}
+
+while iter <= 4.0 {
+    print iter
+    iter += 1.0
+}
+```
+If an operand is an integer, it is automatically promoted to float before comparison.
+
+#### Explicit Float Conditions & Infix Sugar (Backwards Compatible)
+Floating-point comparisons can also use `if_f`, `while_f`, and `else if_f` or dotted operators:
 ```nex
 if_f a > b {
     print 1
@@ -282,11 +324,8 @@ if_f a > b {
 while_f dist < 100.0 {
     let dist = fadd dist 1.5
 }
-```
 
-#### Infix Relational Sugar
-When using `nexprep`, the dot notation `<.`, `<=.`, `>.`, `>=.`, `==.`, `!=.` can be used directly in standard `if`/`while` blocks:
-```nex
+# Dotted relational syntax:
 if a <. b { ... }              # desugars to: if_f a < b {
 while dist >=. 100.0 { ... }   # desugars to: while_f dist >= 100.0 {
 ```

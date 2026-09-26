@@ -1,0 +1,86 @@
+# ==============================================================================
+#      NEXUS REGRESSION TEST: TYPE INFERENCE & UNIFIED SYNTAX
+#  Tests standard +, -, *, /, ==, !=, <, >, <=, >=, print with Float Inference
+# ==============================================================================
+
+# 1. Standard float arithmetic with literals
+let a = 10.5 + 4.5
+let b = 20.0 - 5.5
+let c = 3.0 * 4.5
+let d = 15.0 / 2.0
+
+print "--- Literals Test ---"
+print a    # 15.000000
+print b    # 14.500000
+print c    # 13.500000
+print d    # 7.500000
+
+# 2. Inferred float variable arithmetic
+let e = a + b
+let f = c * 2.0
+let g = (a + 5.0) * 2.0
+
+print "--- Variables & Precedence Test ---"
+print e    # 29.500000
+print f    # 27.000000
+print g    # 40.000000
+
+# 3. Mixed float and integer literal promotion
+let h = a + 2        # 15.0 + 2.0 = 17.0
+let j = 5 * b        # 5.0 * 14.5 = 72.5
+print "--- Mixed Literal Promotion Test ---"
+print h    # 17.000000
+print j    # 72.500000
+
+# 4. Mixed float variable and integer variable promotion
+let int_count = 10
+let mixed_sum = a + int_count    # 15.0 + 10.0 = 25.0
+print "--- Mixed Variable Promotion Test ---"
+print mixed_sum    # 25.000000
+
+# 5. Standard comparisons in if / else if / else
+print "--- Standard Comparisons Test ---"
+if a > 10.0 {
+    print "a > 10.0: PASS"
+} else {
+    print "a > 10.0: FAIL"
+}
+
+if d == 7.5 {
+    print "d == 7.5: PASS"
+} else {
+    print "d == 7.5: FAIL"
+}
+
+if b < 10.0 {
+    print "b < 10.0: FAIL"
+} else if b <= 14.5 {
+    print "b <= 14.5: PASS"
+} else {
+    print "else: FAIL"
+}
+
+# 6. Standard comparisons in while loop
+print "--- While Loop Standard Syntax ---"
+let iter = 1.0
+while iter <= 4.0 {
+    print iter
+    iter += 1.0
+}
+
+# 7. Float function parameter and return type inference
+fn compute_hypotenuse(x, y) {
+    let x2 = x * x
+    let y2 = y * y
+    let sum = x2 + y2
+    let hyp = fsqrt sum
+    return hyp
+}
+
+let h1 = call compute_hypotenuse(3.0, 4.0)
+print "--- Inferred Function Return ---"
+print h1    # 5.000000
+
+print "=================================================="
+print "[SUCCESS] All Type Inference & Unified Syntax Tests Passed!"
+print "=================================================="

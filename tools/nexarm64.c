@@ -61,6 +61,7 @@ typedef struct {
 typedef struct {
     int type; /* 1 = while, 2 = if, 3 = for */
     int id;
+    int root_id;
     int has_else;
 } BlockFrame;
 
@@ -781,9 +782,9 @@ static const char* parse_float_expression(const char** pp, const char* dest_freg
 }
 
 /* Parse condition expression: <lhs> <relop> <rhs> -> sets condition flags */
-static const char* parse_condition(const char* p, char* out_relop) {
+static const char* parse_condition(const char* p, char* out_relop, int is_f) {
     p = skip_whitespace(p);
-    if (strstr(p, "==.") || strstr(p, "!=.") || strstr(p, "<.") ||
+    if (is_f || strstr(p, "==.") || strstr(p, "!=.") || strstr(p, "<.") ||
         strstr(p, "<=.") || strstr(p, ">.") || strstr(p, ">=.")) {
         p = parse_float_expression(&p, "d0");
         p = skip_whitespace(p);
@@ -847,6 +848,48 @@ static void compile_line(const char* line) {
         p = skip_whitespace(p);
 
         int slot = resolve_var(dest);
+        if (!strncmp(p, "fadd ", 5) || !strncmp(p, "fsub ", 5) ||
+            !strncmp(p, "fmul ", 5) || !strncmp(p, "fdiv ", 5)) {
+            char fop = p[1];
+            p += 5;
+            p = parse_float_term(p, "d0");
+            p = skip_whitespace(p);
+            p = parse_float_term(p, "d1");
+            if (fop == 'a') emit_inst("fadd d0, d0, d1");
+            else if (fop == 's') emit_inst("fsub d0, d0, d1");
+            else if (fop == 'm') emit_inst("fmul d0, d0, d1");
+            else if (fop == 'd') emit_inst("fdiv d0, d0, d1");
+            emit_inst("str d0, [x28, #%d]", slot * 8);
+            return;
+        }
+        if (!strncmp(p, "fsqrt ", 6)) {
+            p += 6;
+            p = parse_float_term(p, "d0");
+            emit_inst("fsqrt d0, d0");
+            emit_inst("str d0, [x28, #%d]", slot * 8);
+            return;
+        }
+        if (!strncmp(p, "fneg ", 5)) {
+            p += 5;
+            p = parse_float_term(p, "d0");
+            emit_inst("fneg d0, d0");
+            emit_inst("str d0, [x28, #%d]", slot * 8);
+            return;
+        }
+        if (!strncmp(p, "itof ", 5)) {
+            p += 5;
+            p = parse_term(p, "x0");
+            emit_inst("scvtf d0, x0");
+            emit_inst("str d0, [x28, #%d]", slot * 8);
+            return;
+        }
+        if (!strncmp(p, "ftoi ", 5)) {
+            p += 5;
+            p = parse_float_term(p, "d0");
+            emit_inst("fcvtzs x0, d0");
+            emit_store_var("x0", slot);
+            return;
+        }
         if (is_float_expr(p)) {
             parse_float_expression(&p, "d0");
             emit_inst("str d0, [x28, #%d]", slot * 8);
@@ -979,16 +1022,17 @@ static void compile_line(const char* line) {
         return;
     }
 
-    /* 4. while <cond> { */
-    if (strncmp(p, "while ", 6) == 0) {
-        p += 6;
+    /* 4. while <cond> { or while_f <cond> { */
+    if (strncmp(p, "while ", 6) == 0 || strncmp(p, "while_f ", 8) == 0) {
+        int is_f = (strncmp(p, "while_f ", 8) == 0);
+        p += is_f ? 8 : 6;
         int id = ++g_label_seq;
         char l_start[64], l_end[64], relop[8];
         snprintf(l_start, sizeof(l_start), "L_while_start_%d", id);
         snprintf(l_end, sizeof(l_end), "L_while_end_%d", id);
 
         emit_label(l_start);
-        p = parse_condition(p, relop);
+        p = parse_condition(p, relop, is_f);
         emit_branch_false(relop, l_end);
 
         /* Push to block stack */
@@ -999,31 +1043,35 @@ static void compile_line(const char* line) {
         return;
     }
 
-    /* 5. if <cond> { */
-    if (strncmp(p, "if ", 3) == 0) {
-        p += 3;
+    /* 5. if <cond> { or if_f <cond> { */
+    if (strncmp(p, "if ", 3) == 0 || strncmp(p, "if_f ", 5) == 0) {
+        int is_f = (strncmp(p, "if_f ", 5) == 0);
+        p += is_f ? 5 : 3;
         int id = ++g_label_seq;
         char l_else[64], relop[8];
         snprintf(l_else, sizeof(l_else), "L_if_else_%d", id);
 
-        p = parse_condition(p, relop);
+        p = parse_condition(p, relop, is_f);
         emit_branch_false(relop, l_else);
 
         /* Push to block stack */
         g_block_stack[g_block_depth].type = 2; /* if */
         g_block_stack[g_block_depth].id = id;
+        g_block_stack[g_block_depth].root_id = id;
         g_block_stack[g_block_depth].has_else = 0;
         g_block_depth++;
         return;
     }
 
-    /* 6. } else if <cond> { */
-    if (strncmp(p, "} else if ", 10) == 0) {
-        p += 10;
+    /* 6. } else if <cond> { or } else if_f <cond> { */
+    if (strncmp(p, "} else if ", 10) == 0 || strncmp(p, "} else if_f ", 12) == 0) {
+        int is_f = (strncmp(p, "} else if_f ", 12) == 0);
+        p += is_f ? 12 : 10;
         if (g_block_depth <= 0) return;
         int id = g_block_stack[g_block_depth - 1].id;
+        int root_id = g_block_stack[g_block_depth - 1].root_id;
         char l_end[64], l_prev_else[64], l_new_else[64], relop[8];
-        snprintf(l_end, sizeof(l_end), "L_if_end_%d", id);
+        snprintf(l_end, sizeof(l_end), "L_if_end_%d", root_id);
         snprintf(l_prev_else, sizeof(l_prev_else), "L_if_else_%d", id);
 
         int new_id = ++g_label_seq;
@@ -1032,7 +1080,7 @@ static void compile_line(const char* line) {
         emit_inst("b %s", l_end);
         emit_label(l_prev_else);
 
-        p = parse_condition(p, relop);
+        p = parse_condition(p, relop, is_f);
         emit_branch_false(relop, l_new_else);
 
         g_block_stack[g_block_depth - 1].id = new_id;
@@ -1043,8 +1091,9 @@ static void compile_line(const char* line) {
     if (strncmp(p, "} else {", 8) == 0 || strncmp(p, "} else", 6) == 0) {
         if (g_block_depth <= 0) return;
         int id = g_block_stack[g_block_depth - 1].id;
+        int root_id = g_block_stack[g_block_depth - 1].root_id;
         char l_end[64], l_else[64];
-        snprintf(l_end, sizeof(l_end), "L_if_end_%d", id);
+        snprintf(l_end, sizeof(l_end), "L_if_end_%d", root_id);
         snprintf(l_else, sizeof(l_else), "L_if_else_%d", id);
 
         emit_inst("b %s", l_end);
@@ -1069,7 +1118,8 @@ static void compile_line(const char* line) {
         } else if (top.type == 2) {
             /* if */
             char l_end[64], l_else[64];
-            snprintf(l_end, sizeof(l_end), "L_if_end_%d", top.id);
+            int root_id = top.root_id;
+            snprintf(l_end, sizeof(l_end), "L_if_end_%d", root_id);
             snprintf(l_else, sizeof(l_else), "L_if_else_%d", top.id);
             if (!top.has_else) {
                 emit_label(l_else);

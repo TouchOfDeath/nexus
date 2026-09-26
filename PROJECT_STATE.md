@@ -1,7 +1,7 @@
 # NEXUS Project State & Memory Log
 
 > **Last Updated**: 2026-09-27  
-> **Current Version**: v5.9 + Real Call Stack Frames, Lexical Scoping, Local Variables & Recursion  
+> **Current Version**: v6.0 + Basic Type Inference & Syntax Unification  
 > **Compiler Architecture**: 100% Self-Hosted Pure NEXUS (`compiler/nexc.nex`), 0% libc, 0% runtime, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64.
 
 ---
@@ -10,7 +10,8 @@
 - **Full Test Suite Status**: `PASS` (Run with `./nexus test`)
   - **Suites**: 28 example suites passing (+`recursion_showcase.nex`)
   - **Compiler Diagnostics**: 13/13 passing
-  - **Foundation Tests**: 44/44 passing (+Recursive Factorial, Recursive Fibonacci, Local Frame Isolation)
+  - **Foundation Tests**: 48/48 passing (+Unified Float Arithmetic, Float Mixed Promotion, Unified Float Condition, Unified Float While Loop)
+  - **Type Inference Suite**: 7/7 categories passing (`tests/test_type_inference.nex`)
   - **Stdlib Assertions**: 94/94 passing
   - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)
   - **Interactive Demos**: 3/3 passing
@@ -19,6 +20,22 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **Basic Type Inference & Unified Syntax (v6.0)**:
+  - Eliminated the requirement for dotted floating-point operators (`+.`, `-.`, `*.`, `/.`), dotted comparisons (`<.`, `<=.`, `>.`, `>=.`, `==.`, `!=.`), and explicit float print (`print_float`).
+  - Added multi-pass static type inference engine in `tools/nexprep.c`:
+    * Tracks variable types (`TY_INT`, `TY_FLOAT`, `TY_PTR`) across global and local lexical scopes.
+    * Multi-pass dependency scanning across `include` / `import` trees to infer function parameter types and return types from call sites and expression bodies.
+    * Precedence-aware Shunting-Yard parser detects float expressions and emits native hardware float instructions (`fadd`, `fsub`, `fmul`, `fdiv`).
+    * Automatic literal promotion: integer literals in float expressions (e.g., `let y = x + 2`) are transparently promoted to 64-bit IEEE double literals (`2.0`).
+    * Automatic variable promotion: mixed integer and float variables (e.g., `let z = float_var + int_var`) emit `itof` conversions on-the-fly.
+    * Unified conditions: standard relational operators (`<`, `<=`, `>`, `>=`, `==`, `!=`) in `if`, `else if`, and `while` automatically compile to hardware float comparisons (`ucomisd` / `fcmp`).
+    * Unified `print`: `print <var>` checks inferred variable type and automatically outputs 6-decimal-place float formatting when the variable is floating point.
+  - Native ARM64 NEON completion in `tools/nexarm64.c`:
+    * Native ARM64 NEON instruction encoders for `fadd`, `fsub`, `fmul`, `fdiv`, `fsqrt`, `fneg`, `itof`, `ftoi`.
+    * Extended condition parsing for `if_f`, `while_f`, `else if_f`.
+    * Fixed nested `else if` label routing in `tools/nexarm64.c` with unified `root_id` frame resolution.
+  - Comprehensive test suite `tests/test_type_inference.nex` (7 test categories covering literal math, variable precedence, mixed literal promotion, mixed variable promotion, standard comparisons in `if`/`else if`, standard comparisons in `while`, and inferred function parameters/returns).
+  - 100% backwards compatibility maintained for legacy dotted operators (`+.`, `-.`, `*=.`, `<.`, etc.) and 100% bit-for-bit self-hosting convergence preserved across PE32+ and Linux ELF64.
 - **Real Call Stack Frames, Lexical Scoping, Local Variables & Unlimited Recursion (v5.9)**:
   - Implemented hardware-backed activation frame preservation engine (`tools/nexprep.c`) allocating a 256 KB runtime execution call stack (`_nx_call_stack` / `_nx_sp`).
   - Added lexical scoping and per-function local variable tracking:

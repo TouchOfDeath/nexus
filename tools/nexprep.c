@@ -534,26 +534,99 @@ static void track_alloc_type(const char *line) {
 }
 
 /* --------------------------------------------------------------------------
- * floating-point syntax sugar
+ * function context and type inference tracking
  * -------------------------------------------------------------------------- */
-static int ftmp_counter = 0;
+static char cur_fn_name[128] = "";
+static int fn_block_depth = 0;
 
-static const char *get_fop(const char *op) {
-    if (!strcmp(op, "+.")) return "fadd";
-    if (!strcmp(op, "-.")) return "fsub";
-    if (!strcmp(op, "*.")) return "fmul";
-    if (!strcmp(op, "/.")) return "fdiv";
+typedef enum {
+    TY_UNKNOWN = 0,
+    TY_INT,
+    TY_FLOAT,
+    TY_PTR
+} NexType;
+
+typedef struct {
+    char scope[64];
+    char name[64];
+    NexType type;
+} VarTypeEntry;
+
+#define MAX_VAR_TYPES 4096
+static VarTypeEntry VTYPES[MAX_VAR_TYPES];
+static int num_vtypes = 0;
+
+typedef struct {
+    char name[64];
+    NexType ret_type;
+    NexType param_types[32];
+    int nparams;
+} FnSigEntry;
+
+#define MAX_FN_SIGS 512
+static FnSigEntry FNSIGS[MAX_FN_SIGS];
+static int num_fnsigs = 0;
+
+static void set_var_type(const char *scope, const char *name, NexType type) {
+    if (!name || !*name) return;
+    const char *sc = scope ? scope : "";
+    for (int i = 0; i < num_vtypes; i++) {
+        if (!strcmp(VTYPES[i].scope, sc) && !strcmp(VTYPES[i].name, name)) {
+            if (type != TY_UNKNOWN) VTYPES[i].type = type;
+            return;
+        }
+    }
+    if (num_vtypes < MAX_VAR_TYPES) {
+        snprintf(VTYPES[num_vtypes].scope, sizeof(VTYPES[num_vtypes].scope), "%s", sc);
+        snprintf(VTYPES[num_vtypes].name, sizeof(VTYPES[num_vtypes].name), "%s", name);
+        VTYPES[num_vtypes].type = type;
+        num_vtypes++;
+    }
+}
+
+static NexType get_var_type(const char *scope, const char *name) {
+    if (!name || !*name) return TY_UNKNOWN;
+    const char *sc = scope ? scope : "";
+    if (sc[0] != '\0') {
+        for (int i = 0; i < num_vtypes; i++) {
+            if (!strcmp(VTYPES[i].scope, sc) && !strcmp(VTYPES[i].name, name)) {
+                return VTYPES[i].type;
+            }
+        }
+    }
+    for (int i = 0; i < num_vtypes; i++) {
+        if (VTYPES[i].scope[0] == '\0' && !strcmp(VTYPES[i].name, name)) {
+            return VTYPES[i].type;
+        }
+    }
+    return TY_UNKNOWN;
+}
+
+static FnSigEntry *find_or_create_fn_sig(const char *name) {
+    if (!name || !*name) return NULL;
+    for (int i = 0; i < num_fnsigs; i++) {
+        if (!strcmp(FNSIGS[i].name, name)) return &FNSIGS[i];
+    }
+    if (num_fnsigs < MAX_FN_SIGS) {
+        FnSigEntry *entry = &FNSIGS[num_fnsigs++];
+        memset(entry, 0, sizeof(*entry));
+        snprintf(entry->name, sizeof(entry->name), "%s", name);
+        return entry;
+    }
     return NULL;
 }
 
-static int is_relop_f(const char *s, int *len, const char **clean_op) {
-    if (!strncmp(s, "==.", 3)) { *len = 3; *clean_op = "=="; return 1; }
-    if (!strncmp(s, "!=.", 3)) { *len = 3; *clean_op = "!="; return 1; }
-    if (!strncmp(s, "<=.", 3)) { *len = 3; *clean_op = "<="; return 1; }
-    if (!strncmp(s, ">=.", 3)) { *len = 3; *clean_op = ">="; return 1; }
-    if (!strncmp(s, "<.", 2))  { *len = 2; *clean_op = "<"; return 1; }
-    if (!strncmp(s, ">.", 2))  { *len = 2; *clean_op = ">"; return 1; }
-    return 0;
+static void set_fn_ret_type(const char *name, NexType type) {
+    FnSigEntry *sig = find_or_create_fn_sig(name);
+    if (sig && type != TY_UNKNOWN) sig->ret_type = type;
+}
+
+static NexType get_fn_ret_type(const char *name) {
+    if (!name || !*name) return TY_UNKNOWN;
+    for (int i = 0; i < num_fnsigs; i++) {
+        if (!strcmp(FNSIGS[i].name, name)) return FNSIGS[i].ret_type;
+    }
+    return TY_UNKNOWN;
 }
 
 static int is_float_literal(const char *s) {
@@ -568,6 +641,82 @@ static int is_float_literal(const char *s) {
     while (isdigit((unsigned char)*p)) p++;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
     return *p == '\0';
+}
+
+static int is_int_literal(const char *s) {
+    if (!*s) return 0;
+    const char *p = s;
+    if (*p == '+' || *p == '-') p++;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return *p == '\0';
+}
+
+static NexType get_operand_type(const char *scope, const char *tok) {
+    if (!tok || !*tok) return TY_UNKNOWN;
+    if (is_float_literal(tok)) return TY_FLOAT;
+    if (is_int_literal(tok)) return TY_INT;
+    if (tok[0] == '"') return TY_PTR;
+    if (tok[0] == '[') return TY_PTR;
+
+    if (!strncmp(tok, "_ret_", 5)) {
+        NexType rt = get_fn_ret_type(tok + 5);
+        if (rt != TY_UNKNOWN) return rt;
+    }
+    NexType frt = get_fn_ret_type(tok);
+    if (frt != TY_UNKNOWN) return frt;
+
+    NexType vt = get_var_type(scope, tok);
+    if (vt != TY_UNKNOWN) return vt;
+
+    return TY_UNKNOWN;
+}
+
+static int is_operand_float(const char *scope, const char *tok) {
+    return get_operand_type(scope, tok) == TY_FLOAT;
+}
+
+/* --------------------------------------------------------------------------
+ * floating-point syntax sugar
+ * -------------------------------------------------------------------------- */
+static int ftmp_counter = 0;
+
+static const char *get_fop(const char *op) {
+    if (!strcmp(op, "+.") || !strcmp(op, "+")) return "fadd";
+    if (!strcmp(op, "-.") || !strcmp(op, "-")) return "fsub";
+    if (!strcmp(op, "*.") || !strcmp(op, "*")) return "fmul";
+    if (!strcmp(op, "/.") || !strcmp(op, "/")) return "fdiv";
+    return NULL;
+}
+
+static int is_relop_f(const char *s, int *len, const char **clean_op) {
+    if (!strncmp(s, "==.", 3)) { *len = 3; *clean_op = "=="; return 1; }
+    if (!strncmp(s, "!=.", 3)) { *len = 3; *clean_op = "!="; return 1; }
+    if (!strncmp(s, "<=.", 3)) { *len = 3; *clean_op = "<="; return 1; }
+    if (!strncmp(s, ">=.", 3)) { *len = 3; *clean_op = ">="; return 1; }
+    if (!strncmp(s, "<.", 2))  { *len = 2; *clean_op = "<"; return 1; }
+    if (!strncmp(s, ">.", 2))  { *len = 2; *clean_op = ">"; return 1; }
+    return 0;
+}
+
+static int is_relop_std(const char *s, int *len, const char **clean_op) {
+    if (!strncmp(s, "==", 2)) { *len = 2; *clean_op = "=="; return 1; }
+    if (!strncmp(s, "!=", 2)) { *len = 2; *clean_op = "!="; return 1; }
+    if (!strncmp(s, "<=", 2)) { *len = 2; *clean_op = "<="; return 1; }
+    if (!strncmp(s, ">=", 2)) { *len = 2; *clean_op = ">="; return 1; }
+    if (*s == '<')             { *len = 1; *clean_op = "<"; return 1; }
+    if (*s == '>')             { *len = 1; *clean_op = ">"; return 1; }
+    return 0;
+}
+
+static void trim_bounds(const char *start, const char *end, char *out, size_t cap) {
+    while (start < end && (*start == ' ' || *start == '\t')) start++;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
+    size_t len = (size_t)(end - start);
+    if (len >= cap) len = cap - 1;
+    if (len > 0) memcpy(out, start, len);
+    out[len] = '\0';
 }
 
 static int desugar_store_float(const char *in, char *out, size_t cap) {
@@ -629,8 +778,8 @@ static int desugar_store_float(const char *in, char *out, size_t cap) {
 }
 
 static int op_prec(const char *op) {
-    if (!strcmp(op, "+.") || !strcmp(op, "-.")) return 1;
-    if (!strcmp(op, "*.") || !strcmp(op, "/.")) return 2;
+    if (!strcmp(op, "+.") || !strcmp(op, "-.") || !strcmp(op, "+") || !strcmp(op, "-")) return 1;
+    if (!strcmp(op, "*.") || !strcmp(op, "/.") || !strcmp(op, "*") || !strcmp(op, "/")) return 2;
     return 0;
 }
 
@@ -669,7 +818,7 @@ static int tokenize_fexpr(const char *s, FToken *tokens, int max_tokens) {
             continue;
         }
 
-        /* Check float operators: +., -., *., /. */
+        /* Check dotted float operators: +., -., *., /. */
         if ((*p == '+' || *p == '-' || *p == '*' || *p == '/') && *(p + 1) == '.') {
             tokens[ntok].type = TOK_F_OP;
             tokens[ntok].text[0] = *p;
@@ -680,12 +829,40 @@ static int tokenize_fexpr(const char *s, FToken *tokens, int max_tokens) {
             continue;
         }
 
-        /* General operand: identifier or literal number */
+        /* Binary operators: * and / are always binary */
+        if (*p == '*' || *p == '/') {
+            tokens[ntok].type = TOK_F_OP;
+            tokens[ntok].text[0] = *p;
+            tokens[ntok].text[1] = '\0';
+            ntok++;
+            p++;
+            continue;
+        }
+
+        /* Binary vs unary + and - */
+        if (*p == '+' || *p == '-') {
+            if (ntok > 0 && (tokens[ntok - 1].type == TOK_F_OPERAND || tokens[ntok - 1].type == TOK_F_RPAREN)) {
+                tokens[ntok].type = TOK_F_OP;
+                tokens[ntok].text[0] = *p;
+                tokens[ntok].text[1] = '\0';
+                ntok++;
+                p++;
+                continue;
+            }
+        }
+
+        /* General operand */
         int len = 0;
         char buf[128];
         while (*p && *p != ' ' && *p != '\t' && *p != '(' && *p != ')' &&
                *p != '#' && *p != ';' && *p != '\n' && *p != '\r') {
             if ((*p == '+' || *p == '-' || *p == '*' || *p == '/') && *(p + 1) == '.') {
+                break;
+            }
+            if (*p == '*' || *p == '/') {
+                break;
+            }
+            if (len > 0 && (*p == '+' || *p == '-')) {
                 break;
             }
             if (len < 127) buf[len++] = *p;
@@ -701,24 +878,51 @@ static int tokenize_fexpr(const char *s, FToken *tokens, int max_tokens) {
     return ntok;
 }
 
+static int is_fexpr_tokens(const char *scope, const FToken *tokens, int ntok) {
+    for (int i = 0; i < ntok; i++) {
+        if (tokens[i].type == TOK_F_OP && strchr(tokens[i].text, '.')) return 1;
+    }
+    int has_op = 0;
+    int has_float = 0;
+    for (int i = 0; i < ntok; i++) {
+        if (tokens[i].type == TOK_F_OP) has_op = 1;
+        if (tokens[i].type == TOK_F_OPERAND) {
+            if (is_operand_float(scope, tokens[i].text)) has_float = 1;
+        }
+    }
+    return (has_op && has_float);
+}
+
 static int desugar_float_expr(const char *indent, const char *dest, const char *rhs, char *out, size_t cap) {
     FToken tokens[128];
     int ntok = tokenize_fexpr(rhs, tokens, 128);
     if (ntok == 0) return 0;
 
-    int has_fop = 0;
+    if (!is_fexpr_tokens(cur_fn_name, tokens, ntok)) return 0;
+
+    out[0] = '\0';
+
     for (int i = 0; i < ntok; i++) {
-        if (tokens[i].type == TOK_F_OP) { has_fop = 1; break; }
+        if (tokens[i].type == TOK_F_OPERAND) {
+            if (is_int_literal(tokens[i].text)) {
+                strncat(tokens[i].text, ".0", sizeof(tokens[i].text) - strlen(tokens[i].text) - 1);
+            } else if (get_operand_type(cur_fn_name, tokens[i].text) == TY_INT) {
+                char prom[128];
+                snprintf(prom, sizeof prom, "_f_prom_%d", ftmp_counter++);
+                char line[MAXLINE];
+                snprintf(line, sizeof line, "%slet %s = itof %s\n", indent, prom, tokens[i].text);
+                strncat(out, line, cap - strlen(out) - 1);
+                set_var_type(cur_fn_name, prom, TY_FLOAT);
+                snprintf(tokens[i].text, sizeof(tokens[i].text), "%s", prom);
+            }
+        }
     }
-    if (!has_fop) return 0;
 
     char op_stack[128][16];
     int op_top = 0;
 
     char val_stack[128][128];
     int val_top = 0;
-
-    out[0] = '\0';
 
     for (int i = 0; i < ntok; i++) {
         if (tokens[i].type == TOK_F_OPERAND) {
@@ -741,6 +945,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
                 char line[MAXLINE];
                 snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, tmp, get_fop(op), l, r);
                 strncat(out, line, cap - strlen(out) - 1);
+                set_var_type(cur_fn_name, tmp, TY_FLOAT);
                 strcpy(val_stack[val_top++], tmp);
             }
             if (op_top > 0 && strcmp(op_stack[op_top - 1], "(") == 0) {
@@ -764,6 +969,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
                 char line[MAXLINE];
                 snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, tmp, get_fop(op), l, r);
                 strncat(out, line, cap - strlen(out) - 1);
+                set_var_type(cur_fn_name, tmp, TY_FLOAT);
                 strcpy(val_stack[val_top++], tmp);
             }
             strcpy(op_stack[op_top++], tokens[i].text);
@@ -790,6 +996,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
         char line[MAXLINE];
         snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, target, get_fop(op), l, r);
         strncat(out, line, cap - strlen(out) - 1);
+        set_var_type(cur_fn_name, target, TY_FLOAT);
         strcpy(val_stack[val_top++], target);
     }
 
@@ -799,6 +1006,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
         strncat(out, line, cap - strlen(out) - 1);
     }
 
+    set_var_type(cur_fn_name, dest, TY_FLOAT);
     return 1;
 }
 
@@ -818,17 +1026,18 @@ static int desugar_float(const char *in, char *out, size_t cap) {
 
     /* 1. Conditions: if, while, else if */
     int is_cond = 0;
+    int was_explicit_f = 0;
     const char *cond_type = NULL;
     char prefix[256] = "";
 
     if (!strncmp(p, "if ", 3) || !strncmp(p, "if\t", 3)) {
         is_cond = 1; cond_type = "if_f "; p += 3;
     } else if (!strncmp(p, "if_f ", 5) || !strncmp(p, "if_f\t", 5)) {
-        is_cond = 1; cond_type = "if_f "; p += 5;
+        is_cond = 1; was_explicit_f = 1; cond_type = "if_f "; p += 5;
     } else if (!strncmp(p, "while ", 6) || !strncmp(p, "while\t", 6)) {
         is_cond = 1; cond_type = "while_f "; p += 6;
     } else if (!strncmp(p, "while_f ", 8) || !strncmp(p, "while_f\t", 8)) {
-        is_cond = 1; cond_type = "while_f "; p += 8;
+        is_cond = 1; was_explicit_f = 1; cond_type = "while_f "; p += 8;
     } else {
         char *eif = strstr(p, "else if ");
         if (!eif) eif = strstr(p, "else if\t");
@@ -846,6 +1055,7 @@ static int desugar_float(const char *in, char *out, size_t cap) {
                 snprintf(prefix, sizeof prefix, "%.*selse if_f ", pre_len, p);
                 p = eiff + 10;
                 is_cond = 1;
+                was_explicit_f = 1;
                 cond_type = prefix;
             }
         }
@@ -853,6 +1063,7 @@ static int desugar_float(const char *in, char *out, size_t cap) {
 
     if (is_cond) {
         int in_quote = 0;
+        /* First check dotted float operators: ==., <., etc. */
         for (char *c = p; *c; c++) {
             if (*c == '"') in_quote = !in_quote;
             if (in_quote) continue;
@@ -863,6 +1074,76 @@ static int desugar_float(const char *in, char *out, size_t cap) {
                 const char *right = c + rlen;
                 snprintf(out, cap, "%s%s%.*s%s%s\n", indent, cond_type, left_len, p, clean_op, right);
                 return 1;
+            }
+        }
+
+        if (was_explicit_f) {
+            /* Already clean if_f / while_f / else if_f, do not re-desugar */
+            return 0;
+        }
+
+        /* Check standard operators: ==, !=, <, >, <=, >= */
+        in_quote = 0;
+        for (char *c = p; *c; c++) {
+            if (*c == '"') in_quote = !in_quote;
+            if (in_quote) continue;
+            int rlen = 0;
+            const char *std_op = NULL;
+            if (is_relop_std(c, &rlen, &std_op)) {
+                char left[128], right[128];
+                trim_bounds(p, c, left, sizeof left);
+
+                /* find '{' */
+                char *brace = strchr(c + rlen, '{');
+                char rest[256] = "";
+                if (brace) {
+                    trim_bounds(c + rlen, brace, right, sizeof right);
+                    snprintf(rest, sizeof rest, "%s", brace);
+                } else {
+                    trim_bounds(c + rlen, c + strlen(c), right, sizeof right);
+                }
+
+                int left_f = is_operand_float(cur_fn_name, left);
+                int right_f = is_operand_float(cur_fn_name, right);
+
+                if (left_f || right_f || was_explicit_f) {
+                    out[0] = '\0';
+                    /* Promote left if int variable */
+                    if (!left_f && get_operand_type(cur_fn_name, left) == TY_INT) {
+                        char prom[128];
+                        snprintf(prom, sizeof prom, "_f_prom_%d", ftmp_counter++);
+                        char line[MAXLINE];
+                        snprintf(line, sizeof line, "%slet %s = itof %s\n", indent, prom, left);
+                        strncat(out, line, cap - strlen(out) - 1);
+                        set_var_type(cur_fn_name, prom, TY_FLOAT);
+                        snprintf(left, sizeof left, "%s", prom);
+                    } else if (is_int_literal(left)) {
+                        strncat(left, ".0", sizeof(left) - strlen(left) - 1);
+                    }
+
+                    /* Promote right if int variable */
+                    if (!right_f && get_operand_type(cur_fn_name, right) == TY_INT) {
+                        char prom[128];
+                        snprintf(prom, sizeof prom, "_f_prom_%d", ftmp_counter++);
+                        char line[MAXLINE];
+                        snprintf(line, sizeof line, "%slet %s = itof %s\n", indent, prom, right);
+                        strncat(out, line, cap - strlen(out) - 1);
+                        set_var_type(cur_fn_name, prom, TY_FLOAT);
+                        snprintf(right, sizeof right, "%s", prom);
+                    } else if (is_int_literal(right)) {
+                        strncat(right, ".0", sizeof(right) - strlen(right) - 1);
+                    }
+
+                    char line[MAXLINE];
+                    if (rest[0]) {
+                        snprintf(line, sizeof line, "%s%s%s %s %s %s\n", indent, cond_type, left, std_op, right, rest);
+                    } else {
+                        snprintf(line, sizeof line, "%s%s%s %s %s\n", indent, cond_type, left, std_op, right);
+                    }
+                    strncat(out, line, cap - strlen(out) - 1);
+                    return 1;
+                }
+                break;
             }
         }
         return 0;
@@ -890,9 +1171,31 @@ static int desugar_float(const char *in, char *out, size_t cap) {
             if (cm) *cm = '\0';
             char *sc = strchr(rhs_clean, ';');
             if (sc) *sc = '\0';
+            int rlen = (int)strlen(rhs_clean);
+            while (rlen > 0 && (rhs_clean[rlen-1] == ' ' || rhs_clean[rlen-1] == '\t' ||
+                                rhs_clean[rlen-1] == '\n' || rhs_clean[rlen-1] == '\r')) {
+                rhs_clean[--rlen] = '\0';
+            }
 
             if (desugar_float_expr(indent, dstart, rhs_clean, out, cap)) {
                 return 1;
+            }
+
+            /* Record type if single value/literal/builtin */
+            if (is_float_literal(rhs_clean)) {
+                set_var_type(cur_fn_name, dstart, TY_FLOAT);
+            } else if (is_int_literal(rhs_clean)) {
+                set_var_type(cur_fn_name, dstart, TY_INT);
+            } else if (!strncmp(rhs_clean, "fadd ", 5) || !strncmp(rhs_clean, "fsub ", 5) ||
+                       !strncmp(rhs_clean, "fmul ", 5) || !strncmp(rhs_clean, "fdiv ", 5) ||
+                       !strncmp(rhs_clean, "fsqrt ", 6) || !strncmp(rhs_clean, "fneg ", 5) ||
+                       !strncmp(rhs_clean, "itof ", 5)) {
+                set_var_type(cur_fn_name, dstart, TY_FLOAT);
+            } else if (!strncmp(rhs_clean, "ftoi ", 5)) {
+                set_var_type(cur_fn_name, dstart, TY_INT);
+            } else {
+                NexType src_t = get_operand_type(cur_fn_name, rhs_clean);
+                if (src_t != TY_UNKNOWN) set_var_type(cur_fn_name, dstart, src_t);
             }
         }
     }
@@ -900,11 +1203,45 @@ static int desugar_float(const char *in, char *out, size_t cap) {
     return 0;
 }
 
+static int desugar_print(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "print ", 6) || !strncmp(p, "print\t", 6)) {
+        char *arg = p + 6;
+        while (*arg == ' ' || *arg == '\t') arg++;
+        if (*arg == '"' || *arg == '\0' || *arg == '#' || *arg == ';') return 0;
+
+        char var[128];
+        int vn = 0;
+        while (*arg && *arg != ' ' && *arg != '\t' && *arg != '#' && *arg != ';' && *arg != '\n' && *arg != '\r') {
+            if (vn < 127) var[vn++] = *arg;
+            arg++;
+        }
+        var[vn] = '\0';
+        while (*arg == ' ' || *arg == '\t') arg++;
+
+        if (is_float_literal(var) || get_operand_type(cur_fn_name, var) == TY_FLOAT) {
+            snprintf(out, cap, "%sprint_float %s%s\n", indent, var, *arg ? arg : "");
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* --------------------------------------------------------------------------
  * function parameter, call expression, and return value syntax desugaring
  * -------------------------------------------------------------------------- */
-static char cur_fn_name[128] = "";
-static int fn_block_depth = 0;
 static int call_tmp_counter = 0;
 static int cur_fn_is_scoped = 0;
 static char cur_fn_locals[64][64];
@@ -2507,6 +2844,19 @@ static void emit_line(const char *raw, FILE *out) {
         return;
     }
 
+    char print_desugared[MAXLINE];
+    if (desugar_print(raw, print_desugared, sizeof print_desugared)) {
+        char *p = print_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
     /* work on a newline-stripped copy; exactly one '\n' is printed per line */
     char clean[MAXLINE];
     snprintf(clean, MAXLINE, "%s", u_buf);
@@ -2694,6 +3044,260 @@ static void emit_line(const char *raw, FILE *out) {
 }
 
 /* --------------------------------------------------------------------------
+ * type inference pre-pass
+ * -------------------------------------------------------------------------- */
+static void scan_line_for_types(const char *line, const char *cur_fn, int *scan_depth) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", line);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return;
+
+    /* track return */
+    if (!strncmp(p, "return", 6) && (p[6] == ' ' || p[6] == '\t' || p[6] == '\0')) {
+        char *expr = p + 6;
+        while (*expr == ' ' || *expr == '\t') expr++;
+        if (*expr && *expr != '#' && *expr != ';') {
+            char ret_clean[MAXLINE];
+            snprintf(ret_clean, sizeof ret_clean, "%s", expr);
+            char *cm = strchr(ret_clean, '#'); if (cm) *cm = '\0';
+            char *sc = strchr(ret_clean, ';'); if (sc) *sc = '\0';
+            int rlen = (int)strlen(ret_clean);
+            while (rlen > 0 && (ret_clean[rlen-1] == ' ' || ret_clean[rlen-1] == '\t' ||
+                                ret_clean[rlen-1] == '\n' || ret_clean[rlen-1] == '\r')) {
+                ret_clean[--rlen] = '\0';
+            }
+            if (is_float_literal(ret_clean)) {
+                set_fn_ret_type(cur_fn, TY_FLOAT);
+            } else {
+                FToken tokens[64];
+                int ntok = tokenize_fexpr(ret_clean, tokens, 64);
+                if (is_fexpr_tokens(cur_fn, tokens, ntok)) {
+                    set_fn_ret_type(cur_fn, TY_FLOAT);
+                } else {
+                    NexType rt = get_operand_type(cur_fn, ret_clean);
+                    if (rt != TY_UNKNOWN) set_fn_ret_type(cur_fn, rt);
+                }
+            }
+        }
+        return;
+    }
+
+    /* track let assignment */
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        char *eq = strchr(p, '=');
+        if (eq) {
+            char dest[128];
+            int dlen = (int)(eq - (p + 4));
+            if (dlen >= (int)sizeof(dest)) dlen = (int)sizeof(dest) - 1;
+            snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
+            char *dstart = dest;
+            while (*dstart == ' ' || *dstart == '\t') dstart++;
+            char *dend = dstart + strlen(dstart);
+            while (dend > dstart && (dend[-1] == ' ' || dend[-1] == '\t')) *--dend = '\0';
+
+            char *rhs = eq + 1;
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+            char rhs_clean[MAXLINE];
+            snprintf(rhs_clean, sizeof rhs_clean, "%s", rhs);
+            char *cm = strchr(rhs_clean, '#'); if (cm) *cm = '\0';
+            char *sc = strchr(rhs_clean, ';'); if (sc) *sc = '\0';
+            int rlen = (int)strlen(rhs_clean);
+            while (rlen > 0 && (rhs_clean[rlen-1] == ' ' || rhs_clean[rlen-1] == '\t' ||
+                                rhs_clean[rlen-1] == '\n' || rhs_clean[rlen-1] == '\r')) {
+                rhs_clean[--rlen] = '\0';
+            }
+
+            if (is_float_literal(rhs_clean)) {
+                set_var_type(cur_fn, dstart, TY_FLOAT);
+            } else if (is_int_literal(rhs_clean)) {
+                set_var_type(cur_fn, dstart, TY_INT);
+            } else if (rhs_clean[0] == '"' || !strncmp(rhs_clean, "alloc", 5) || rhs_clean[0] == '[') {
+                set_var_type(cur_fn, dstart, TY_PTR);
+            } else if (!strncmp(rhs_clean, "fadd", 4) || !strncmp(rhs_clean, "fsub", 4) ||
+                       !strncmp(rhs_clean, "fmul", 4) || !strncmp(rhs_clean, "fdiv", 4) ||
+                       !strncmp(rhs_clean, "fsqrt", 5) || !strncmp(rhs_clean, "fneg", 4) ||
+                       !strncmp(rhs_clean, "itof", 4)) {
+                set_var_type(cur_fn, dstart, TY_FLOAT);
+            } else if (!strncmp(rhs_clean, "ftoi", 4)) {
+                set_var_type(cur_fn, dstart, TY_INT);
+            } else if (!strncmp(rhs_clean, "call ", 5) || !strncmp(rhs_clean, "call\t", 5)) {
+                char *target = rhs_clean + 5;
+                while (*target == ' ' || *target == '\t') target++;
+                char cfn[128] = ""; int cl = 0;
+                while (*target && is_ident1((unsigned char)*target)) {
+                    if (cl < 127) cfn[cl++] = *target;
+                    target++;
+                }
+                cfn[cl] = '\0';
+                NexType rt = get_fn_ret_type(cfn);
+                if (rt != TY_UNKNOWN) set_var_type(cur_fn, dstart, rt);
+
+                while (*target == ' ' || *target == '\t') target++;
+                if (*target == '(') {
+                    char *cp = strrchr(target, ')');
+                    if (cp) {
+                        char astr[MAXLINE];
+                        int al = (int)(cp - (target + 1));
+                        if (al >= (int)sizeof(astr)) al = (int)sizeof(astr) - 1;
+                        snprintf(astr, sizeof astr, "%.*s", al, target + 1);
+                        char args[32][512];
+                        int na = split_args(astr, args, 32);
+                        FnSigEntry *sig = find_or_create_fn_sig(cfn);
+                        for (int k = 0; k < na; k++) {
+                            NexType at = get_operand_type(cur_fn, args[k]);
+                            if (at != TY_UNKNOWN && sig && k < 32) {
+                                sig->param_types[k] = at;
+                            }
+                        }
+                    }
+                }
+            } else {
+                FToken tokens[64];
+                int ntok = tokenize_fexpr(rhs_clean, tokens, 64);
+                if (is_fexpr_tokens(cur_fn, tokens, ntok)) {
+                    set_var_type(cur_fn, dstart, TY_FLOAT);
+                } else {
+                    NexType vt = get_operand_type(cur_fn, rhs_clean);
+                    if (vt != TY_UNKNOWN) set_var_type(cur_fn, dstart, vt);
+                }
+            }
+        }
+        return;
+    }
+
+    /* track compound assignment */
+    int op_len = 0;
+    const char *base_op = NULL;
+    const char *c_op = check_compound_op(p, &op_len, &base_op);
+    if (c_op) {
+        char var[128] = "";
+        const char *vp = p;
+        if (!strncmp(vp, "let ", 4)) vp += 4;
+        while (*vp == ' ' || *vp == '\t') vp++;
+        int vl = 0;
+        while (*vp && is_ident1((unsigned char)*vp)) {
+            if (vl < 127) var[vl++] = *vp;
+            vp++;
+        }
+        var[vl] = '\0';
+        const char *rhs = p;
+        const char *cop_pos = strstr(p, c_op);
+        if (cop_pos) {
+            rhs = cop_pos + op_len;
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+            if (is_float_literal(rhs) || get_operand_type(cur_fn, rhs) == TY_FLOAT || strchr(c_op, '.')) {
+                set_var_type(cur_fn, var, TY_FLOAT);
+            }
+        }
+    }
+}
+
+static void scan_file_for_types(const char *path) {
+    FILE *in = fopen(path, "r");
+    if (!in) return;
+
+    char curdir[MAXLINE];
+    snprintf(curdir, MAXLINE, "%s", path);
+    char *d = strrchr(curdir, '/');
+    if (d) *d = '\0'; else snprintf(curdir, MAXLINE, ".");
+
+    char scan_fn[128] = "";
+    int scan_depth = 0;
+
+    char *line = NULL;
+    size_t cap = 0;
+    while (getline(&line, &cap, in) != -1) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+
+        /* check include/import */
+        if ((!strncmp(p, "include", 7) && (p[7] == ' ' || p[7] == '\t')) ||
+            (!strncmp(p, "import", 6) && (p[6] == ' ' || p[6] == '\t'))) {
+            p += (p[0] == 'i' && p[2] == 'c') ? 7 : 6;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '"') {
+                char rel[MAXLINE]; int r = 0;
+                p++;
+                while (*p && *p != '"' && r < MAXLINE - 1) rel[r++] = *p++;
+                rel[r] = '\0';
+                if (*p == '"') {
+                    char cand[MAXLINE * 3];
+                    snprintf(cand, sizeof cand, "%s/%s", curdir, rel);
+                    char canon_cand[MAXLINE * 2];
+                    if (realpath(cand, canon_cand)) {
+                        scan_file_for_types(canon_cand);
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* update function tracking */
+        if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3)) {
+            char *q = p + 3;
+            while (*q == ' ' || *q == '\t') q++;
+            int fn_len = 0;
+            while (*q && is_ident1((unsigned char)*q)) {
+                if (fn_len < 127) scan_fn[fn_len++] = *q;
+                q++;
+            }
+            scan_fn[fn_len] = '\0';
+            scan_depth = 0;
+
+            while (*q == ' ' || *q == '\t') q++;
+            if (*q == '(') {
+                char *close_p = strchr(q, ')');
+                if (close_p) {
+                    char param_str[MAXLINE];
+                    int plen = (int)(close_p - (q + 1));
+                    if (plen >= (int)sizeof(param_str)) plen = (int)sizeof(param_str) - 1;
+                    snprintf(param_str, sizeof param_str, "%.*s", plen, q + 1);
+                    char params[32][512];
+                    int np = split_args(param_str, params, 32);
+                    FnSigEntry *sig = find_or_create_fn_sig(scan_fn);
+                    if (sig) {
+                        sig->nparams = np;
+                        for (int k = 0; k < np; k++) {
+                            if (sig->param_types[k] != TY_UNKNOWN) {
+                                set_var_type(scan_fn, params[k], sig->param_types[k]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        int in_str = 0;
+        for (int i = 0; line[i]; i++) {
+            if (line[i] == '"') in_str = !in_str;
+            if (in_str) continue;
+            if (line[i] == '#' || line[i] == ';') break;
+            if (line[i] == '{') {
+                if (scan_fn[0] != '\0') scan_depth++;
+            } else if (line[i] == '}') {
+                if (scan_fn[0] != '\0') {
+                    scan_depth--;
+                    if (scan_depth <= 0) {
+                        scan_fn[0] = '\0';
+                        scan_depth = 0;
+                    }
+                }
+            }
+        }
+
+        scan_line_for_types(line, scan_fn, &scan_depth);
+    }
+    free(line);
+    fclose(in);
+}
+
+static void run_type_inference_pass(const char *canon_path) {
+    scan_file_for_types(canon_path);
+    scan_file_for_types(canon_path);
+}
+
+/* --------------------------------------------------------------------------
  * main driver
  * -------------------------------------------------------------------------- */
 static void process_file(const char *path, FILE *out) {
@@ -2766,6 +3370,8 @@ int main(int argc, char **argv) {
         if (deps_out) fclose(deps_out);
         return 0;
     }
+    run_type_inference_pass(canon);
+
     if (out_path) {
         FILE *out = fopen(out_path, "w");
         if (!out) die("Cannot write", out_path);
