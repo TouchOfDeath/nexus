@@ -1,0 +1,124 @@
+# ==============================================================================
+#           NEXUS TEST: REAL STACK FRAMES, LOCAL VARIABLES & RECURSION
+# ==============================================================================
+
+# 1. Recursive Factorial
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    let sub = call factorial(n - 1)
+    return n * sub
+}
+
+# 2. Recursive Fibonacci
+fn fib(n) {
+    if n <= 1 {
+        return n
+    }
+    let a = call fib(n - 1)
+    let b = call fib(n - 2)
+    return a + b
+}
+
+# 3. Deep Nested Recursion: Ackermann Function
+fn ackermann(m, n) {
+    if m == 0 {
+        return n + 1
+    }
+    if n == 0 {
+        let res = call ackermann(m - 1, 1)
+        return res
+    }
+    let inner = call ackermann(m, n - 1)
+    let res = call ackermann(m - 1, inner)
+    return res
+}
+
+# 4. Recursive Greatest Common Divisor (Euclid)
+fn gcd(a, b) {
+    if b == 0 {
+        return a
+    }
+    let rem = a % b
+    let res = call gcd(b, rem)
+    return res
+}
+
+# 5. Local Variable Isolation (identical variable names in caller and callee)
+fn callee_fn(x) {
+    let temp = 9999
+    let counter = 8888
+    return x * 2
+}
+
+fn caller_fn(val) {
+    let temp = 42
+    let counter = 100
+    let sub = call callee_fn(val)
+    # Verify temp and counter are untouched
+    let sum = temp + counter
+    return sub + sum
+}
+
+# 6. Helper for nested call composition
+fn add(x, y) {
+    return x + y
+}
+
+# ----------------- EXECUTION & ASSERTIONS -----------------
+print "--- 1. Testing Recursive Factorial ---"
+let f5 = call factorial(5)
+print f5
+assert_eq f5, 120
+
+let f10 = call factorial(10)
+print f10
+assert_eq f10, 3628800
+
+print "--- 2. Testing Recursive Fibonacci ---"
+let fib10 = call fib(10)
+print fib10
+assert_eq fib10, 55
+
+let fib15 = call fib(15)
+print fib15
+assert_eq fib15, 610
+
+print "--- 3. Testing Deep Recursion: Ackermann ---"
+let a1 = call ackermann(1, 2)
+print a1
+assert_eq a1, 4
+
+let a2 = call ackermann(2, 3)
+print a2
+assert_eq a2, 9
+
+let a3 = call ackermann(3, 2)
+print a3
+assert_eq a3, 29
+
+print "--- 4. Testing Recursive GCD ---"
+let g1 = call gcd(1071, 462)
+print g1
+assert_eq g1, 21
+
+let g2 = call gcd(270, 192)
+print g2
+assert_eq g2, 6
+
+print "--- 5. Testing Local Variable Isolation ---"
+let iso = call caller_fn(10)
+print iso
+# sub = 20, temp = 42, counter = 100 -> 20 + 42 + 100 = 162
+assert_eq iso, 162
+
+print "--- 6. Testing Nested Recursive Calls ---"
+# fib(5) = 5, factorial(4) = 24 -> 5 + 24 = 29
+let nest_f = call fib(5)
+let nest_fact = call factorial(4)
+let combined = call add(nest_f, nest_fact)
+print combined
+assert_eq combined, 29
+
+print "[+] ALL RECURSION AND STACK FRAME TESTS PASSED!"

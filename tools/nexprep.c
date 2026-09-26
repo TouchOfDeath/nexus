@@ -906,6 +906,20 @@ static int desugar_float(const char *in, char *out, size_t cap) {
 static char cur_fn_name[128] = "";
 static int fn_block_depth = 0;
 static int call_tmp_counter = 0;
+static int cur_fn_is_scoped = 0;
+static char cur_fn_locals[64][64];
+static int cur_fn_nlocals = 0;
+
+static void fn_add_local(const char *var) {
+    if (!var || !*var) return;
+    if (var[0] == '_') return; /* skip compiler temporaries */
+    for (int i = 0; i < cur_fn_nlocals; i++) {
+        if (!strcmp(cur_fn_locals[i], var)) return;
+    }
+    if (cur_fn_nlocals < 64) {
+        snprintf(cur_fn_locals[cur_fn_nlocals++], 64, "%s", var);
+    }
+}
 
 static void update_fn_depth(const char *line) {
     int in_str = 0;
@@ -923,6 +937,8 @@ static void update_fn_depth(const char *line) {
                 if (fn_block_depth <= 0) {
                     cur_fn_name[0] = '\0';
                     fn_block_depth = 0;
+                    cur_fn_is_scoped = 0;
+                    cur_fn_nlocals = 0;
                 }
             }
         }
@@ -957,6 +973,85 @@ static int split_args(const char *arg_str, char args[][512], int max_args) {
         }
     }
     return count;
+}
+
+static void emit_scoped_call(const char *indent, const char *fn_name, char args[][512], int nargs, const char *dest, char *out, size_t cap) {
+    char line_buf[MAXLINE];
+    int arg_tmp_indices[32];
+
+    /* 0. Handle any nested calls in arguments first */
+    for (int i = 0; i < nargs; i++) {
+        if (strstr(args[i], "call ") || strstr(args[i], "call\t")) {
+            int tmp_id = call_tmp_counter++;
+            snprintf(line_buf, sizeof line_buf, "%slet _c_tmp_%d = %s\n",
+                     indent, tmp_id, args[i]);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            snprintf(args[i], 512, "_c_tmp_%d", tmp_id);
+        }
+    }
+
+    /* 1. Evaluate arguments to temporaries before saving caller frame */
+    for (int i = 0; i < nargs; i++) {
+        arg_tmp_indices[i] = call_tmp_counter++;
+        snprintf(line_buf, sizeof line_buf, "%slet _c_arg_%d = %s\n",
+                 indent, arg_tmp_indices[i], args[i]);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    }
+
+    /* 2. If caller is a scoped function with local variables, save frame to _nx_sp */
+    int frame_size = cur_fn_nlocals * 8;
+    if (cur_fn_is_scoped && cur_fn_nlocals > 0) {
+        for (int i = 0; i < cur_fn_nlocals; i++) {
+            snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + %d] %s\n",
+                     indent, i * 8, cur_fn_locals[i]);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+        }
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + %d\n",
+                 indent, frame_size);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    }
+
+    /* 3. Pass evaluated arguments to callee argument slots */
+    for (int i = 0; i < nargs; i++) {
+        snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = _c_arg_%d\n",
+                 indent, fn_name, i, arg_tmp_indices[i]);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    }
+
+    /* 4. Emit the actual function call */
+    snprintf(line_buf, sizeof line_buf, "%scall %s\n", indent, fn_name);
+    strncat(out, line_buf, cap - strlen(out) - 1);
+
+    /* 5. Capture return value if caller expects a destination */
+    int res_id = -1;
+    if (dest && dest[0]) {
+        res_id = call_tmp_counter++;
+        snprintf(line_buf, sizeof line_buf, "%slet _c_res_%d = _ret_%s\n",
+                 indent, res_id, fn_name);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    }
+
+    /* 6. If caller had a saved frame, restore all caller locals from _nx_sp */
+    if (cur_fn_is_scoped && cur_fn_nlocals > 0) {
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp - %d\n",
+                 indent, frame_size);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+        for (int i = 0; i < cur_fn_nlocals; i++) {
+            snprintf(line_buf, sizeof line_buf, "%slet %s = load64 [_nx_sp + %d]\n",
+                     indent, cur_fn_locals[i], i * 8);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+        }
+    }
+
+    /* 7. Assign destination variable */
+    if (dest && dest[0]) {
+        snprintf(line_buf, sizeof line_buf, "%slet %s = _c_res_%d\n",
+                 indent, dest, res_id);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+        if (cur_fn_is_scoped) {
+            fn_add_local(dest);
+        }
+    }
 }
 
 static int desugar_fn(const char *in, char *out, size_t cap) {
@@ -1000,6 +1095,11 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
 
                     snprintf(cur_fn_name, sizeof cur_fn_name, "%s", fn_name);
                     fn_block_depth = 0;
+                    cur_fn_is_scoped = 1;
+                    cur_fn_nlocals = 0;
+                    for (int i = 0; i < nparams; i++) {
+                        fn_add_local(params[i]);
+                    }
 
                     out[0] = '\0';
                     char line_buf[MAXLINE];
@@ -1021,8 +1121,14 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                 }
             } else if (*q == '{' || *q == '\0' || *q == '#' || *q == ';') {
                 /* Parameterless function: fn name { */
+                if (cur_fn_is_scoped && !strcmp(cur_fn_name, fn_name)) {
+                    /* Re-entrant emission of desugared fn header, keep scoped state */
+                    return 0;
+                }
                 snprintf(cur_fn_name, sizeof cur_fn_name, "%s", fn_name);
                 fn_block_depth = 0;
+                cur_fn_is_scoped = 0;
+                cur_fn_nlocals = 0;
                 return 0; /* unchanged, emitted verbatim */
             }
         }
@@ -1089,47 +1195,14 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                             int nargs = split_args(arg_str, args, 32);
 
                             out[0] = '\0';
-                            char line_buf[MAXLINE];
-
-                            int has_nested_call = 0;
-                            for (int i = 0; i < nargs; i++) {
-                                if (strstr(args[i], "call ") || strstr(args[i], "call\t")) {
-                                    has_nested_call = 1;
-                                    break;
-                                }
-                            }
-
-                            if (has_nested_call) {
-                                int tmp_indices[32];
-                                for (int i = 0; i < nargs; i++) {
-                                    tmp_indices[i] = call_tmp_counter++;
-                                    snprintf(line_buf, sizeof line_buf, "%slet _c_tmp_%d = %s\n",
-                                             indent, tmp_indices[i], args[i]);
-                                    strncat(out, line_buf, cap - strlen(out) - 1);
-                                }
-                                for (int i = 0; i < nargs; i++) {
-                                    snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = _c_tmp_%d\n",
-                                             indent, fn_name, i, tmp_indices[i]);
-                                    strncat(out, line_buf, cap - strlen(out) - 1);
-                                }
-                            } else {
-                                for (int i = 0; i < nargs; i++) {
-                                    snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = %s\n",
-                                             indent, fn_name, i, args[i]);
-                                    strncat(out, line_buf, cap - strlen(out) - 1);
-                                }
-                            }
-
-                            snprintf(line_buf, sizeof line_buf, "%scall %s\n", indent, fn_name);
-                            strncat(out, line_buf, cap - strlen(out) - 1);
-                            snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s\n", indent, dstart, fn_name);
-                            strncat(out, line_buf, cap - strlen(out) - 1);
+                            emit_scoped_call(indent, fn_name, args, nargs, dstart, out, cap);
                             return 1;
                         }
                     } else {
                         /* let dest = call name (zero args, no parens) */
-                        snprintf(out, cap, "%scall %s\n%slet %s = _ret_%s\n",
-                                 indent, fn_name, indent, dstart, fn_name);
+                        char args[1][512];
+                        out[0] = '\0';
+                        emit_scoped_call(indent, fn_name, args, 0, dstart, out, cap);
                         return 1;
                     }
                 }
@@ -1163,39 +1236,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     int nargs = split_args(arg_str, args, 32);
 
                     out[0] = '\0';
-                    char line_buf[MAXLINE];
-
-                    int has_nested_call = 0;
-                    for (int i = 0; i < nargs; i++) {
-                        if (strstr(args[i], "call ") || strstr(args[i], "call\t")) {
-                            has_nested_call = 1;
-                            break;
-                        }
-                    }
-
-                    if (has_nested_call) {
-                        int tmp_indices[32];
-                        for (int i = 0; i < nargs; i++) {
-                            tmp_indices[i] = call_tmp_counter++;
-                            snprintf(line_buf, sizeof line_buf, "%slet _c_tmp_%d = %s\n",
-                                     indent, tmp_indices[i], args[i]);
-                            strncat(out, line_buf, cap - strlen(out) - 1);
-                        }
-                        for (int i = 0; i < nargs; i++) {
-                            snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = _c_tmp_%d\n",
-                                     indent, fn_name, i, tmp_indices[i]);
-                            strncat(out, line_buf, cap - strlen(out) - 1);
-                        }
-                    } else {
-                        for (int i = 0; i < nargs; i++) {
-                            snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = %s\n",
-                                     indent, fn_name, i, args[i]);
-                            strncat(out, line_buf, cap - strlen(out) - 1);
-                        }
-                    }
-
-                    snprintf(line_buf, sizeof line_buf, "%scall %s\n", indent, fn_name);
-                    strncat(out, line_buf, cap - strlen(out) - 1);
+                    emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
                     return 1;
                 }
             }
@@ -2489,6 +2530,36 @@ static void emit_line(const char *raw, FILE *out) {
     }
 
     update_fn_depth(clean);
+    if (cur_fn_is_scoped) {
+        const char *p = clean;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+            p += 4;
+            while (*p == ' ' || *p == '\t') p++;
+            char vname[64];
+            int vn = 0;
+            while (*p && is_ident1((unsigned char)*p)) {
+                if (vn < 63) vname[vn++] = *p;
+                p++;
+            }
+            vname[vn] = '\0';
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '=') {
+                fn_add_local(vname);
+            }
+        } else if (!strncmp(p, "for ", 4) || !strncmp(p, "for\t", 4)) {
+            p += 4;
+            while (*p == ' ' || *p == '\t') p++;
+            char vname[64];
+            int vn = 0;
+            while (*p && is_ident1((unsigned char)*p)) {
+                if (vn < 63) vname[vn++] = *p;
+                p++;
+            }
+            vname[vn] = '\0';
+            fn_add_local(vname);
+        }
+    }
     track_alloc_type(clean);
 
     /* classify: member store  obj.f = RHS */
@@ -2698,11 +2769,11 @@ int main(int argc, char **argv) {
     if (out_path) {
         FILE *out = fopen(out_path, "w");
         if (!out) die("Cannot write", out_path);
-        fprintf(out, "let _TRUE_ = 1\nlet _FALSE_ = 0\n");
+        fprintf(out, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 262144\nlet _nx_sp = _nx_call_stack\n");
         process_file(canon, out);
         fclose(out);
     } else {
-        fprintf(stdout, "let _TRUE_ = 1\nlet _FALSE_ = 0\n");
+        fprintf(stdout, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 262144\nlet _nx_sp = _nx_call_stack\n");
         process_file(canon, stdout);
     }
     return 0;

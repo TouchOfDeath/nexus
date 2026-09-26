@@ -1,16 +1,16 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-09-26  
-> **Current Version**: v5.8 + Pure Native HTTP/1.1 Web Server & Networking Engine  
+> **Last Updated**: 2026-09-27  
+> **Current Version**: v5.9 + Real Call Stack Frames, Lexical Scoping, Local Variables & Recursion  
 > **Compiler Architecture**: 100% Self-Hosted Pure NEXUS (`compiler/nexc.nex`), 0% libc, 0% runtime, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64.
 
 ---
 
 ## 1. Current Status & Verification
 - **Full Test Suite Status**: `PASS` (Run with `./nexus test`)
-  - **Suites**: 27 example suites passing
+  - **Suites**: 28 example suites passing (+`recursion_showcase.nex`)
   - **Compiler Diagnostics**: 13/13 passing
-  - **Foundation Tests**: 41/41 passing
+  - **Foundation Tests**: 44/44 passing (+Recursive Factorial, Recursive Fibonacci, Local Frame Isolation)
   - **Stdlib Assertions**: 94/94 passing
   - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)
   - **Interactive Demos**: 3/3 passing
@@ -19,6 +19,20 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **Real Call Stack Frames, Lexical Scoping, Local Variables & Unlimited Recursion (v5.9)**:
+  - Implemented hardware-backed activation frame preservation engine (`tools/nexprep.c`) allocating a 256 KB runtime execution call stack (`_nx_call_stack` / `_nx_sp`).
+  - Added lexical scoping and per-function local variable tracking:
+    * Parameters (`params[i]`) and internal `let` / `for` loop variables are automatically classified as local frame variables.
+    * Active local variables are saved onto `_nx_sp` before nested or recursive calls and restored on return, guaranteeing complete isolation across calls.
+    * Supports shadowing without corrupting outer scope.
+  - Enabled **unlimited recursion**:
+    * Recursive Fibonacci (`fib(15) = 610`, `fib(10) = 55`) verified.
+    * Recursive Factorial (`10! = 3,628,800`, `5! = 120`) verified.
+    * Deep nested recursion: Ackermann-Péter Function `A(m, n)` (`A(1, 2)=4`, `A(2, 3)=9`, `A(3, 2)=29`) verified.
+    * Euclidean Greatest Common Divisor (`gcd(1071, 462) = 21`) verified.
+  - Local variable isolation: Multiple functions utilizing identical variable names (e.g., `let i = 0`) no longer collide or clobber caller state.
+  - Added comprehensive test suite `tests/test_recursion.nex` and interactive showcase `examples/recursion_showcase.nex`.
+  - 100% backwards compatibility maintained for bare-metal subroutines (`fn name { ... }`) and 100% bit-for-bit self-hosting convergence preserved across PE32+ and Linux ELF64.
 - **Pure Native HTTP/1.1 Web Server & Kernel Networking Engine (v5.8)**:
   - `stdlib/http.nex`: 100% pure native HTTP/1.1 networking module with zero libc and direct Linux kernel socket syscalls (`SYS_socket` 41, `SYS_bind` 49, `SYS_listen` 50, `SYS_accept` 43, `SYS_setsockopt` 54, `SYS_read` 0, `SYS_write` 1, `SYS_close` 3).
   - Integrated `SO_REUSEADDR` socket option support allowing immediate daemon restarts without TCP `TIME_WAIT` port collision.

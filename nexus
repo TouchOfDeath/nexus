@@ -373,6 +373,9 @@ foundation_tests = [
     ("let x = 123 ** 0\nprint x\n", "1", "Exponentiation Power Zero"),
     ("let z = (10.0 +. 2.0) *. 3.0\nprint_float z\n", "36.000000", "Float Infix Parentheses & Precedence"),
     ("let a = alloc 16\nstore64 [a + 0] 1.5\nstore64 [a + 8] -2.5\nlet v1 = load64 [a + 0]\nlet v2 = load64 [a + 8]\nlet sum = v1 +. v2\nprint_float sum\n", "-1.000000", "Store64 Float Literal Support"),
+    ("fn fact(n) {\n    if n <= 1 {\n        return 1\n    }\n    let sub = call fact(n - 1)\n    return n * sub\n}\nlet r = call fact(5)\nprint r\n", "120", "Recursive Factorial (Stack Frames)"),
+    ("fn fib(n) {\n    if n <= 1 {\n        return n\n    }\n    let a = call fib(n - 1)\n    let b = call fib(n - 2)\n    return a + b\n}\nlet r = call fib(10)\nprint r\n", "55", "Recursive Fibonacci (Stack Frames)"),
+    ("fn inner(x) {\n    let i = 999\n    return x * 2\n}\nfn outer(y) {\n    let i = 42\n    let sub = call inner(y)\n    return i + sub\n}\nlet r = call outer(10)\nprint r\n", "62", "Local Variable Frame Isolation"),
 ]
 
 found_passed = 0

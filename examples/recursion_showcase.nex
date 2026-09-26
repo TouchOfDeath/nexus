@@ -1,0 +1,99 @@
+# ==============================================================================
+#            NEXUS SHOWCASE: REAL CALL STACK FRAMES & RECURSION
+#               Zero libc / Pure Native Machine Code Execution
+# ==============================================================================
+
+# 1. Recursive Factorial
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    let sub = call factorial(n - 1)
+    return n * sub
+}
+
+# 2. Recursive Fibonacci
+fn fibonacci(n) {
+    if n <= 1 {
+        return n
+    }
+    let a = call fibonacci(n - 1)
+    let b = call fibonacci(n - 2)
+    return a + b
+}
+
+# 3. Recursive Greatest Common Divisor (Euclid)
+fn gcd(a, b) {
+    if b == 0 {
+        return a
+    }
+    let rem = a % b
+    let res = call gcd(b, rem)
+    return res
+}
+
+# 4. Deep Nested Recursion: Ackermann-Péter Function A(m, n)
+fn ackermann(m, n) {
+    if m == 0 {
+        return n + 1
+    }
+    if n == 0 {
+        let res = call ackermann(m - 1, 1)
+        return res
+    }
+    let inner = call ackermann(m, n - 1)
+    let res = call ackermann(m - 1, inner)
+    return res
+}
+
+# 5. Local Variable Isolation Showcase
+fn worker(task_id) {
+    let loop_idx = 9999
+    let temp_val = 7777
+    return task_id * 10
+}
+
+fn supervisor(worker_count) {
+    let loop_idx = 1
+    let total_work = 0
+    while loop_idx <= worker_count {
+        let work = call worker(loop_idx)
+        let total_work = total_work + work
+        # loop_idx is preserved on caller stack frame across worker calls!
+        let loop_idx = loop_idx + 1
+    }
+    return total_work
+}
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
+print "=================================================="
+print "   NEXUS Pure Native Stack Frames & Recursion     "
+print "=================================================="
+
+print "[1] Computing Factorial of 7 (7! = 5040):"
+let f7 = call factorial(7)
+print f7
+
+print "[2] Computing Fibonacci sequence (terms 0 to 10):"
+for i = 0, i <= 10, i += 1 {
+    let fib_val = call fibonacci(i)
+    print fib_val
+}
+
+print "[3] Computing Euclidean GCD of (252, 105):"
+let g = call gcd(252, 105)
+print g
+
+print "[4] Computing Ackermann A(2, 3) via deep recursion:"
+let ack_val = call ackermann(2, 3)
+print ack_val
+
+print "[5] Running Supervisor & Worker with isolated local variables:"
+let team_output = call supervisor(5)
+print team_output
+
+print "=================================================="
+print "   All Recursive Functions Executed Successfully! "
+print "=================================================="
