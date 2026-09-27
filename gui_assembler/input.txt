@@ -1,3 +1,0 @@
-NEXUS Financial Dashboard (0% C#)
-Q3 Revenue: ,000 | Net Profit: $46000 | Status: Profitable
-

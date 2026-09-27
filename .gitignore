@@ -5,13 +5,21 @@ scratch/
 *.log
 *.tmp
 core
+*.o
+*.s
 
-# Root compilation outputs
-/app.exe
-/app.elf
-/app.macho
-/prologue.bin
-/code.nex
+# Executable binaries (ignore across examples, tests, tools, etc.)
+*.exe
+*.elf
+*.macho
+!compiler/nexc.exe
+!compiler/nexc.elf
+!compiler/nexc2.exe
+!compiler/nexc2.elf
+!compiler/nexc3.exe
+!compiler/nexc3.elf
+!compiler/nexc4.exe
+!compiler/nexc4.elf
 
 # Compiler temporary outputs
 compiler/code.nex
@@ -22,3 +30,8 @@ compiler/app.exe
 compiler/app.elf
 compiler/app.macho
 compiler/app.macho.s
+/app.exe
+/app.elf
+/app.macho
+/prologue.bin
+/code.nex

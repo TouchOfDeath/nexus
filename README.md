@@ -23,65 +23,69 @@ In **Track 4 (Direct Native Linux ELF64 Emission)**, NEXUS emits dual native bin
 ```
 nexus_project/
 │
-├── README.md                      <- High-level guide, capacity table & quick start
-├── AI_HANDOFF.md                  <- Deep technical specification & architectural blueprint
-├── PROJECT_SPECIFICATION.md       <- Full master architecture specification & roadmap
-├── nexus                          <- Unified cross-platform CLI driver (build, run, compile, test, elf)
-├── build_all.sh                   <- Master Linux pipeline (all 10 steps: build, test, parity, direct ELF)
-├── build_all.ps1                  <- Master Windows build and verification script
-├── run_demo.ps1                   <- Interactive demo script for compiler and GUI window
-├── build_gui_dashboard.ps1        <- Automated pipeline compiling NEXUS math into Win32 GUI Dashboard
+├── README.md                  <- High-level guide, capacity table & quick start
+├── PROJECT_STATE.md           <- Active living state, metrics & completed milestones
+├── CHANGES.md                 <- Ecosystem changelog across compiler versions
+├── nexus                      <- Unified toolchain CLI driver (Linux & cross-platform)
+├── build_all.sh               <- Master verification pipeline (build, test, parity, direct ELF)
 │
-├── bin/                           <- Built Native Utilities & Tools
-│   ├── nexload                    <- Zero-dependency PE32+ bare-metal bridge for Linux
-│   └── nexelf                     <- Standalone native Linux ELF64 emitter
+├── bin/                       <- Built Native Toolchain Binaries
+│   ├── nexload                <- Zero-dependency PE32+ bare-metal bridge for Linux
+│   ├── nexelf                 <- Standalone native Linux ELF64 emitter
+│   ├── nexmacho               <- Standalone native macOS ARM64 Mach-O emitter
+│   ├── nexarm64               <- Native Apple Silicon ARM64 AOT compiler
+│   ├── nexprep                <- Multi-file AST & type-inference preprocessor
+│   ├── nextest                <- Native test assertion runner
+│   └── nexfmt                 <- Idempotent source code formatter
 │
-├── compiler/                      <- NEXUS Native Self-Hosting Compiler
-│   ├── nexc.nex                   <- Self-hosting compiler source in NEXUS (~2,000 lines)
-│   ├── nexc.exe                   <- Standalone native Windows compiler (49,152 bytes)
-│   ├── nexc.elf                   <- Standalone native Linux compiler (37,471 bytes - Direct Kernel)
-│   ├── nexc.hex                   <- Hex representation of bootstrap compiler (certutil decodable)
-│   ├── template.bin               <- Master 49,152-byte PE32+ image template
-│   ├── code.nex                   <- Current test / source file to compile
-│   ├── app.exe                    <- Standalone compiled 64-bit Windows executable (49,152 bytes)
-│   ├── app.elf                    <- Standalone compiled 64-bit Linux executable (37,471 bytes)
-│   ├── nexc2.exe                  <- Gen 2 compiler (compiled by Gen 1 bootstrap)
-│   ├── nexc3.exe                  <- Gen 3 compiler (compiled by Gen 2)
-│   └── nexc4.exe                  <- Gen 4 compiler (100% bitwise identical to Gen 3)
+├── compiler/                  <- NEXUS Native Self-Hosting Compiler
+│   ├── nexc.nex               <- Self-hosting compiler source in pure NEXUS (~2,000 lines)
+│   ├── nexc.exe               <- Standalone native Windows compiler (49,152 bytes)
+│   ├── nexc.elf               <- Standalone native Linux compiler (57,951 bytes - Direct Kernel)
+│   ├── nexc.hex               <- Hex bootstrap compiler seed
+│   ├── template.bin           <- Master PE32+ image template
+│   ├── elf_parts.bin          <- Master ELF64 header parts template
+│   ├── nexc2.exe / nexc2.elf  <- Gen 2 compiler
+│   ├── nexc3.exe / nexc3.elf  <- Gen 3 compiler
+│   └── nexc4.exe / nexc4.elf  <- Gen 4 compiler (100% bitwise identical to Gen 3)
 │
-├── gui_assembler/                 <- BASM Native Win32 GUI Assembler
-│   ├── basm.exe                   <- Standalone native Win32 assembler (6,144 bytes)
-│   ├── basm.hex                   <- Hex dump of basm.exe
-│   ├── build_basm.ps1             <- Synthesis script for basm.exe
-│   ├── test_win.exe               <- Raw Win32 window template binary (2,560 bytes)
-│   ├── build_test_win.ps1         <- Generator for test_win.exe
-│   ├── input.txt                  <- Source file for custom desktop window text
-│   └── output.exe                 <- Compiled standalone native desktop window
+├── stdlib/                    <- Standard Library Modules (100% pure NEXUS)
+│   ├── http.nex               <- Pure native HTTP/1.1 web server & JSON engine
+│   ├── x11.nex                <- Direct X11 wire protocol graphical windowing
+│   ├── framebuffer.nex        <- 32-bit software rasterizer & pixel blitter
+│   ├── font.nex               <- 8x8 bitmap font rendering engine
+│   ├── sound.nex              <- Chiptune audio synthesizer & DSP
+│   ├── combinatorics.nex      <- Factorials, permutations, combinations
+│   ├── sets.nex               <- Linear sorted set theory operations
+│   ├── number_theory.nex      <- Modular arithmetic, totient, tetration
+│   ├── linalg.nex             <- Vector & matrix linear algebra
+│   ├── complex.nex            <- Complex arithmetic & Mandelbrot fractals
+│   ├── rational.nex           <- Irreducible rational fraction arithmetic
+│   ├── statistics.nex         <- SplitMix64 PRNG, mean, variance, median
+│   └── calculus.nex           <- Finite differences, Simpson's integration
 │
-├── tools/                         <- NEXUS Developer & Debugging Toolkit
-│   ├── README.md                  <- Detailed toolkit guide & usage manual
-│   ├── nexload.c                  <- Source of bare-metal Windows ABI translation bridge
-│   ├── nexelf.c                   <- Source of standalone native Linux ELF64 emitter
-│   ├── build_tools.ps1            <- Script building all tools with preinstalled csc.exe
-│   ├── nexpedump.exe              <- PE32+ Header, Section & IAT Inspector (9.7 KB)
-│   ├── nexdisasm.exe              <- Native x86-64 Machine Code Disassembler (13.3 KB)
-│   ├── nexdiff.exe                <- Side-by-Side Binary & Section Diff Engine (7.6 KB)
-│   ├── nexdebug.exe               <- Native Win32 Debugger & Crash Interceptor (10.7 KB)
-│   └── nexfuzz.exe                <- Automated Grammar & Stress Test Fuzzer (7.6 KB)
+├── tools/                     <- Toolchain Source Code
+│   ├── nexarm64.c             <- Native ARM64 Apple Silicon & Linux AArch64 compiler
+│   ├── nexprep.c              <- Multi-file preprocessor & type inference engine
+│   ├── nexload.c              <- PE32+ execution bridge for Linux
+│   ├── nexelf.c               <- Standalone Linux ELF64 binary emitter
+│   ├── nexmacho.c             <- Mach-O 64-bit emitter
+│   ├── nexfmt.c               <- Source formatter
+│   └── nextest.c              <- Test harness runner
 │
-└── examples/                      <- Sample NEXUS language source files
-    ├── master_test_suite.nex      <- Complete test suite asserting all 27 language features
-    ├── prime_checker.nex          <- Subroutine-based prime number tester with console input
-    ├── interactive_calc.nex       <- Interactive 5-operation arithmetic calculator (read a, read b)
-    ├── functions_demo.nex         <- Multi-function demo with nested calls and early return
-    ├── nested_loops.nex           <- Multi-level while-in-while and if-in-while block stack demo
-    ├── fibonacci.nex              <- Computes first 10 Fibonacci numbers at machine speed
-    ├── factorial.nex              <- Computes 6! (720) using while loops
-    ├── rocket_physics.nex         <- Orbital physics simulation with real-time telemetry
-    ├── finance.nex                <- Multi-period compound interest and ROI calculator
-    ├── full_demo.nex              <- Complete arithmetic, string, signed, and zero printing demo
-    ├── hello_world.nex            <- Minimal hello world print test
-    └── math_pipeline.nex          <- Arithmetic expression evaluation pipeline
+├── examples/                  <- Sample NEXUS Programs & Graphical Games
+│   ├── gui_flappy.nex         <- Pure native 60 FPS Flappy Bird game (X11)
+│   ├── raycaster_3d.nex       <- Wolfenstein 3D style raycaster engine (X11)
+│   ├── web_server.nex         <- Bare-metal HTTP server & JSON telemetry API
+│   ├── neural_network.nex     <- 2-layer backpropagation XOR neural network
+│   ├── recursion_showcase.nex <- Deep recursion: Ackermann, Fibonacci, GCD
+│   └── ...
+│
+├── tests/                     <- Comprehensive Test Suites (28 suites, 48 foundation tests)
+└── docs/                      <- Architecture, Language Reference & Verification Reports
+    ├── LANGUAGE_REFERENCE.md  <- Complete specification & reference manual
+    ├── archive/               <- Historical development specifications and logs
+    └── ...
 ```
 
 ---
@@ -139,29 +143,15 @@ NEXUS runs natively on Linux with zero external toolchains, emitting dual Window
 ./nexus self-host
 ```
 
-### On Windows (PowerShell)
-Run the master build script from PowerShell:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_all.ps1
-```
-This script automatically executes:
-1. **Step 1:** Re-synthesize `compiler\nexc.exe` bootstrap compiler from pure x86-64 machine code via `certutil -decodehex`.
-2. **Step 2:** Compile `master_test_suite.nex` into `app.exe` using `nexc.exe`.
-3. **Step 3:** Execute `app.exe` and programmatically assert all 27 regression outputs (loops, if/else, nested blocks, functions, relational operators, division, modulo, chained expressions, heap memory, arrays, and file I/O).
-4. **Step 4:** Programmatically verify interactive console input (`read <var>`) using stream-preserving pipes with `interactive_calc.nex` and `prime_checker.nex`.
-5. **Step 5:** Re-synthesize `gui_assembler\basm.exe`.
-6. **Step 6:** Assemble `input.txt` into `output.exe` (a native Win32 window).
-7. **Step 7:** Execute the complete **Stage 5 Self-Hosting Horizon Convergence**:
-   - `nexc.exe` (Gen 1) compiles `nexc.nex` $\to$ `nexc2.exe` (Gen 2).
-   - `nexc2.exe` (Gen 2) compiles `nexc.nex` $\to$ `nexc3.exe` (Gen 3).
-   - `nexc3.exe` (Gen 3) compiles `nexc.nex` $\to$ `nexc4.exe` (Gen 4).
-   - Bitwise parity check: asserting **0 differences across all 49,152 bytes**.
-8. **Step 8:** Re-compile the **Developer & Debugging Toolkit** ([`tools/`](file:///tools/)) using Windows pre-installed `csc.exe` (`nexpedump`, `nexdisasm`, `nexdiff`, `nexdebug`, `nexfuzz`).
-
-### Run the Windows Demo
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run_demo.ps1
-```
+### Cross-Platform Execution via `./nexus`
+The master toolchain driver `./nexus` handles all compilation, native execution, testing, and self-hosting parity checks across platforms:
+- **Build & verify:** `./build_all.sh` or `./nexus build`
+- **Compile tri-platform:** `./nexus compile examples/builtins_demo.nex`
+- **Native Apple Silicon ARM64:** `./nexus compile --target arm64-macos examples/builtins_demo.nex app.macho`
+- **Native Linux AArch64:** `./nexus compile --target linux-aarch64 examples/builtins_demo.nex app.elf`
+- **Interactive graphical game:** `./nexus play examples/gui_flappy.nex`
+- **Full regression test suite:** `./nexus test`
+- **Bit-for-bit self-hosting verification:** `./nexus self-host`
 
 ---
 
