@@ -7,6 +7,9 @@ scratch/
 core
 *.o
 *.s
+*.pyc
+__pycache__/
+**/__pycache__/
 
 # Executable binaries (ignore across examples, tests, tools, etc.)
 *.exe

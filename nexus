@@ -56,6 +56,8 @@ Usage:
   ./nexus diff <bin1> <bin2>      Perform byte-for-byte binary diff across sections
 
 Developer tooling:
+  ./nexus edit [file.nex]         Launch NEXUS Studio visual IDE (F5 Run, syntax highlighting)
+  ./nexus studio [file.nex]       Alias for nexus edit
   ./nexus repl                    Interactive stateful REPL (stdlib preloaded)
   ./nexus new <project-name>      Scaffold a new NEXUS project in the current directory
   ./nexus fmt [--check] <file>    Format a .nex source file (stable, idempotent)
@@ -790,6 +792,9 @@ EOFREAD
         ;;
     sprite)
         python3 "$TOOLS_DIR/nexsprite.py" "${@:2}"
+        ;;
+    edit|studio|idle)
+        python3 "$TOOLS_DIR/nexstudio.py" "${2:-}"
         ;;
     *)
         usage

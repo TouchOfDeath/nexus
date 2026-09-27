@@ -1,7 +1,7 @@
 # NEXUS Project State & Memory Log
 
 > **Last Updated**: 2026-09-27  
-> **Current Version**: v6.1 + Native macOS ARM64 Codegen Phase 2  
+> **Current Version**: v6.2 + NEXUS Studio IDE & macOS ARM64 Codegen Phase 2  
 > **Compiler Architecture**: 100% Self-Hosted Pure NEXUS (`compiler/nexc.nex`), 0% libc, 0% runtime, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64.
 
 ---
@@ -20,6 +20,13 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **NEXUS Studio Built-In IDE & Runner (`./nexus edit`, v6.2)**:
+  - Added built-in visual IDE environment (`tools/nexstudio.py`) bundled directly with the toolchain driver (`./nexus edit [file.nex]`, `./nexus studio`).
+  - Full syntax highlighting for NEXUS control flow keywords (`let`, `fn`, `call`, `return`, `if`, `while`, `for`, `struct`), memory/built-in operators (`alloc`, `load`, `store`, `syscall`, `abs`, `len`), strings, numbers, and comments.
+  - Interactive **[F5] Instant Execution**: automatically saves the file, executes `./nexus run <file>`, and streams real-time stdout/stderr into an integrated bottom terminal console pane.
+  - Interactive **[F6] Tri-Platform Compiler**: one-click emission of Windows PE32+, Linux ELF64, and Apple Silicon ARM64 Mach-O binaries.
+  - Built-in Example Browser with 1-click loading of top games and applications (Flappy Bird, 3D Raycaster, Neural Network, Web Server, etc.).
+  - Auto-indentation, smart un-indent, dynamic line numbering, and non-blocking background process execution with user termination support.
 - **Native macOS ARM64 Codegen Phase 2 (v6.1)**:
   - Complete native ARM64 Apple Silicon Mach-O and Linux aarch64 code generation in `tools/nexarm64.c` covering all NEXUS language constructs:
     * Exact string literal extraction in `.rodata` with proper unescaping (`\n`, `\r`, `\t`, `\0`, `\"`, `\\`), stripping rogue trailing newlines.

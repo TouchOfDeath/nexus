@@ -65,6 +65,7 @@ nexus_project/
 │   └── calculus.nex           <- Finite differences, Simpson's integration
 │
 ├── tools/                     <- Toolchain Source Code
+│   ├── nexstudio.py           <- Built-in NEXUS Studio visual IDE & F5 runner
 │   ├── nexarm64.c             <- Native ARM64 Apple Silicon & Linux AArch64 compiler
 │   ├── nexprep.c              <- Multi-file preprocessor & type inference engine
 │   ├── nexload.c              <- PE32+ execution bridge for Linux
@@ -145,6 +146,7 @@ NEXUS runs natively on Linux with zero external toolchains, emitting dual Window
 
 ### Cross-Platform Execution via `./nexus`
 The master toolchain driver `./nexus` handles all compilation, native execution, testing, and self-hosting parity checks across platforms:
+- **Launch NEXUS Studio IDE:** `./nexus edit` or `./nexus edit <file.nex>` (press F5 to run!)
 - **Build & verify:** `./build_all.sh` or `./nexus build`
 - **Compile tri-platform:** `./nexus compile examples/builtins_demo.nex`
 - **Native Apple Silicon ARM64:** `./nexus compile --target arm64-macos examples/builtins_demo.nex app.macho`

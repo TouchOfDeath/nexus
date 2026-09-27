@@ -1,6 +1,21 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v6.1 — Native macOS ARM64 Apple Silicon Codegen Phase 2 (current)
+## v6.2 — NEXUS Studio Built-In Visual IDE & Runner (current)
+
+Bundled visual IDE environment providing full syntax highlighting, dynamic line numbering,
+integrated example browsing, and instant [F5] execution (automatic save, compile, and direct
+Linux kernel execution with output streaming).
+
+### 1. Developer Environment & Features
+- **Integrated Driver Launch**: `./nexus edit [file.nex]` or `./nexus studio [file.nex]`.
+- **NEXUS Syntax Highlighting**: Real-time syntax coloring for control flow keywords (`let`, `fn`, `call`, `return`, `if`, `while`, `for`, `struct`), memory/built-in operators (`alloc`, `load`, `store`, `syscall`, `abs`, `len`), numbers, string literals, and comments.
+- **[F5] Instant Execution**: Automatically saves buffer and executes `./nexus run <file>` in a non-blocking background thread, streaming stdout/stderr to an integrated console pane with execution time metrics.
+- **[F6] Tri-Platform Compilation**: Compiles current file to Windows PE32+, Linux ELF64, and Apple Silicon ARM64 Mach-O binaries with single-keystroke simplicity.
+- **Built-in Examples Browser**: 1-click open for top examples (Flappy Bird, 3D Raycaster, Neural Network, Web Server, Fibonacci, etc.).
+- **Smart Formatting**: Auto-indentation on blocks (`{`), smart 4-space un-indent on Backspace, line numbers gutter tracking scroll and edit events.
+- **Thread-Safe Architecture**: Non-blocking queue-based background process monitoring preventing UI freezes during heavy compilation or program execution.
+
+## v6.1 — Native macOS ARM64 Apple Silicon Codegen Phase 2
 
 Full native ARM64 feature parity for Apple Silicon macOS (Mach-O) and Linux aarch64 (ELF64).
 All language constructs now compile directly to native ARM64 instructions with 0% libc and
