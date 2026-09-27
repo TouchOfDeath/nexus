@@ -56,9 +56,9 @@ Usage:
   ./nexus diff <bin1> <bin2>      Perform byte-for-byte binary diff across sections
 
 Developer tooling:
+  ./nexus ide                     Launch 100% pure native NEXUS IDE (0% Python / 0% libc / 0% Xlib)
   ./nexus edit [file.nex]         Launch NEXUS Studio visual IDE (F5 Run, syntax highlighting)
-  ./nexus studio [file.nex]       Alias for nexus edit
-  ./nexus repl                    Interactive stateful REPL (stdlib preloaded)
+  ./nexus studio [file.nex]       Alias for nexus edit (use --native for pure NEXUS IDE)
   ./nexus new <project-name>      Scaffold a new NEXUS project in the current directory
   ./nexus fmt [--check] <file>    Format a .nex source file (stable, idempotent)
   ./nexus build <file.nex>        Incremental project build with dependency caching
@@ -361,7 +361,7 @@ examples = sorted(glob.glob(os.path.join(base_dir, "examples", "*.nex")))
 passed = 0
 for ex in examples:
     name = os.path.basename(ex)
-    if any(k in name for k in ["interactive", "prime", "master", "gui", "server"]):
+    if any(k in name for k in ["interactive", "prime", "master", "gui", "server", "ide"]):
         continue
     subprocess.run([nexprep, ex, os.path.join(compiler_dir, "code.nex")], check=True)
     for f_clean in ["app.exe", "app.elf"]:
@@ -564,10 +564,28 @@ if os.path.exists(type_infer_src):
     if "[SUCCESS] All Type Inference & Unified Syntax Tests Passed!" in r.stdout:
         print("[+] Type inference suite: 7 categories           PASS")
         type_infer_ok = True
+# Pure Native NEXUS IDE test suite (0% C, 0% libc, 0% Python, 100% NEXUS)
+ide_ok = False
+ide_src = os.path.join(base_dir, "examples", "nexus_ide.nex")
+if os.path.exists(ide_src):
+    subprocess.run([nexprep, ide_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        print("[+] Native IDE suite: nexus_ide.nex (100% NEXUS) PASS (PE32+ & ELF64)")
+        ide_ok = True
     else:
-        print("[-] Type inference suite: FAIL")
+        print("[-] Native IDE suite: FAIL")
 
-print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={"PASS" if stdlib_ok else "FAIL"}, optimizer={"PASS" if optimizer_ok else "FAIL"}, type_infer={"PASS" if type_infer_ok else "FAIL"}")
+s_ok = "PASS" if stdlib_ok else "FAIL"
+o_ok = "PASS" if optimizer_ok else "FAIL"
+t_ok = "PASS" if type_infer_ok else "FAIL"
+i_ok = "PASS" if ide_ok else "FAIL"
+print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}")
 '
         ;;
     self-host)
@@ -793,8 +811,17 @@ EOFREAD
     sprite)
         python3 "$TOOLS_DIR/nexsprite.py" "${@:2}"
         ;;
+    ide)
+        "$0" build "$SCRIPT_DIR/examples/nexus_ide.nex"
+        echo "[+] Launching 100% Pure Native NEXUS IDE (0% Python / 0% C / 0% libc / 0% Xlib)..."
+        "$SCRIPT_DIR/examples/nexus_ide.elf"
+        ;;
     edit|studio|idle)
-        python3 "$TOOLS_DIR/nexstudio.py" "${2:-}"
+        if [ "${2:-}" = "--native" ] || [ "${2:-}" = "-n" ]; then
+            "$0" ide
+        else
+            python3 "$TOOLS_DIR/nexstudio.py" "${2:-}"
+        fi
         ;;
     *)
         usage

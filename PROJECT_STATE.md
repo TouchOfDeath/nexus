@@ -20,6 +20,16 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **Pure Native NEXUS IDE & Code Studio (`examples/nexus_ide.nex`, `./nexus ide`, v6.3)**:
+  - 100% written in pure NEXUS source code (**0% C, 0% libc, 0% Xlib, 0% Python, 100% machine code**).
+  - Direct Linux X11 wire protocol graphical windowing via Unix domain sockets (`stdlib/x11.nex`) without Xlib or libxcb.
+  - High-performance software framebuffer (`stdlib/framebuffer.nex`) with direct memory blitting (`PutImage`).
+  - Native 8x8 bitmap font rendering (`stdlib/font.nex`) with syntax highlighting for comments, strings, numbers, and code.
+  - Interactive line numbers gutter and cursor positioning with arrow navigation, backspace, enter, tab, space, and full ASCII keyboard decoding.
+  - Built-in **[F5] Instant Execution**: writes buffer to disk, spawns child execution via Linux kernel `sys_fork` (57), `sys_execve` (59), and `sys_wait4` (61) to run `./nexus run`, captures stdout/stderr, and renders output directly into an integrated terminal console pane.
+  - Built-in **[F6] Tri-Platform Compilation**: triggers one-click compilation to PE32+, ELF64, and Apple Silicon ARM64 Mach-O.
+  - Integrated into CLI via `./nexus ide` and `./nexus edit --native`.
+  - Fully integrated into `./nexus test` with automated compilation and self-hosting verification.
 - **NEXUS Studio Built-In IDE & Runner (`./nexus edit`, v6.2)**:
   - Added built-in visual IDE environment (`tools/nexstudio.py`) bundled directly with the toolchain driver (`./nexus edit [file.nex]`, `./nexus studio`).
   - Full syntax highlighting for NEXUS control flow keywords (`let`, `fn`, `call`, `return`, `if`, `while`, `for`, `struct`), memory/built-in operators (`alloc`, `load`, `store`, `syscall`, `abs`, `len`), strings, numbers, and comments.

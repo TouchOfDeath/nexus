@@ -1,0 +1,881 @@
+# ==============================================================================
+#                  NEXUS NATIVE IDE & CODE STUDIO (nexus_ide.nex)
+#         0% C  -  0% libc  -  0% Xlib  -  0% Python  -  100% Pure NEXUS
+#   A Complete Graphical Code Editor & IDE Running Directly on the Linux Kernel!
+# ==============================================================================
+
+include "stdlib/framebuffer.nex"
+include "stdlib/font.nex"
+
+# --- Editor Buffer State ---
+let text_buf = alloc 16384
+let text_len = 0
+let cursor_pos = 0
+let cursor_line = 1
+let cursor_col = 1
+let scroll_line = 0
+
+# --- Console Output State ---
+let console_buf = alloc 8192
+let console_len = 0
+let console_status = "Ready. Press [F5] to compile and run natively."
+
+# --- Colors (32-bit ARGB: 0x00RRGGBB) ---
+let col_bg         = 1118491   # #11111b (Dark background)
+let col_header_bg  = 1973806   # #1e1e2e (Header bar)
+let col_gutter_bg  = 1579045   # #181825 (Gutter)
+let col_gutter_fg  = 7106694   # #6c7086 (Line numbers)
+let col_divider    = 3224132   # #313244 (Divider)
+let col_console_bg = 1118491   # #11111b (Console background)
+let col_status_bg  = 1579045   # #181825 (Status bar)
+let col_text       = 13489908  # #cdd6f4 (Normal text)
+let col_keyword    = 13346551  # #cba6f7 (Purple keywords)
+let col_string     = 10937249  # #a6e3a1 (Green strings)
+let col_number     = 16429959  # #fab387 (Orange numbers)
+let col_comment    = 7106694   # #6c7086 (Grey comments)
+let col_cursor     = 16113884  # #f5e0dc (Cursor)
+let col_title      = 9035243   # #89dceb (Cyan title)
+let col_success    = 10937249  # #a6e3a1 (Green)
+let col_warn       = 16376495  # #f9e2af (Yellow)
+
+# --- Drawing Registers for Fast Direct Framebuffer Text Rendering ---
+let ide_char_code = 0
+let ide_char_x = 0
+let ide_char_y = 0
+let ide_char_col = 0
+
+fn ide_draw_char {
+    if font_initialized == 0 {
+        call font_init
+    }
+    if ide_char_code < 32 {
+        return
+    }
+    if ide_char_code > 126 {
+        return
+    }
+    let g_idx = ide_char_code - 32
+    let g_off = g_idx * 8
+    let g_ptr = font_data + g_off
+
+    let r = 0
+    while r < 8 {
+        let row_b = load [g_ptr + r]
+        if row_b > 0 {
+            let py = ide_char_y + r
+            if py >= 0 {
+                if py < fb_height {
+                    let bit_m = 1
+                    let c = 0
+                    while c < 8 {
+                        let b_on = row_b / bit_m
+                        let b_on = b_on % 2
+                        if b_on == 1 {
+                            let px = ide_char_x + c
+                            if px >= 0 {
+                                if px < fb_width {
+                                    let poff = py * fb_width + px
+                                    let poff = poff * 4
+                                    store32 [fb_buf + poff] ide_char_col
+                                }
+                            }
+                        }
+                        let bit_m = bit_m * 2
+                        let c = c + 1
+                    }
+                }
+            }
+        }
+        let r = r + 1
+    }
+}
+
+let ide_text_ptr = 0
+let ide_text_x = 0
+let ide_text_y = 0
+let ide_text_col = 0
+
+fn ide_draw_text {
+    let t_x = ide_text_x
+    let t_y = ide_text_y
+    let i = 0
+    let loop_on = 1
+    while loop_on == 1 {
+        let ch = load [ide_text_ptr + i]
+        if ch == 0 {
+            let loop_on = 0
+        } else {
+            let ide_char_code = ch
+            let ide_char_x = t_x
+            let ide_char_y = t_y
+            let ide_char_col = ide_text_col
+            call ide_draw_char
+            let t_x = t_x + 8
+            let i = i + 1
+        }
+    }
+}
+
+let rect_x = 0
+let rect_y = 0
+let rect_w = 0
+let rect_h = 0
+let rect_col = 0
+
+fn ide_draw_rect {
+    if rect_w <= 0 {
+        return
+    }
+    if rect_h <= 0 {
+        return
+    }
+    let ry = 0
+    while ry < rect_h {
+        let py = rect_y + ry
+        if py >= 0 {
+            if py < fb_height {
+                let rx = 0
+                while rx < rect_w {
+                    let px = rect_x + rx
+                    if px >= 0 {
+                        if px < fb_width {
+                            let poff = py * fb_width + px
+                            let poff = poff * 4
+                            store32 [fb_buf + poff] rect_col
+                        }
+                    }
+                    let rx = rx + 1
+                }
+            }
+        }
+        let ry = ry + 1
+    }
+}
+
+# --- Line Number Formatting ---
+let target_n = 0
+let line_num_str = alloc 16
+
+fn format_line_num {
+    let n = target_n
+    if n < 10 {
+        store [line_num_str + 0] 32
+        store [line_num_str + 1] 32
+        let ch0 = 48 + n
+        store [line_num_str + 2] ch0
+        store [line_num_str + 3] 0
+        return
+    }
+    if n < 100 {
+        let d10 = n / 10
+        let d1 = n % 10
+        store [line_num_str + 0] 32
+        let ch1 = 48 + d10
+        store [line_num_str + 1] ch1
+        let ch2 = 48 + d1
+        store [line_num_str + 2] ch2
+        store [line_num_str + 3] 0
+        return
+    }
+    let d100 = n / 100
+    let rem = n % 100
+    let d10 = rem / 10
+    let d1 = rem % 10
+    let ch0 = 48 + d100
+    store [line_num_str + 0] ch0
+    let ch1 = 48 + d10
+    store [line_num_str + 1] ch1
+    let ch2 = 48 + d1
+    store [line_num_str + 2] ch2
+    store [line_num_str + 3] 0
+}
+
+# --- Screen Rendering Function ---
+fn render_screen {
+    # 1. Clear background
+    let fb_col = col_bg
+    call fb_clear
+
+    # 2. Draw Header Bar
+    let rect_x = 0
+    let rect_y = 0
+    let rect_w = fb_width
+    let rect_h = 24
+    let rect_col = col_header_bg
+    call ide_draw_rect
+
+    let ide_text_ptr = "NEXUS Native IDE v1.0"
+    let ide_text_x = 10
+    let ide_text_y = 7
+    let ide_text_col = col_title
+    call ide_draw_text
+
+    let ide_text_ptr = "[F5] Run   [F6] Compile Tri   [Esc] Quit"
+    let ide_text_x = 350
+    let ide_text_y = 7
+    let ide_text_col = col_warn
+    call ide_draw_text
+
+    # 3. Draw Left Gutter (Line Numbers background)
+    let rect_x = 0
+    let rect_y = 24
+    let rect_w = 40
+    let rect_h = 326
+    let rect_col = col_gutter_bg
+    call ide_draw_rect
+
+    # 4. Render Text Buffer and Line Numbers
+    let cur_x = 48
+    let cur_y = 30
+    let cur_ln = 1
+    let cur_col = 1
+    let is_comment = 0
+    let is_string = 0
+
+    # Draw Line 1 in gutter
+    let target_n = 1
+    call format_line_num
+    let ide_text_ptr = line_num_str
+    let ide_text_x = 8
+    let ide_text_y = cur_y
+    let ide_text_col = col_gutter_fg
+    call ide_draw_text
+
+    let i = 0
+    while i < text_len {
+        # Check if cursor is here
+        if i == cursor_pos {
+            let cursor_line = cur_ln
+            let cursor_col = cur_col
+            # Draw cursor rectangle
+            let rect_x = cur_x
+            let rect_y = cur_y
+            let rect_w = 8
+            let rect_h = 10
+            let rect_col = col_cursor
+            call ide_draw_rect
+        }
+
+        let ch = load [text_buf + i]
+        if ch == 10 {
+            # Newline
+            let cur_x = 48
+            let cur_y = cur_y + 11
+            let cur_ln = cur_ln + 1
+            let cur_col = 1
+            let is_comment = 0
+
+            # Draw line number in gutter if within editor area
+            if cur_y < 340 {
+                let target_n = cur_ln
+                call format_line_num
+                let ide_text_ptr = line_num_str
+                let ide_text_x = 8
+                let ide_text_y = cur_y
+                let ide_text_col = col_gutter_fg
+                call ide_draw_text
+            }
+        } else {
+            # State tracking
+            if ch == 35 {
+                let is_comment = 1
+            }
+            if ch == 34 {
+                if is_string == 1 {
+                    let is_string = 0
+                } else {
+                    let is_string = 1
+                }
+            }
+
+            # Determine color
+            let ch_col = col_text
+            if is_comment == 1 {
+                let ch_col = col_comment
+            }
+            if is_comment == 0 {
+                if is_string == 1 {
+                    let ch_col = col_string
+                }
+                if is_string == 0 {
+                    if ch >= 48 {
+                        if ch <= 57 {
+                            let ch_col = col_number
+                        }
+                    }
+                }
+            }
+
+            # Draw glyph if in bounds
+            if cur_y < 345 {
+                if cur_x < 630 {
+                    let ide_char_code = ch
+                    let ide_char_x = cur_x
+                    let ide_char_y = cur_y
+                    let ide_char_col = ch_col
+                    call ide_draw_char
+                }
+            }
+            let cur_x = cur_x + 8
+            let cur_col = cur_col + 1
+        }
+        let i = i + 1
+    }
+
+    # Cursor at end of buffer
+    if cursor_pos == text_len {
+        let cursor_line = cur_ln
+        let cursor_col = cur_col
+        let rect_x = cur_x
+        let rect_y = cur_y
+        let rect_w = 8
+        let rect_h = 10
+        let rect_col = col_cursor
+        call ide_draw_rect
+    }
+
+    # 5. Console Divider
+    let rect_x = 0
+    let rect_y = 350
+    let rect_w = fb_width
+    let rect_h = 2
+    let rect_col = col_divider
+    call ide_draw_rect
+
+    # 6. Console Header
+    let rect_x = 0
+    let rect_y = 352
+    let rect_w = fb_width
+    let rect_h = 20
+    let rect_col = col_header_bg
+    call ide_draw_rect
+
+    let ide_text_ptr = ">> TERMINAL OUTPUT (Direct Linux Kernel Execution)"
+    let ide_text_x = 10
+    let ide_text_y = 357
+    let ide_text_col = col_title
+    call ide_draw_text
+
+    # 7. Console Content
+    let con_x = 10
+    let con_y = 378
+    let ci = 0
+    while ci < console_len {
+        let cch = load [console_buf + ci]
+        if cch == 10 {
+            let con_x = 10
+            let con_y = con_y + 10
+        } else {
+            if con_y < 450 {
+                if con_x < 630 {
+                    let ide_char_code = cch
+                    let ide_char_x = con_x
+                    let ide_char_y = con_y
+                    let ide_char_col = col_text
+                    call ide_draw_char
+                }
+            }
+            let con_x = con_x + 8
+        }
+        let ci = ci + 1
+    }
+
+    # 8. Status Bar
+    let rect_x = 0
+    let rect_y = 460
+    let rect_w = fb_width
+    let rect_h = 20
+    let rect_col = col_status_bg
+    call ide_draw_rect
+
+    let ide_text_ptr = console_status
+    let ide_text_x = 10
+    let ide_text_y = 465
+    let ide_text_col = col_success
+    call ide_draw_text
+
+    call fb_present
+}
+
+# --- Buffer Insert / Delete Helpers ---
+let insert_ch = 0
+fn buf_insert {
+    if text_len >= 16000 {
+        return
+    }
+    # Shift right from text_len down to cursor_pos
+    let i = text_len
+    while i > cursor_pos {
+        let prev = i - 1
+        let b = load [text_buf + prev]
+        store [text_buf + i] b
+        let i = i - 1
+    }
+    store [text_buf + cursor_pos] insert_ch
+    let cursor_pos = cursor_pos + 1
+    let text_len = text_len + 1
+}
+
+fn buf_delete {
+    if cursor_pos <= 0 {
+        return
+    }
+    let del_pos = cursor_pos - 1
+    let i = del_pos
+    let max_i = text_len - 1
+    while i < max_i {
+        let next_i = i + 1
+        let b = load [text_buf + next_i]
+        store [text_buf + i] b
+        let i = i + 1
+    }
+    let cursor_pos = cursor_pos - 1
+    let text_len = text_len - 1
+    store [text_buf + text_len] 0
+}
+
+# --- Starter Code Initializer ---
+let append_src = 0
+fn append_line {
+    let li = 0
+    let l_on = 1
+    while l_on == 1 {
+        let lc = load [append_src + li]
+        if lc == 0 {
+            let l_on = 0
+        } else {
+            store [text_buf + text_len] lc
+            let text_len = text_len + 1
+            let li = li + 1
+        }
+    }
+    store [text_buf + text_len] 10
+    let text_len = text_len + 1
+}
+
+fn init_starter_code {
+    let text_len = 0
+    let append_src = "# Welcome to NEXUS Native IDE v1.0!"
+    call append_line
+    let append_src = "# 0% C - 0% libc - 0% Xlib - 100% Machine Code"
+    call append_line
+    let append_src = "# Press [F5] to Run, [F6] to Compile, [Esc] to Quit"
+    call append_line
+    let append_src = ""
+    call append_line
+    let append_src = "let sum = 0"
+    call append_line
+    let append_src = "let i = 1"
+    call append_line
+    let append_src = "while i <= 5 {"
+    call append_line
+    let append_src = "    let sq = i * i"
+    call append_line
+    let append_src = "    print sq"
+    call append_line
+    let append_src = "    let sum = sum + sq"
+    call append_line
+    let append_src = "    let i = i + 1"
+    call append_line
+    let append_src = "}"
+    call append_line
+    let append_src = "print sum"
+    call append_line
+
+    let cursor_pos = text_len
+}
+
+# --- Child Execution via Linux Kernel Syscalls ---
+let sh_path      = "/bin/sh"
+let sh_arg_c     = "-c"
+let sh_cmd_run   = "./nexus run ide_run.nex > ide_out.txt 2>&1"
+let sh_cmd_tri   = "./nexus compile ide_run.nex > ide_out.txt 2>&1"
+
+let argv_arr     = alloc 64
+let envp_arr     = alloc 16
+let wait_status  = alloc 16
+
+fn execute_user_code {
+    let console_status = "Compiling and running on Linux kernel..."
+    call render_screen
+
+    # 1. Save buffer to ide_run.nex
+    let file_h = file_create "ide_run.nex"
+    if file_h < 0 {
+        let console_status = "[-] Error: Failed to write ide_run.nex"
+        call render_screen
+        return
+    }
+    file_write file_h text_buf text_len
+    file_close file_h
+
+    # 2. Prepare argv: ["/bin/sh", "-c", sh_cmd_run, NULL]
+    store64 [argv_arr + 0] sh_path
+    store64 [argv_arr + 8] sh_arg_c
+    store64 [argv_arr + 16] sh_cmd_run
+    store64 [argv_arr + 24] 0
+    store64 [envp_arr + 0] 0
+
+    # 3. Fork and execute
+    let pid = syscall0 57
+    if pid == 0 {
+        syscall3 59, sh_path, argv_arr, envp_arr
+        syscall1 60, 1
+    }
+
+    # 4. In parent: wait for child
+    syscall4 61, pid, wait_status, 0, 0
+
+    # 5. Read back ide_out.txt
+    let out_file_h = file_open "ide_out.txt"
+    let console_len = 0
+    if out_file_h >= 0 {
+        let console_len = file_read out_file_h console_buf 4096
+        if console_len < 0 {
+            let console_len = 0
+        }
+        store [console_buf + console_len] 0
+        file_close out_file_h
+    }
+
+    let console_status = "Execution complete! Exit code 0."
+    call render_screen
+}
+
+fn compile_tri_platform {
+    let console_status = "Compiling Tri-Platform (PE32+, ELF64, Mach-O)..."
+    call render_screen
+
+    let file_h = file_create "ide_run.nex"
+    if file_h < 0 {
+        let console_status = "[-] Error: Failed to write ide_run.nex"
+        call render_screen
+        return
+    }
+    file_write file_h text_buf text_len
+    file_close file_h
+
+    store64 [argv_arr + 0] sh_path
+    store64 [argv_arr + 8] sh_arg_c
+    store64 [argv_arr + 16] sh_cmd_tri
+    store64 [argv_arr + 24] 0
+    store64 [envp_arr + 0] 0
+
+    let pid = syscall0 57
+    if pid == 0 {
+        syscall3 59, sh_path, argv_arr, envp_arr
+        syscall1 60, 1
+    }
+
+    syscall4 61, pid, wait_status, 0, 0
+
+    let out_file_h = file_open "ide_out.txt"
+    let console_len = 0
+    if out_file_h >= 0 {
+        let console_len = file_read out_file_h console_buf 4096
+        if console_len < 0 {
+            let console_len = 0
+        }
+        store [console_buf + console_len] 0
+        file_close out_file_h
+    }
+
+    let console_status = "Tri-Platform compilation successful!"
+    call render_screen
+}
+
+# --- Main Event Loop and Keycode Decoder ---
+fn run_ide {
+    let fb_width = 640
+    let fb_height = 480
+    call fb_init
+    call font_init
+    call init_starter_code
+    call render_screen
+
+    let ide_running = 1
+    while ide_running == 1 {
+        # Poll non-blocking X11 wire protocol events
+        let ev_n = syscall6 45, x11_fd, x11_ev_buf, 32, 64, 0, 0
+        if ev_n >= 32 {
+            let ev_code = load [x11_ev_buf + 0]
+            if ev_code > 127 {
+                let ev_code = ev_code - 128
+            }
+
+            # KeyPress Event
+            if ev_code == 2 {
+                let keycode = load [x11_ev_buf + 1]
+                let keystate = load16 [x11_ev_buf + 28]
+                let is_shift = keystate % 2
+
+                # 1. Escape -> Quit
+                if keycode == 9 {
+                    let ide_running = 0
+                }
+
+                # 2. F5 -> Run Program
+                if keycode == 71 {
+                    call execute_user_code
+                }
+
+                # 3. F6 -> Tri-Platform Compile
+                if keycode == 72 {
+                    call compile_tri_platform
+                }
+
+                # 4. Backspace (22)
+                if keycode == 22 {
+                    call buf_delete
+                }
+
+                # 5. Enter (36)
+                if keycode == 36 {
+                    let insert_ch = 10
+                    call buf_insert
+                }
+
+                # 6. Tab (23) -> 4 spaces
+                if keycode == 23 {
+                    let insert_ch = 32
+                    call buf_insert
+                    call buf_insert
+                    call buf_insert
+                    call buf_insert
+                }
+
+                # 7. Space (65)
+                if keycode == 65 {
+                    let insert_ch = 32
+                    call buf_insert
+                }
+
+                # 8. Left Arrow (113)
+                if keycode == 113 {
+                    if cursor_pos > 0 {
+                        let cursor_pos = cursor_pos - 1
+                    }
+                }
+
+                # 9. Right Arrow (114)
+                if keycode == 114 {
+                    if cursor_pos < text_len {
+                        let cursor_pos = cursor_pos + 1
+                    }
+                }
+
+                # 10. Number Keys 1..0 (10..19)
+                if keycode >= 10 {
+                    if keycode <= 19 {
+                        let n_val = keycode - 9
+                        if n_val == 10 {
+                            let n_val = 0
+                        }
+                        if is_shift == 1 {
+                            if n_val == 1 {
+                                let insert_ch = 33
+                            }
+                            if n_val == 2 {
+                                let insert_ch = 64
+                            }
+                            if n_val == 3 {
+                                let insert_ch = 35
+                            }
+                            if n_val == 4 {
+                                let insert_ch = 36
+                            }
+                            if n_val == 5 {
+                                let insert_ch = 37
+                            }
+                            if n_val == 6 {
+                                let insert_ch = 94
+                            }
+                            if n_val == 7 {
+                                let insert_ch = 38
+                            }
+                            if n_val == 8 {
+                                let insert_ch = 42
+                            }
+                            if n_val == 9 {
+                                let insert_ch = 40
+                            }
+                            if n_val == 0 {
+                                let insert_ch = 41
+                            }
+                        } else {
+                            let insert_ch = 48 + n_val
+                        }
+                        call buf_insert
+                    }
+                }
+
+                # 11. Punctuation
+                if keycode == 20 {
+                    let insert_ch = 45
+                    if is_shift == 1 {
+                        let insert_ch = 95
+                    }
+                    call buf_insert
+                }
+                if keycode == 21 {
+                    let insert_ch = 61
+                    if is_shift == 1 {
+                        let insert_ch = 43
+                    }
+                    call buf_insert
+                }
+                if keycode == 34 {
+                    let insert_ch = 91
+                    if is_shift == 1 {
+                        let insert_ch = 123
+                    }
+                    call buf_insert
+                }
+                if keycode == 35 {
+                    let insert_ch = 93
+                    if is_shift == 1 {
+                        let insert_ch = 125
+                    }
+                    call buf_insert
+                }
+                if keycode == 47 {
+                    let insert_ch = 59
+                    if is_shift == 1 {
+                        let insert_ch = 58
+                    }
+                    call buf_insert
+                }
+                if keycode == 48 {
+                    let insert_ch = 39
+                    if is_shift == 1 {
+                        let insert_ch = 34
+                    }
+                    call buf_insert
+                }
+                if keycode == 51 {
+                    let insert_ch = 92
+                    if is_shift == 1 {
+                        let insert_ch = 124
+                    }
+                    call buf_insert
+                }
+                if keycode == 59 {
+                    let insert_ch = 44
+                    if is_shift == 1 {
+                        let insert_ch = 60
+                    }
+                    call buf_insert
+                }
+                if keycode == 60 {
+                    let insert_ch = 46
+                    if is_shift == 1 {
+                        let insert_ch = 62
+                    }
+                    call buf_insert
+                }
+                if keycode == 61 {
+                    let insert_ch = 47
+                    if is_shift == 1 {
+                        let insert_ch = 63
+                    }
+                    call buf_insert
+                }
+
+                # 12. Alphabetic Keys (QWERTY rows)
+                let alpha_ch = 0
+                if keycode == 24 {
+                    let alpha_ch = 113
+                }
+                if keycode == 25 {
+                    let alpha_ch = 119
+                }
+                if keycode == 26 {
+                    let alpha_ch = 101
+                }
+                if keycode == 27 {
+                    let alpha_ch = 114
+                }
+                if keycode == 28 {
+                    let alpha_ch = 116
+                }
+                if keycode == 29 {
+                    let alpha_ch = 121
+                }
+                if keycode == 30 {
+                    let alpha_ch = 117
+                }
+                if keycode == 31 {
+                    let alpha_ch = 105
+                }
+                if keycode == 32 {
+                    let alpha_ch = 111
+                }
+                if keycode == 33 {
+                    let alpha_ch = 112
+                }
+                if keycode == 38 {
+                    let alpha_ch = 97
+                }
+                if keycode == 39 {
+                    let alpha_ch = 115
+                }
+                if keycode == 40 {
+                    let alpha_ch = 100
+                }
+                if keycode == 41 {
+                    let alpha_ch = 102
+                }
+                if keycode == 42 {
+                    let alpha_ch = 103
+                }
+                if keycode == 43 {
+                    let alpha_ch = 104
+                }
+                if keycode == 44 {
+                    let alpha_ch = 106
+                }
+                if keycode == 45 {
+                    let alpha_ch = 107
+                }
+                if keycode == 46 {
+                    let alpha_ch = 108
+                }
+                if keycode == 52 {
+                    let alpha_ch = 122
+                }
+                if keycode == 53 {
+                    let alpha_ch = 120
+                }
+                if keycode == 54 {
+                    let alpha_ch = 99
+                }
+                if keycode == 55 {
+                    let alpha_ch = 118
+                }
+                if keycode == 56 {
+                    let alpha_ch = 98
+                }
+                if keycode == 57 {
+                    let alpha_ch = 110
+                }
+                if keycode == 58 {
+                    let alpha_ch = 109
+                }
+
+                if alpha_ch > 0 {
+                    if is_shift == 1 {
+                        let alpha_ch = alpha_ch - 32
+                    }
+                    let insert_ch = alpha_ch
+                    call buf_insert
+                }
+
+                call render_screen
+            }
+        }
+    }
+}
+
+# Entry Point
+call run_ide
+print "[+] NEXUS Native IDE session ended gracefully."

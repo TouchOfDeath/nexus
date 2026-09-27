@@ -99,6 +99,8 @@ Beyond the compiler itself, the project now ships a full developer ecosystem:
 
 | Component | Location | What you get |
 |-----------|----------|--------------|
+| **Pure Native IDE** | `./nexus ide` | 100% pure NEXUS code editor (**0% Python / 0% libc / 0% Xlib**): syntax highlighting, line gutter, real-time typing, F5 compile & run, F6 tri-platform build |
+| **NEXUS Studio (Tk)** | `./nexus edit` | Visual desktop IDE (`tools/nexstudio.py`): editor, syntax highlighting, F5 runner, example browser |
 | **Standard library** | `stdlib/` | 26 tested functions: math (`nx_max`, `nx_pow`, `nx_isqrt`, `nx_gcd`, `nx_is_prime`...), byte arrays (`nx_arr_fill`, `nx_arr_sum`, `nx_arr_reverse`...), strings (`nx_str_cmp`, `nx_str_concat`, `nx_str_to_int`, `nx_int_to_str`...). One include loads it all: `include "stdlib/nstdlib.nex"` |
 | **Documentation** | `docs/` | `LANGUAGE_REFERENCE.md` (complete grammar + gotchas), `TUTORIAL.md` (10-step hands-on), `BUILTINS.md` (built-ins + stdlib API) |
 | **Interactive REPL** | `./nexus repl` | stateful line-by-line session, stdlib preloaded, bad lines rejected without killing the session, `:save`/`:clear`/`:stdlib off` |
