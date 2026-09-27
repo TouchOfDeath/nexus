@@ -1,8 +1,8 @@
 # NEXUS Language Reference
 
 **Target audience:** anyone writing NEXUS programs.
-**Compiler:** self-hosted `nexc` (see `compiler/nexc.nex`).
-**Binaries:** standalone x86-64 — Windows PE32+ and Linux ELF64, 0% C#, 0% .NET.
+**Compiler:** self-hosted `nexc` (see `compiler/nexc.nex`) and native ARM64 `nexarm64` (`tools/nexarm64.c`).
+**Binaries:** standalone x86-64 & ARM64 — Windows PE32+, Linux ELF64 (x86-64 & aarch64), macOS ARM64 Mach-O, 0% C#, 0% .NET, 0% libc.
 
 > Every example in this document was compiled and executed with the project's
 > own self-hosted compiler before publication. The runnable companion suite
@@ -533,7 +533,21 @@ store64 [p + 0] 123456789
 let val = load64 [p + 0]    # 123456789
 ```
 
-### 7.3 Scaled Indexing (`* 8`)
+### 7.3 Multi-Width Operations (`load16` / `store16`, `load32` / `store32`)
+For graphics, network buffers, audio, and OS structures, NEXUS provides 16-bit (word) and 32-bit (doubleword) operations:
+- `store16 [<ptr> + <idx>] <value>` / `load16 [<ptr> + <idx>]`: 16-bit memory access (x86-64 `mov word ptr`, ARM64 `strh` / `ldrh`).
+- `store32 [<ptr> + <idx>] <value>` / `load32 [<ptr> + <idx>]`: 32-bit memory access (x86-64 `mov dword ptr`, ARM64 `str w` / `ldr w`).
+
+```nex
+let buf = alloc 16
+store16 [buf + 0] 4660      # 0x1234
+let w = load16 [buf + 0]    # 4660
+
+store32 [buf + 4] 305419896 # 0x12345678
+let dw = load32 [buf + 4]   # 305419896
+```
+
+### 7.4 Scaled Indexing (`* 8`, `* 4`, `* 2`)
 Memory addressing natively supports scaled variable offsets (`* 8`) in both `load`/`load64` and `store`/`store64`:
 ```nex
 let idx = 2
@@ -563,6 +577,23 @@ let fd = file_open "in.txt"        # open existing for reading
 file_read <fd> <buffer> <bytes>    # read into memory from alloc
 file_write <fd> <buffer> <bytes>   # write memory to file
 file_close <fd>
+```
+
+### 8.1 Direct Kernel Syscalls (`syscall0` .. `syscall6`)
+NEXUS allows direct kernel system calls without libc across Linux (x86-64 / aarch64) and macOS ARM64:
+- `syscall0 <nr>`: 0-argument syscall (e.g. `sys_getpid`)
+- `syscall1 <nr>, <arg1>` .. `syscall6 <nr>, <a1>, <a2>, <a3>, <a4>, <a5>, <a6>`
+- Return value is provided in `x0` / `rax` and assigned directly:
+```nex
+let pid = syscall0 39              # Linux sys_getpid
+let nw = syscall3 1, 1, msg, 20    # Linux sys_write(stdout, msg, 20)
+```
+
+### 8.2 Command-Line Arguments (`os_argc`, `os_argv`)
+Process argument count and vector are accessible directly from the entry stack:
+```nex
+let count = os_argc
+let first_arg_str = os_argv 1
 ```
 
 ---

@@ -44,8 +44,8 @@ Usage:
   ./nexus build                   Run master multi-step build and verification pipeline
   ./nexus play [game.nex]         Launch native graphical desktop window for a GUI game
   ./nexus run <source.nex>        Compile and run a .nex program (direct Linux kernel execution)
-  ./nexus compile <source.nex>    Compile program (emits Windows PE32+, Linux ELF64, macOS ARM64)
-  ./nexus arm64 <src.nex> [dst]   Compile directly to native Apple Silicon ARM64 Mach-O
+  ./nexus compile [flags] <src>   Compile program (flags: --target arm64-macos | linux-aarch64; default tri-platform)
+  ./nexus arm64 [flags] <src> [dst] Compile directly to native ARM64 (--target macos | linux)
   ./nexus elf [src.exe] [dst.elf] Convert PE32+ executable to standalone native Linux ELF64
   ./nexus macho [src.exe] [dst]   Convert PE32+ executable to standalone macOS ARM64 Mach-O
   ./nexus test                    Run full regression test suite across native ELF binaries
@@ -196,26 +196,75 @@ PYBUILD
         "$COMPILER_DIR/app.elf"
         ;;
     compile)
-        [ -z "${2:-}" ] && usage
-        src="$(realpath "$2")"
+        shift
+        target=""
+        src=""
+        out=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --target)
+                    shift
+                    target="$1"
+                    ;;
+                --target=*)
+                    target="${1#*=}"
+                    ;;
+                *)
+                    if [ -z "$src" ]; then
+                        src="$1"
+                    elif [ -z "$out" ]; then
+                        out="$1"
+                    fi
+                    ;;
+            esac
+            shift
+        done
+        [ -z "$src" ] && usage
+        src="$(realpath "$src")"
         "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
-        rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
-        if [ -f "$COMPILER_DIR/nexc.elf" ]; then
-            (cd "$COMPILER_DIR" && ./nexc.elf)
-        else
-            (cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe")
-        fi
-        if [ -f "$COMPILER_DIR/app.exe" ]; then
-            [ ! -f "$COMPILER_DIR/app.elf" ] && "$NEXELF" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf" > /dev/null
-            "$NEXARM64" --target macos "$COMPILER_DIR/code.nex" "$COMPILER_DIR/app.macho" > /dev/null 2>&1 || "$NEXMACHO" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.macho" > /dev/null
-            echo -e "[+] Tri-Platform Native Binaries Generated:"
-            echo -e "    Windows PE32+: $COMPILER_DIR/app.exe (49,152 bytes)"
-            echo -e "    Linux ELF64:   $COMPILER_DIR/app.elf ($(wc -c < "$COMPILER_DIR/app.elf") bytes - Direct Kernel Execution)"
-            echo -e "    macOS Mach-O:  $COMPILER_DIR/app.macho ($(wc -c < "$COMPILER_DIR/app.macho") bytes - Pure Native ARM64 Apple Silicon)"
-        else
-            echo "[-] Compilation failed."
-            exit 1
-        fi
+
+        case "$target" in
+            arm64-macos|macos-arm64|macos)
+                out_bin="${out:-$COMPILER_DIR/app.macho}"
+                "$NEXARM64" --target macos "$COMPILER_DIR/code.nex" "$out_bin"
+                echo -e "[+] Pure Native Apple Silicon ARM64 Mach-O: $out_bin"
+                echo -e "    Mach-O size: $(wc -c < "$out_bin") bytes (0% libc - 0% runtime)"
+                echo -e "    Inspect ARM64 assembly: llvm-objdump-18 -d $out_bin"
+                ;;
+            linux-aarch64|aarch64-linux|arm64-linux|linux)
+                out_bin="${out:-$COMPILER_DIR/app.elf}"
+                "$NEXARM64" --target linux "$COMPILER_DIR/code.nex" "$out_bin"
+                echo -e "[+] Pure Native Linux AArch64 ELF64: $out_bin"
+                echo -e "    ELF64 size: $(wc -c < "$out_bin") bytes (0% libc - 0% runtime)"
+                echo -e "    Inspect ARM64 assembly: llvm-objdump-18 -d $out_bin"
+                ;;
+            ""|tri|all)
+                rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
+                if [ -f "$COMPILER_DIR/nexc.elf" ]; then
+                    (cd "$COMPILER_DIR" && ./nexc.elf)
+                else
+                    (cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe")
+                fi
+                if [ -f "$COMPILER_DIR/app.exe" ]; then
+                    [ ! -f "$COMPILER_DIR/app.elf" ] && "$NEXELF" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf" > /dev/null
+                    "$NEXARM64" --target macos "$COMPILER_DIR/code.nex" "$COMPILER_DIR/app.macho" > /dev/null 2>&1 || "$NEXMACHO" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.macho" > /dev/null
+                    if [ -n "$out" ]; then
+                        cp "$COMPILER_DIR/app.elf" "$out"
+                    fi
+                    echo -e "[+] Tri-Platform Native Binaries Generated:"
+                    echo -e "    Windows PE32+: $COMPILER_DIR/app.exe (49,152 bytes)"
+                    echo -e "    Linux ELF64:   $COMPILER_DIR/app.elf ($(wc -c < "$COMPILER_DIR/app.elf") bytes - Direct Kernel Execution)"
+                    echo -e "    macOS Mach-O:  $COMPILER_DIR/app.macho ($(wc -c < "$COMPILER_DIR/app.macho") bytes - Pure Native ARM64 Apple Silicon)"
+                else
+                    echo "[-] Compilation failed."
+                    exit 1
+                fi
+                ;;
+            *)
+                echo "[-] Error: Unsupported target '$target' (use 'arm64-macos' or 'linux-aarch64')"
+                exit 1
+                ;;
+        esac
         ;;
     play)
         src="${2:-examples/gui_flappy.nex}"
@@ -227,14 +276,52 @@ PYBUILD
         "$bin_elf"
         ;;
     arm64)
-        [ -z "${2:-}" ] && usage
-        src="$(realpath "$2")"
-        out_bin="${3:-$COMPILER_DIR/app.macho}"
+        shift
+        target="macos"
+        src=""
+        out=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --target)
+                    shift
+                    target="$1"
+                    ;;
+                --target=*)
+                    target="${1#*=}"
+                    ;;
+                *)
+                    if [ -z "$src" ]; then
+                        src="$1"
+                    elif [ -z "$out" ]; then
+                        out="$1"
+                    fi
+                    ;;
+            esac
+            shift
+        done
+        [ -z "$src" ] && usage
+        src="$(realpath "$src")"
         "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
-        "$NEXARM64" --target macos "$COMPILER_DIR/code.nex" "$out_bin"
-        echo -e "[+] Pure Native Apple Silicon ARM64 Mach-O: $out_bin"
-        echo -e "    Mach-O size: $(wc -c < "$out_bin") bytes (0% libc - 0% runtime)"
-        echo -e "    Inspect ARM64 assembly: llvm-objdump-18 -d $out_bin"
+        case "$target" in
+            macos|arm64-macos|macos-arm64)
+                out_bin="${out:-$COMPILER_DIR/app.macho}"
+                "$NEXARM64" --target macos "$COMPILER_DIR/code.nex" "$out_bin"
+                echo -e "[+] Pure Native Apple Silicon ARM64 Mach-O: $out_bin"
+                echo -e "    Mach-O size: $(wc -c < "$out_bin") bytes (0% libc - 0% runtime)"
+                echo -e "    Inspect ARM64 assembly: llvm-objdump-18 -d $out_bin"
+                ;;
+            linux|linux-aarch64|aarch64-linux|arm64-linux)
+                out_bin="${out:-$COMPILER_DIR/app.elf}"
+                "$NEXARM64" --target linux "$COMPILER_DIR/code.nex" "$out_bin"
+                echo -e "[+] Pure Native Linux AArch64 ELF64: $out_bin"
+                echo -e "    ELF64 size: $(wc -c < "$out_bin") bytes (0% libc - 0% runtime)"
+                echo -e "    Inspect ARM64 assembly: llvm-objdump-18 -d $out_bin"
+                ;;
+            *)
+                echo "[-] Error: Unsupported target '$target' (use 'macos' or 'linux')"
+                exit 1
+                ;;
+        esac
         ;;
     elf)
         in_bin="${2:-$COMPILER_DIR/app.exe}"

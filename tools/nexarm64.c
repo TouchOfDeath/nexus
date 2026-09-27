@@ -97,8 +97,32 @@ static int resolve_var(const char* name) {
 }
 
 static int add_string(const char* str, int len) {
+    char* buf = (char*)malloc(len + 1);
+    int ulen = 0;
+    for (int i = 0; i < len; i++) {
+        if (str[i] == '\\' && i + 1 < len) {
+            i++;
+            switch (str[i]) {
+                case 'n': buf[ulen++] = '\n'; break;
+                case 'r': buf[ulen++] = '\r'; break;
+                case 't': buf[ulen++] = '\t'; break;
+                case '0': buf[ulen++] = '\0'; break;
+                case '\\': buf[ulen++] = '\\'; break;
+                case '\"': buf[ulen++] = '\"'; break;
+                default:
+                    buf[ulen++] = '\\';
+                    buf[ulen++] = str[i];
+                    break;
+            }
+        } else {
+            buf[ulen++] = str[i];
+        }
+    }
+    buf[ulen] = '\0';
+
     for (int i = 0; i < g_string_count; i++) {
-        if (g_strings[i].len == len && memcmp(g_strings[i].text, str, len) == 0) {
+        if (g_strings[i].len == ulen && memcmp(g_strings[i].text, buf, ulen) == 0) {
+            free(buf);
             return g_strings[i].id;
         }
     }
@@ -106,14 +130,12 @@ static int add_string(const char* str, int len) {
         fprintf(stderr, "[-] Error: Maximum string literal limit exceeded\n");
         exit(1);
     }
-    char* s = (char*)malloc(len + 1);
-    memcpy(s, str, len);
-    s[len] = '\0';
-    g_strings[g_string_count].text = s;
-    g_strings[g_string_count].len = len;
+    g_strings[g_string_count].text = buf;
+    g_strings[g_string_count].len = ulen;
     g_strings[g_string_count].id = g_string_count;
     return g_string_count++;
 }
+
 
 static int register_func(const char* name) {
     for (int i = 0; i < g_func_count; i++) {
@@ -458,10 +480,212 @@ static void emit_runtime_stubs(void) {
         emit_inst("mov x8, #93");       /* sys_exit */
         emit_inst("svc #0");
     }
+
+    /* 5. _nx_strlen: returns length of null-terminated string at x0 in x0 */
+    emit_label("_nx_strlen");
+    emit_inst("mov x1, x0");
+    emit_label("L_strlen_loop");
+    emit_inst("ldrb w2, [x1]");
+    emit_inst("cbz w2, L_strlen_done");
+    emit_inst("add x1, x1, #1");
+    emit_inst("b L_strlen_loop");
+    emit_label("L_strlen_done");
+    emit_inst("sub x0, x1, x0");
+    emit_inst("ret");
+
+    /* 6. _nx_print_str: prints null-terminated string at x0 + newline */
+    emit_label("_nx_print_str");
+    emit_inst("stp x29, x30, [sp, #-32]!");
+    emit_inst("mov x29, sp");
+    emit_inst("str x19, [sp, #16]");
+    emit_inst("str x20, [sp, #24]");
+    emit_inst("mov x19, x0");
+    emit_inst("bl _nx_strlen");
+    emit_inst("mov x20, x0");           /* length */
+    emit_inst("mov x0, #1");            /* stdout */
+    emit_inst("mov x1, x19");           /* buffer */
+    emit_inst("mov x2, x20");           /* count */
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #4");       /* SYS_write */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #64");       /* sys_write */
+        emit_inst("svc #0");
+    }
+    emit_inst("bl _nx_print_nl");
+    emit_inst("ldr x20, [sp, #24]");
+    emit_inst("ldr x19, [sp, #16]");
+    emit_inst("ldp x29, x30, [sp], #32");
+    emit_inst("ret");
+
+    /* 7. _nx_read_int: reads signed 64-bit integer from stdin into x0 */
+    emit_label("_nx_read_int");
+    emit_inst("stp x29, x30, [sp, #-48]!");
+    emit_inst("mov x29, sp");
+    emit_inst("str x19, [sp, #16]");
+    emit_inst("str x20, [sp, #24]");
+    emit_inst("str x21, [sp, #32]");
+    emit_inst("mov x19, #0");           /* accumulator */
+    emit_inst("mov x20, #0");           /* sign: 0 = positive, 1 = negative */
+    emit_inst("mov x21, #0");           /* digits counter */
+
+    /* Skip leading whitespace */
+    emit_label("L_read_int_ws");
+    emit_inst("mov x0, #0");            /* stdin fd 0 */
+    emit_inst("add x1, sp, #40");       /* 1-byte read buffer */
+    emit_inst("mov x2, #1");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #3");       /* SYS_read */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #63");       /* sys_read */
+        emit_inst("svc #0");
+    }
+    emit_inst("cmp x0, #1");
+    emit_inst("b.ne L_read_int_done");  /* EOF or error */
+    emit_inst("ldrb w1, [sp, #40]");
+    emit_inst("cmp w1, #32");           /* ' ' */
+    emit_inst("b.eq L_read_int_ws");
+    emit_inst("cmp w1, #9");            /* '\t' */
+    emit_inst("b.eq L_read_int_ws");
+    emit_inst("cmp w1, #10");           /* '\n' */
+    emit_inst("b.eq L_read_int_ws");
+    emit_inst("cmp w1, #13");           /* '\r' */
+    emit_inst("b.eq L_read_int_ws");
+
+    /* Check for leading '-' */
+    emit_inst("cmp w1, #45");           /* '-' */
+    emit_inst("b.ne L_read_int_digits");
+    emit_inst("mov x20, #1");           /* sign = 1 */
+
+    /* Read first char after '-' */
+    emit_inst("mov x0, #0");
+    emit_inst("add x1, sp, #40");
+    emit_inst("mov x2, #1");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #3");       /* SYS_read */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #63");       /* sys_read */
+        emit_inst("svc #0");
+    }
+    emit_inst("cmp x0, #1");
+    emit_inst("b.ne L_read_int_done");
+    emit_inst("ldrb w1, [sp, #40]");
+
+    /* Digits accumulator */
+    emit_label("L_read_int_digits");
+    emit_inst("cmp w1, #48");           /* '0' */
+    emit_inst("b.lo L_read_int_done");
+    emit_inst("cmp w1, #57");           /* '9' */
+    emit_inst("b.hi L_read_int_done");
+    emit_inst("sub w1, w1, #48");
+    emit_inst("mov x10, #10");
+    emit_inst("mul x19, x19, x10");
+    emit_inst("uxtw x1, w1");
+    emit_inst("add x19, x19, x1");
+    emit_inst("add x21, x21, #1");
+
+    /* Read next character */
+    emit_inst("mov x0, #0");
+    emit_inst("add x1, sp, #40");
+    emit_inst("mov x2, #1");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #3");       /* SYS_read */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #63");       /* sys_read */
+        emit_inst("svc #0");
+    }
+    emit_inst("cmp x0, #1");
+    emit_inst("b.ne L_read_int_done");
+    emit_inst("ldrb w1, [sp, #40]");
+    emit_inst("b L_read_int_digits");
+
+    /* Completion */
+    emit_label("L_read_int_done");
+    emit_inst("cmp x20, #1");
+    emit_inst("b.ne L_read_int_pos");
+    emit_inst("neg x19, x19");
+    emit_label("L_read_int_pos");
+    emit_inst("mov x0, x19");
+    emit_inst("ldr x21, [sp, #32]");
+    emit_inst("ldr x20, [sp, #24]");
+    emit_inst("ldr x19, [sp, #16]");
+    emit_inst("ldp x29, x30, [sp], #48");
+    emit_inst("ret");
+
+    /* 8. _nx_file_open: path in x0 -> fd in x0 */
+    emit_label("_nx_file_open");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x1, #0");        /* O_RDONLY = 0 */
+        emit_inst("mov x2, #0");        /* mode 0 */
+        emit_inst("mov x16, #5");       /* SYS_open */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x1, x0");        /* pathname */
+        emit_inst("mov x0, #-100");     /* AT_FDCWD = -100 */
+        emit_inst("mov x2, #0");        /* O_RDONLY = 0 */
+        emit_inst("mov x3, #0");        /* mode 0 */
+        emit_inst("mov x8, #56");       /* sys_openat */
+        emit_inst("svc #0");
+    }
+    emit_inst("ret");
+
+    /* 9. _nx_file_create: path in x0 -> fd in x0 */
+    emit_label("_nx_file_create");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x1, #0x601");    /* O_CREAT|O_WRONLY|O_TRUNC */
+        emit_inst("mov x2, #0x1a4");    /* mode 0644 */
+        emit_inst("mov x16, #5");       /* SYS_open */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x1, x0");        /* pathname */
+        emit_inst("mov x0, #-100");     /* AT_FDCWD = -100 */
+        emit_inst("mov x2, #0x241");    /* O_CREAT|O_WRONLY|O_TRUNC */
+        emit_inst("mov x3, #0x1a4");    /* mode 0644 */
+        emit_inst("mov x8, #56");       /* sys_openat */
+        emit_inst("svc #0");
+    }
+    emit_inst("ret");
+
+    /* 10. _nx_file_read: fd in x0, buf in x1, len in x2 -> bytes read in x0 */
+    emit_label("_nx_file_read");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #3");       /* SYS_read */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #63");       /* sys_read */
+        emit_inst("svc #0");
+    }
+    emit_inst("ret");
+
+    /* 11. _nx_file_write: fd in x0, buf in x1, len in x2 -> bytes written in x0 */
+    emit_label("_nx_file_write");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #4");       /* SYS_write */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #64");       /* sys_write */
+        emit_inst("svc #0");
+    }
+    emit_inst("ret");
+
+    /* 12. _nx_file_close: fd in x0 -> status in x0 */
+    emit_label("_nx_file_close");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #6");       /* SYS_close */
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #57");       /* sys_close */
+        emit_inst("svc #0");
+    }
+    emit_inst("ret");
 }
 
 /* ---- Lexer & Parser Helpers ------------------------------------------------ */
 
+static const char* skip_ws_and_comma(const char* p);
 static const char* skip_whitespace(const char* p) {
     while (*p) {
         if (*p == ' ' || *p == '\t' || *p == '\r') {
@@ -474,6 +698,16 @@ static const char* skip_whitespace(const char* p) {
     }
     return p;
 }
+
+static const char* skip_ws_and_comma(const char* p) {
+    p = skip_whitespace(p);
+    if (*p == ',') {
+        p++;
+        p = skip_whitespace(p);
+    }
+    return p;
+}
+
 
 static const char* read_ident(const char* p, char* out, size_t max_len) {
     size_t i = 0;
@@ -508,6 +742,28 @@ static const char* parse_term(const char* p, const char* reg) {
         emit_mov_imm64(reg, val);
         return endp;
     }
+    /* String literal */
+    if (*p == '"') {
+        p++;
+        const char* start = p;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1]) p += 2;
+            else p++;
+        }
+        int slen = (int)(p - start);
+        int sid = add_string(start, slen);
+        if (*p == '"') p++;
+        char lbl[64];
+        snprintf(lbl, sizeof(lbl), "L_str_%d", sid);
+        if (g_target == TARGET_MACOS_ARM64) {
+            emit_inst("adrp %s, %s@PAGE", reg, lbl);
+            emit_inst("add %s, %s, %s@PAGEOFF", reg, reg, lbl);
+        } else {
+            emit_inst("adrp %s, %s", reg, lbl);
+            emit_inst("add %s, %s, :lo12:%s", reg, reg, lbl);
+        }
+        return p;
+    }
     /* String or identifier */
     if (isalpha((unsigned char)*p) || *p == '_') {
         char id[64];
@@ -523,8 +779,67 @@ static const char* parse_term(const char* p, const char* reg) {
             }
             return p;
         }
-        if (strcmp(id, "load") == 0 || strcmp(id, "load64") == 0) {
-            int is64 = (strcmp(id, "load64") == 0);
+        if (strcmp(id, "abs") == 0) {
+            char l_abs[64];
+            snprintf(l_abs, sizeof(l_abs), "L_abs_skip_%d", ++g_label_seq);
+            p = parse_term(p, "x0");
+            emit_inst("cmp x0, #0");
+            emit_inst("b.ge %s", l_abs);
+            emit_inst("neg x0, x0");
+            emit_label(l_abs);
+            if (strcmp(reg, "x0") != 0) {
+                emit_inst("mov %s, x0", reg);
+            }
+            return p;
+        }
+        if (strcmp(id, "len") == 0) {
+            p = skip_whitespace(p);
+            if (*p == '"') {
+                p++;
+                const char* start = p;
+                while (*p && *p != '"') {
+                    if (*p == '\\' && p[1]) p += 2;
+                    else p++;
+                }
+                int slen = (int)(p - start);
+                int sid = add_string(start, slen);
+                if (*p == '"') p++;
+                emit_mov_imm64(reg, g_strings[sid].len);
+                return p;
+            } else {
+                p = parse_term(p, "x0");
+                emit_inst("bl _nx_strlen");
+                if (strcmp(reg, "x0") != 0) {
+                    emit_inst("mov %s, x0", reg);
+                }
+                return p;
+            }
+        }
+        if (strcmp(id, "os_argc") == 0) {
+            int slot = resolve_var("_nx_argc");
+            emit_load_var(reg, slot);
+            return p;
+        }
+        if (strcmp(id, "os_argv") == 0) {
+            int slot = resolve_var("_nx_argv");
+            p = skip_whitespace(p);
+            if (*p && *p != '#' && *p != '\n' && *p != '+' && *p != '-' && *p != '*' && *p != '/') {
+                p = parse_term(p, "x14");
+                emit_inst("lsl x14, x14, #3");
+                emit_load_var("x15", slot);
+                emit_inst("ldr %s, [x15, x14]", reg);
+            } else {
+                emit_load_var(reg, slot);
+            }
+            return p;
+        }
+        if (strcmp(id, "load") == 0 || strcmp(id, "load64") == 0 ||
+            strcmp(id, "load32") == 0 || strcmp(id, "load16") == 0) {
+            int width = 8;
+            if (strcmp(id, "load") == 0) width = 1;
+            else if (strcmp(id, "load16") == 0) width = 2;
+            else if (strcmp(id, "load32") == 0) width = 4;
+            else if (strcmp(id, "load64") == 0) width = 8;
             p = skip_whitespace(p);
             if (*p == '[') p++;
             /* Parse base pointer */
@@ -563,6 +878,10 @@ static const char* parse_term(const char* p, const char* reg) {
                         p = skip_whitespace(endp);
                         if (scale == 8) {
                             emit_inst("lsl x14, x14, #3");
+                        } else if (scale == 4) {
+                            emit_inst("lsl x14, x14, #2");
+                        } else if (scale == 2) {
+                            emit_inst("lsl x14, x14, #1");
                         } else {
                             emit_mov_imm64("x15", scale);
                             emit_inst("mul x14, x14, x15");
@@ -574,8 +893,14 @@ static const char* parse_term(const char* p, const char* reg) {
             p = skip_whitespace(p);
             if (*p == ']') p++;
 
-            if (is64) {
+            if (width == 8) {
                 emit_inst("ldr %s, [x13]", reg);
+            } else if (width == 4) {
+                emit_inst("ldr w14, [x13]");
+                emit_inst("uxtw %s, w14", reg);
+            } else if (width == 2) {
+                emit_inst("ldrh w14, [x13]");
+                emit_inst("uxtw %s, w14", reg);
             } else {
                 emit_inst("ldrb w14, [x13]");
                 emit_inst("uxtw %s, w14", reg);
@@ -831,6 +1156,54 @@ static void emit_branch_false(const char* relop, const char* target_label) {
     else                                                             emit_inst("b.eq %s", target_label);
 }
 
+/* Compile raw kernel syscall: syscall<N> <nr>, <arg1>, <arg2>, ... */
+static void compile_syscall(const char* p, int dest_slot) {
+    p += 7; /* skip "syscall" */
+    int explicit_nargs = -1;
+    if (isdigit((unsigned char)*p)) {
+        explicit_nargs = *p - '0';
+        p++;
+    }
+    p = skip_ws_and_comma(p);
+
+    /* 1. Parse syscall number into x9 */
+    p = parse_term(p, "x9");
+    p = skip_ws_and_comma(p);
+
+    /* 2. Parse up to 6 arguments into x10, x11, x12, x13, x14, x15 */
+    const char* arg_regs[6] = {"x10", "x11", "x12", "x13", "x14", "x15"};
+    int nargs = 0;
+    while (*p && *p != '#' && *p != '\n' && nargs < 6) {
+        if (explicit_nargs >= 0 && nargs >= explicit_nargs) break;
+        p = parse_term(p, arg_regs[nargs++]);
+        p = skip_ws_and_comma(p);
+    }
+
+    /* Move syscall number into platform syscall register */
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, x9");
+    } else {
+        emit_inst("mov x8, x9");
+    }
+
+    /* Move arguments into x0..x5 */
+    const char* call_regs[6] = {"x0", "x1", "x2", "x3", "x4", "x5"};
+    for (int i = 0; i < nargs; i++) {
+        emit_inst("mov %s, %s", call_regs[i], arg_regs[i]);
+    }
+
+    /* Dispatch */
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("svc #0");
+    }
+
+    if (dest_slot >= 0) {
+        emit_store_var("x0", dest_slot);
+    }
+}
+
 /* ---- Statement Parser ------------------------------------------------------ */
 
 static void compile_line(const char* line) {
@@ -848,6 +1221,45 @@ static void compile_line(const char* line) {
         p = skip_whitespace(p);
 
         int slot = resolve_var(dest);
+
+        /* Check for built-ins in let RHS */
+        if (strncmp(p, "file_open ", 10) == 0 || strncmp(p, "file_open\t", 10) == 0) {
+            p += 10;
+            p = parse_term(p, "x0");
+            emit_inst("bl _nx_file_open");
+            emit_store_var("x0", slot);
+            return;
+        }
+        if (strncmp(p, "file_create ", 12) == 0 || strncmp(p, "file_create\t", 12) == 0) {
+            p += 12;
+            p = parse_term(p, "x0");
+            emit_inst("bl _nx_file_create");
+            emit_store_var("x0", slot);
+            return;
+        }
+        if (strncmp(p, "file_read ", 10) == 0 || strncmp(p, "file_read\t", 10) == 0) {
+            p += 10;
+            p = parse_term(p, "x19");
+            p = skip_ws_and_comma(p);
+            p = parse_term(p, "x1");
+            p = skip_ws_and_comma(p);
+            p = parse_term(p, "x2");
+            emit_inst("mov x0, x19");
+            emit_inst("bl _nx_file_read");
+            emit_store_var("x0", slot);
+            return;
+        }
+        if (strncmp(p, "file_close ", 11) == 0 || strncmp(p, "file_close\t", 11) == 0) {
+            p += 11;
+            p = parse_term(p, "x0");
+            emit_inst("bl _nx_file_close");
+            emit_store_var("x0", slot);
+            return;
+        }
+        if (!strncmp(p, "syscall", 7)) {
+            compile_syscall(p, slot);
+            return;
+        }
         if (!strncmp(p, "fadd ", 5) || !strncmp(p, "fsub ", 5) ||
             !strncmp(p, "fmul ", 5) || !strncmp(p, "fdiv ", 5)) {
             char fop = p[1];
@@ -900,10 +1312,14 @@ static void compile_line(const char* line) {
         return;
     }
 
-    /* 2. store [ptr + idx] val OR store64 [ptr + idx] val */
-    if (strncmp(p, "store ", 6) == 0 || strncmp(p, "store64 ", 8) == 0) {
-        int is64 = (strncmp(p, "store64 ", 8) == 0);
-        p += is64 ? 8 : 6;
+    /* 2. store [ptr + idx] val OR store16/store32/store64 [ptr + idx] val */
+    if (strncmp(p, "store ", 6) == 0 || strncmp(p, "store64 ", 8) == 0 ||
+        strncmp(p, "store32 ", 8) == 0 || strncmp(p, "store16 ", 8) == 0) {
+        int width = 1;
+        if (strncmp(p, "store64 ", 8) == 0) { width = 8; p += 8; }
+        else if (strncmp(p, "store32 ", 8) == 0) { width = 4; p += 8; }
+        else if (strncmp(p, "store16 ", 8) == 0) { width = 2; p += 8; }
+        else { width = 1; p += 6; }
         p = skip_whitespace(p);
         if (*p == '[') p++;
 
@@ -940,6 +1356,10 @@ static void compile_line(const char* line) {
                     p = skip_whitespace(endp);
                     if (scale == 8) {
                         emit_inst("lsl x14, x14, #3");
+                    } else if (scale == 4) {
+                        emit_inst("lsl x14, x14, #2");
+                    } else if (scale == 2) {
+                        emit_inst("lsl x14, x14, #1");
                     } else {
                         emit_mov_imm64("x15", scale);
                         emit_inst("mul x14, x14, x15");
@@ -954,8 +1374,12 @@ static void compile_line(const char* line) {
 
         /* Value to store */
         parse_expression(&p, "x0");
-        if (is64) {
+        if (width == 8) {
             emit_inst("str x0, [x13]");
+        } else if (width == 4) {
+            emit_inst("str w0, [x13]");
+        } else if (width == 2) {
+            emit_inst("strh w0, [x13]");
         } else {
             emit_inst("strb w0, [x13]");
         }
@@ -994,25 +1418,18 @@ static void compile_line(const char* line) {
             }
             int slen = (int)(p - start);
             int sid = add_string(start, slen);
+            if (*p == '"') p++;
 
-            /* Emit string printing syscall */
             char lbl[64];
             snprintf(lbl, sizeof(lbl), "L_str_%d", sid);
             if (g_target == TARGET_MACOS_ARM64) {
-                emit_inst("adrp x1, %s@PAGE", lbl);
-                emit_inst("add x1, x1, %s@PAGEOFF", lbl);
-                emit_inst("mov x0, #1");        /* stdout */
-                emit_inst("mov x2, #%d", slen + 1); /* string + newline */
-                emit_inst("mov x16, #4");       /* SYS_write */
-                emit_inst("svc #0x80");
+                emit_inst("adrp x0, %s@PAGE", lbl);
+                emit_inst("add x0, x0, %s@PAGEOFF", lbl);
             } else {
-                emit_inst("adrp x1, %s", lbl);
-                emit_inst("add x1, x1, :lo12:%s", lbl);
-                emit_inst("mov x0, #1");        /* stdout */
-                emit_inst("mov x2, #%d", slen + 1);
-                emit_inst("mov x8, #64");       /* sys_write */
-                emit_inst("svc #0");
+                emit_inst("adrp x0, %s", lbl);
+                emit_inst("add x0, x0, :lo12:%s", lbl);
             }
+            emit_inst("bl _nx_print_str");
             return;
         }
 
@@ -1226,6 +1643,91 @@ static void compile_line(const char* line) {
         }
         return;
     }
+
+    /* 14. file_read <fd> <buf> <len> */
+    if (strncmp(p, "file_read ", 10) == 0 || strncmp(p, "file_read\t", 10) == 0) {
+        p += 10;
+        p = parse_term(p, "x19");
+        p = skip_ws_and_comma(p);
+        p = parse_term(p, "x1");
+        p = skip_ws_and_comma(p);
+        p = parse_term(p, "x2");
+        emit_inst("mov x0, x19");
+        emit_inst("bl _nx_file_read");
+        return;
+    }
+
+    /* 15. file_write <fd> <buf> <len> */
+    if (strncmp(p, "file_write ", 11) == 0 || strncmp(p, "file_write\t", 11) == 0) {
+        p += 11;
+        p = parse_term(p, "x19");
+        p = skip_ws_and_comma(p);
+        p = parse_term(p, "x1");
+        p = skip_ws_and_comma(p);
+        p = parse_term(p, "x2");
+        emit_inst("mov x0, x19");
+        emit_inst("bl _nx_file_write");
+        return;
+    }
+
+    /* 16. file_close <fd> */
+    if (strncmp(p, "file_close ", 11) == 0 || strncmp(p, "file_close\t", 11) == 0) {
+        p += 11;
+        p = parse_term(p, "x0");
+        emit_inst("bl _nx_file_close");
+        return;
+    }
+
+    /* 17. read <var> */
+    if (strncmp(p, "read ", 5) == 0 || strncmp(p, "read\t", 5) == 0) {
+        p += 5;
+        p = skip_whitespace(p);
+        char vname[64];
+        p = read_ident(p, vname, sizeof(vname));
+        int vslot = resolve_var(vname);
+        emit_inst("bl _nx_read_int");
+        emit_store_var("x0", vslot);
+        return;
+    }
+
+    /* 18. print_str <var> OR print_str "..." */
+    if (strncmp(p, "print_str ", 10) == 0 || strncmp(p, "print_str\t", 10) == 0) {
+        p += 10;
+        p = skip_whitespace(p);
+        if (*p == '"') {
+            p++;
+            const char* start = p;
+            while (*p && *p != '"') {
+                if (*p == '\\' && p[1]) p += 2;
+                else p++;
+            }
+            int slen = (int)(p - start);
+            int sid = add_string(start, slen);
+            if (*p == '"') p++;
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "L_str_%d", sid);
+            if (g_target == TARGET_MACOS_ARM64) {
+                emit_inst("adrp x0, %s@PAGE", lbl);
+                emit_inst("add x0, x0, %s@PAGEOFF", lbl);
+            } else {
+                emit_inst("adrp x0, %s", lbl);
+                emit_inst("add x0, x0, :lo12:%s", lbl);
+            }
+        } else {
+            char vname[64];
+            p = read_ident(p, vname, sizeof(vname));
+            int vslot = resolve_var(vname);
+            emit_load_var("x0", vslot);
+        }
+        emit_inst("bl _nx_print_str");
+        return;
+    }
+
+    /* 19. syscall statement */
+    if (!strncmp(p, "syscall", 7)) {
+        compile_syscall(p, -1);
+        return;
+    }
 }
 
 /* ---- Program Emission Entry Point ------------------------------------------ */
@@ -1258,6 +1760,8 @@ int compile_nexus_to_arm64(const char* in_source, const char* out_asm) {
     /* Main entry point */
     fprintf(g_out, "\n// --- Application Entry Point (_start) --------------------------------------\n");
     emit_label("_start");
+    emit_inst("ldr x19, [sp]");          /* x19 = argc from OS entry stack */
+    emit_inst("add x20, sp, #8");        /* x20 = argv from OS entry stack */
     emit_inst("stp x29, x30, [sp, #-16]!");
     emit_inst("mov x29, sp");
 
@@ -1266,6 +1770,12 @@ int compile_nexus_to_arm64(const char* in_source, const char* out_asm) {
     emit_mov_imm64("x0", 65536);
     emit_inst("bl _nx_alloc");
     emit_inst("mov x28, x0");          /* x28 = base of variable table */
+
+    /* Initialize _nx_argc and _nx_argv */
+    int argc_slot = resolve_var("_nx_argc");
+    int argv_slot = resolve_var("_nx_argv");
+    emit_store_var("x19", argc_slot);
+    emit_store_var("x20", argv_slot);
 
     /* Read and parse input file line by line */
     char line[1024];
@@ -1280,25 +1790,29 @@ int compile_nexus_to_arm64(const char* in_source, const char* out_asm) {
     emit_inst("bl _nx_exit");
 
     /* Read-Only Data Section (string literals) */
-    fprintf(g_out, "\n// --- Read-Only Data Section (.rodata) -------------------------------------\n");
-    if (g_target == TARGET_MACOS_ARM64) {
-        fprintf(g_out, ".section __TEXT,__cstring,cstring_literals\n");
-    } else {
-        fprintf(g_out, ".section .rodata\n");
-    }
-
-    for (int i = 0; i < g_string_count; i++) {
-        fprintf(g_out, "L_str_%d:\n", g_strings[i].id);
-        fprintf(g_out, "    .asciz \"");
-        for (int j = 0; j < g_strings[i].len; j++) {
-            char c = g_strings[i].text[j];
-            if (c == '\n') fprintf(g_out, "\\n");
-            else if (c == '\t') fprintf(g_out, "\\t");
-            else if (c == '\"') fprintf(g_out, "\\\"");
-            else if (c == '\\') fprintf(g_out, "\\\\");
-            else fputc(c, g_out);
+    if (g_string_count > 0) {
+        fprintf(g_out, "\n// --- Read-Only Data Section (.rodata) -------------------------------------\n");
+        if (g_target == TARGET_MACOS_ARM64) {
+            fprintf(g_out, ".section __TEXT,__cstring,cstring_literals\n");
+        } else {
+            fprintf(g_out, ".section .rodata\n");
         }
-        fprintf(g_out, "\\n\"\n"); /* append newline */
+
+        for (int i = 0; i < g_string_count; i++) {
+            fprintf(g_out, "L_str_%d:\n", g_strings[i].id);
+            fprintf(g_out, "    .asciz \"");
+            for (int j = 0; j < g_strings[i].len; j++) {
+                unsigned char c = (unsigned char)g_strings[i].text[j];
+                if (c == '\n') fprintf(g_out, "\\n");
+                else if (c == '\r') fprintf(g_out, "\\r");
+                else if (c == '\t') fprintf(g_out, "\\t");
+                else if (c == '\"') fprintf(g_out, "\\\"");
+                else if (c == '\\') fprintf(g_out, "\\\\");
+                else if (c >= 32 && c <= 126) fputc(c, g_out);
+                else fprintf(g_out, "\\x%02x", c);
+            }
+            fprintf(g_out, "\"\n");
+        }
     }
 
     fclose(g_out);
@@ -1312,7 +1826,7 @@ int compile_nexus_to_arm64(const char* in_source, const char* out_asm) {
 int main(int argc, char** argv) {
     if (argc < 2) {
         printf("NEXUS Native ARM64 Ahead-Of-Time Compiler\n");
-        printf("Usage: %s [--target <macos|linux>] <source.nex> [output.macho]\n", argv[0]);
+        printf("Usage: %s [--target <macos|arm64-macos|linux|aarch64-linux>] <source.nex> [output.macho]\n", argv[0]);
         return 1;
     }
 
@@ -1323,9 +1837,9 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[-] Error: Expected target name after --target\n");
             return 1;
         }
-        if (strcmp(argv[argi], "macos") == 0 || strcmp(argv[argi], "arm64-macos") == 0) {
+        if (strcmp(argv[argi], "macos") == 0 || strcmp(argv[argi], "arm64-macos") == 0 || strcmp(argv[argi], "macos-arm64") == 0) {
             g_target = TARGET_MACOS_ARM64;
-        } else if (strcmp(argv[argi], "linux") == 0 || strcmp(argv[argi], "aarch64-linux") == 0) {
+        } else if (strcmp(argv[argi], "linux") == 0 || strcmp(argv[argi], "aarch64-linux") == 0 || strcmp(argv[argi], "linux-aarch64") == 0 || strcmp(argv[argi], "arm64-linux") == 0) {
             g_target = TARGET_LINUX_AARCH64;
         } else {
             fprintf(stderr, "[-] Error: Unsupported target '%s' (use 'macos' or 'linux')\n", argv[argi]);

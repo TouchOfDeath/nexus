@@ -1,6 +1,33 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v5.8 — Mathematics & Scientific Computing Suite (current)
+## v6.1 — Native macOS ARM64 Apple Silicon Codegen Phase 2 (current)
+
+Full native ARM64 feature parity for Apple Silicon macOS (Mach-O) and Linux aarch64 (ELF64).
+All language constructs now compile directly to native ARM64 instructions with 0% libc and
+0% runtime dependency.
+
+### 1. Language Constructs on ARM64
+- **String Literals & .rodata**: Accurate string extraction with byte-level unescaping (`\n`, `\r`, `\t`, `\0`, `\"`, `\\`), stripping rogue trailing newlines. Emitted into `__TEXT,__cstring` (macOS) or `.rodata` (Linux).
+- **String Printing & Length**: Direct `print_str <var>` and `print_str "literal"` with runtime null-terminated string length resolution (`_nx_strlen`). Compile-time constant resolution for `len "literal"`.
+- **Built-in `abs` & `len`**: Native ARM64 branchless or sign-check `abs <expr>` (`cmp`, `b.ge`, `neg`), and runtime/compile-time `len`.
+- **Multi-Width Memory Operations**: Multi-width loads and stores (`load16`, `load32`, `store16`, `store32`) generating native `ldrh`, `ldr w`, `strh`, and `str w` instructions with zero extension (`uxtw`).
+- **Interactive Console Input**: `read <var>` backed by standalone `_nx_read_int` parser reading from `stdin` (`fd 0`) skipping whitespace and accumulating signed integers.
+- **Direct Kernel Syscalls**: `syscall` and `syscall0`..`syscall6` on macOS (`x16`, `svc #0x80`) and Linux aarch64 (`x8`, `svc #0`).
+- **Native File I/O**: `file_open`, `file_create`, `file_read`, `file_write`, `file_close` via standalone kernel syscall stubs (`_nx_file_*`).
+- **CLI Arguments**: Entry-point stack capture at `_start` initializing `_nx_argc` and `_nx_argv` for `os_argc` and `os_argv`.
+
+### 2. Toolchain Driver Updates
+- `./nexus compile --target arm64-macos <source.nex> [out.macho]`: Directly compiles to native Apple Silicon ARM64 Mach-O.
+- `./nexus compile --target linux-aarch64 <source.nex> [out.elf]`: Directly compiles to native Linux aarch64 ELF64.
+- `./nexus compile <source.nex>`: Emits tri-platform native executables (Windows PE32+, Linux ELF64, macOS ARM64).
+- `./nexus arm64 [--target macos|linux] <source.nex> [out]`: Direct ARM64 compilation.
+
+### 3. Verification & Parity
+- Verified with `llvm-objdump-18` disassemblies across all major examples and tests (`builtins_demo.nex`, `string_demo.nex`, `multi_width_mem_test.nex`, `syscall_test.nex`, `web_server.nex`, `interactive_calc.nex`).
+- Full regression test suite passed: 28/28 example suites, 13/13 diagnostics, 48/48 foundation tests.
+- 100% Bit-for-bit self-hosting convergence preserved across Windows PE32+ and Linux ELF64.
+
+## v5.8 — Mathematics & Scientific Computing Suite
 
 Comprehensive mathematical and scientific computing expansion for discrete math,
 linear algebra, physical simulations, AI, fractals, exact fractions, and statistics.

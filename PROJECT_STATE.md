@@ -1,7 +1,7 @@
 # NEXUS Project State & Memory Log
 
 > **Last Updated**: 2026-09-27  
-> **Current Version**: v6.0 + Basic Type Inference & Syntax Unification  
+> **Current Version**: v6.1 + Native macOS ARM64 Codegen Phase 2  
 > **Compiler Architecture**: 100% Self-Hosted Pure NEXUS (`compiler/nexc.nex`), 0% libc, 0% runtime, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64.
 
 ---
@@ -20,6 +20,23 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **Native macOS ARM64 Codegen Phase 2 (v6.1)**:
+  - Complete native ARM64 Apple Silicon Mach-O and Linux aarch64 code generation in `tools/nexarm64.c` covering all NEXUS language constructs:
+    * Exact string literal extraction in `.rodata` with proper unescaping (`\n`, `\r`, `\t`, `\0`, `\"`, `\\`), stripping rogue trailing newlines.
+    * Direct string literal expressions (`let s = "string"`).
+    * String printing: `print_str <var>` and `print_str "literal"`.
+    * Built-in `abs <expr>` and `len <str>`.
+    * Multi-width loads and stores (`load16`, `load32`, `store16`, `store32`).
+    * Interactive console input (`read <var>`) with `_nx_read_int` in ARM64.
+    * Direct kernel syscalls (`syscall`, `syscall0`..`syscall6`) on macOS (`x16`, `svc #0x80`) and Linux aarch64 (`x8`, `svc #0`).
+    * Native File I/O (`file_open`, `file_create`, `file_read`, `file_write`, `file_close`) via OS syscall stubs (`_nx_file_*`).
+    * CLI argc/argv access (`os_argc`, `os_argv`) via entry stack capture at `_start`.
+  - Toolchain driver integration in `./nexus`:
+    * `./nexus compile --target arm64-macos <src.nex> [dst.macho]`
+    * `./nexus compile --target linux-aarch64 <src.nex> [dst.elf]`
+    * `./nexus compile <src.nex>` (tri-platform emission: PE32+, ELF64, Mach-O)
+    * `./nexus arm64 [--target macos|linux] <src.nex> [dst]`
+  - Verified across multiple suites (`builtins_demo.nex`, `string_demo.nex`, `multi_width_mem_test.nex`, `syscall_test.nex`, `web_server.nex`, `interactive_calc.nex`) with disassembly inspection using `llvm-objdump-18`.
 - **Basic Type Inference & Unified Syntax (v6.0)**:
   - Eliminated the requirement for dotted floating-point operators (`+.`, `-.`, `*.`, `/.`), dotted comparisons (`<.`, `<=.`, `>.`, `>=.`, `==.`, `!=.`), and explicit float print (`print_float`).
   - Added multi-pass static type inference engine in `tools/nexprep.c`:
