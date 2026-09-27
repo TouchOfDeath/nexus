@@ -185,11 +185,12 @@ PYBUILD
         "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
         rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
         if [ -f "$COMPILER_DIR/nexc.elf" ]; then
-            (cd "$COMPILER_DIR" && ./nexc.elf > /dev/null)
+            comp_out=$(cd "$COMPILER_DIR" && ./nexc.elf)
         else
-            (cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe" > /dev/null)
+            comp_out=$(cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe")
         fi
         if [ ! -f "$COMPILER_DIR/app.exe" ]; then
+            echo "$comp_out"
             echo "[-] Execution halted due to compilation error."
             exit 1
         fi

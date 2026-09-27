@@ -2,6 +2,8 @@
 #                  NEXUS NATIVE IDE & CODE STUDIO (nexus_ide.nex)
 #         0% C  -  0% libc  -  0% Xlib  -  0% Python  -  100% Pure NEXUS
 #   A Complete Graphical Code Editor & IDE Running Directly on the Linux Kernel!
+#     Features: Syntax Highlighting, Compiler Error Highlighting in Gutter,
+#        Mouse Click & Scroll Wheel Navigation, [F5] Run & [F6] Tri-Platform.
 # ==============================================================================
 
 include "stdlib/framebuffer.nex"
@@ -15,28 +17,38 @@ let cursor_line = 1
 let cursor_col = 1
 let scroll_line = 0
 
+# --- Error Highlighting State ---
+let error_line = 0
+let error_col = 0
+
 # --- Console Output State ---
 let console_buf = alloc 8192
 let console_len = 0
-let console_status = "Ready. Press [F5] to compile and run natively."
+let console_status = "Ready. Press [F5] or click Run to execute natively."
 
-# --- Colors (32-bit ARGB: 0x00RRGGBB) ---
-let col_bg         = 1118491   # #11111b (Dark background)
-let col_header_bg  = 1973806   # #1e1e2e (Header bar)
-let col_gutter_bg  = 1579045   # #181825 (Gutter)
-let col_gutter_fg  = 7106694   # #6c7086 (Line numbers)
-let col_divider    = 3224132   # #313244 (Divider)
-let col_console_bg = 1118491   # #11111b (Console background)
-let col_status_bg  = 1579045   # #181825 (Status bar)
-let col_text       = 13489908  # #cdd6f4 (Normal text)
-let col_keyword    = 13346551  # #cba6f7 (Purple keywords)
-let col_string     = 10937249  # #a6e3a1 (Green strings)
-let col_number     = 16429959  # #fab387 (Orange numbers)
-let col_comment    = 7106694   # #6c7086 (Grey comments)
-let col_cursor     = 16113884  # #f5e0dc (Cursor)
-let col_title      = 9035243   # #89dceb (Cyan title)
-let col_success    = 10937249  # #a6e3a1 (Green)
-let col_warn       = 16376495  # #f9e2af (Yellow)
+# --- Colors (32-bit ARGB: 0x00RRGGBB - Catppuccin Mocha Theme) ---
+let col_bg            = 1118491   # #11111b (Dark background)
+let col_header_bg     = 1973806   # #1e1e2e (Header bar)
+let col_gutter_bg     = 1579045   # #181825 (Gutter)
+let col_gutter_fg     = 7106694   # #6c7086 (Line numbers)
+let col_divider       = 3224132   # #313244 (Divider)
+let col_console_bg    = 1118491   # #11111b (Console background)
+let col_status_bg     = 1579045   # #181825 (Status bar)
+let col_status_err_bg = 3545636   # #361a24 (Status bar error background)
+let col_text          = 13489908  # #cdd6f4 (Normal text)
+let col_keyword       = 13346551  # #cba6f7 (Purple keywords)
+let col_string        = 10937249  # #a6e3a1 (Green strings)
+let col_number        = 16429959  # #fab387 (Orange numbers)
+let col_comment       = 7106694   # #6c7086 (Grey comments)
+let col_cursor        = 16113884  # #f5e0dc (Cursor)
+let col_title         = 9035243   # #89dceb (Cyan title)
+let col_success       = 10937249  # #a6e3a1 (Green)
+let col_warn          = 16376495  # #f9e2af (Yellow)
+let col_error_gutter  = 15944598  # #f38ba8 (Vivid red/pink error gutter badge)
+let col_error_row     = 3545892   # #361a24 (Subtle dark red error row tint)
+let col_btn_run_bg    = 2643503   # #28562f (Emerald green run button)
+let col_btn_tri_bg    = 2111817   # #203949 (Sapphire cyan compile button)
+let col_btn_esc_bg    = 4988456   # #4c1e28 (Ruby red quit button)
 
 # --- Drawing Registers for Fast Direct Framebuffer Text Rendering ---
 let ide_char_code = 0
@@ -190,7 +202,7 @@ fn format_line_num {
     store [line_num_str + 3] 0
 }
 
-# --- Screen Rendering Function ---
+# --- Screen Rendering Function with Gutter Error Markers & Scrolling ---
 fn render_screen {
     # 1. Clear background
     let fb_col = col_bg
@@ -204,14 +216,48 @@ fn render_screen {
     let rect_col = col_header_bg
     call ide_draw_rect
 
-    let ide_text_ptr = "NEXUS Native IDE v1.0"
+    # Title
+    let ide_text_ptr = "NEXUS Native IDE v1.1"
     let ide_text_x = 10
     let ide_text_y = 7
     let ide_text_col = col_title
     call ide_draw_text
 
-    let ide_text_ptr = "[F5] Run   [F6] Compile Tri   [Esc] Quit"
-    let ide_text_x = 350
+    # Button 1: [F5] Run
+    let rect_x = 340
+    let rect_y = 3
+    let rect_w = 78
+    let rect_h = 18
+    let rect_col = col_btn_run_bg
+    call ide_draw_rect
+    let ide_text_ptr = "[F5] Run"
+    let ide_text_x = 348
+    let ide_text_y = 7
+    let ide_text_col = col_success
+    call ide_draw_text
+
+    # Button 2: [F6] Compile Tri
+    let rect_x = 428
+    let rect_y = 3
+    let rect_w = 114
+    let rect_h = 18
+    let rect_col = col_btn_tri_bg
+    call ide_draw_rect
+    let ide_text_ptr = "[F6] Compile Tri"
+    let ide_text_x = 434
+    let ide_text_y = 7
+    let ide_text_col = col_title
+    call ide_draw_text
+
+    # Button 3: [Esc] Quit
+    let rect_x = 552
+    let rect_y = 3
+    let rect_w = 80
+    let rect_h = 18
+    let rect_col = col_btn_esc_bg
+    call ide_draw_rect
+    let ide_text_ptr = "[Esc] Quit"
+    let ide_text_x = 560
     let ide_text_y = 7
     let ide_text_col = col_warn
     call ide_draw_text
@@ -226,20 +272,47 @@ fn render_screen {
 
     # 4. Render Text Buffer and Line Numbers
     let cur_x = 48
-    let cur_y = 30
     let cur_ln = 1
     let cur_col = 1
     let is_comment = 0
     let is_string = 0
 
-    # Draw Line 1 in gutter
-    let target_n = 1
-    call format_line_num
-    let ide_text_ptr = line_num_str
-    let ide_text_x = 8
-    let ide_text_y = cur_y
-    let ide_text_col = col_gutter_fg
-    call ide_draw_text
+    # Calculate Y position for Line 1
+    let scroll_px = scroll_line * 11
+    let line_disp_y = 30 - scroll_px
+
+    # Draw Line 1 in gutter if visible
+    if line_disp_y >= 30 {
+        if line_disp_y < 340 {
+            if 1 == error_line {
+                let rect_x = 0
+                let rect_y = line_disp_y - 1
+                let rect_w = 40
+                let rect_h = 11
+                let rect_col = col_error_gutter
+                call ide_draw_rect
+
+                let rect_x = 40
+                let rect_y = line_disp_y - 1
+                let rect_w = 600
+                let rect_h = 11
+                let rect_col = col_error_row
+                call ide_draw_rect
+            }
+
+            let target_n = 1
+            call format_line_num
+            let ide_text_ptr = line_num_str
+            let ide_text_x = 8
+            let ide_text_y = line_disp_y
+            if 1 == error_line {
+                let ide_text_col = 16777215
+            } else {
+                let ide_text_col = col_gutter_fg
+            }
+            call ide_draw_text
+        }
+    }
 
     let i = 0
     while i < text_len {
@@ -247,33 +320,62 @@ fn render_screen {
         if i == cursor_pos {
             let cursor_line = cur_ln
             let cursor_col = cur_col
-            # Draw cursor rectangle
-            let rect_x = cur_x
-            let rect_y = cur_y
-            let rect_w = 8
-            let rect_h = 10
-            let rect_col = col_cursor
-            call ide_draw_rect
+            if line_disp_y >= 30 {
+                if line_disp_y < 340 {
+                    let rect_x = cur_x
+                    let rect_y = line_disp_y
+                    let rect_w = 8
+                    let rect_h = 10
+                    let rect_col = col_cursor
+                    call ide_draw_rect
+                }
+            }
         }
 
         let ch = load [text_buf + i]
         if ch == 10 {
             # Newline
             let cur_x = 48
-            let cur_y = cur_y + 11
             let cur_ln = cur_ln + 1
             let cur_col = 1
             let is_comment = 0
 
-            # Draw line number in gutter if within editor area
-            if cur_y < 340 {
-                let target_n = cur_ln
-                call format_line_num
-                let ide_text_ptr = line_num_str
-                let ide_text_x = 8
-                let ide_text_y = cur_y
-                let ide_text_col = col_gutter_fg
-                call ide_draw_text
+            # Calculate line_disp_y for the new line
+            let line_offset = cur_ln - 1
+            let line_offset = line_offset - scroll_line
+            let line_disp_y = line_offset * 11 + 30
+
+            # Draw gutter and line background if visible
+            if line_disp_y >= 30 {
+                if line_disp_y < 340 {
+                    if cur_ln == error_line {
+                        let rect_x = 0
+                        let rect_y = line_disp_y - 1
+                        let rect_w = 40
+                        let rect_h = 11
+                        let rect_col = col_error_gutter
+                        call ide_draw_rect
+
+                        let rect_x = 40
+                        let rect_y = line_disp_y - 1
+                        let rect_w = 600
+                        let rect_h = 11
+                        let rect_col = col_error_row
+                        call ide_draw_rect
+                    }
+
+                    let target_n = cur_ln
+                    call format_line_num
+                    let ide_text_ptr = line_num_str
+                    let ide_text_x = 8
+                    let ide_text_y = line_disp_y
+                    if cur_ln == error_line {
+                        let ide_text_col = 16777215
+                    } else {
+                        let ide_text_col = col_gutter_fg
+                    }
+                    call ide_draw_text
+                }
             }
         } else {
             # State tracking
@@ -307,13 +409,15 @@ fn render_screen {
             }
 
             # Draw glyph if in bounds
-            if cur_y < 345 {
-                if cur_x < 630 {
-                    let ide_char_code = ch
-                    let ide_char_x = cur_x
-                    let ide_char_y = cur_y
-                    let ide_char_col = ch_col
-                    call ide_draw_char
+            if line_disp_y >= 30 {
+                if line_disp_y < 345 {
+                    if cur_x < 630 {
+                        let ide_char_code = ch
+                        let ide_char_x = cur_x
+                        let ide_char_y = line_disp_y
+                        let ide_char_col = ch_col
+                        call ide_draw_char
+                    }
                 }
             }
             let cur_x = cur_x + 8
@@ -326,12 +430,16 @@ fn render_screen {
     if cursor_pos == text_len {
         let cursor_line = cur_ln
         let cursor_col = cur_col
-        let rect_x = cur_x
-        let rect_y = cur_y
-        let rect_w = 8
-        let rect_h = 10
-        let rect_col = col_cursor
-        call ide_draw_rect
+        if line_disp_y >= 30 {
+            if line_disp_y < 340 {
+                let rect_x = cur_x
+                let rect_y = line_disp_y
+                let rect_w = 8
+                let rect_h = 10
+                let rect_col = col_cursor
+                call ide_draw_rect
+            }
+        }
     }
 
     # 5. Console Divider
@@ -350,10 +458,14 @@ fn render_screen {
     let rect_col = col_header_bg
     call ide_draw_rect
 
-    let ide_text_ptr = ">> TERMINAL OUTPUT (Direct Linux Kernel Execution)"
+    let ide_text_ptr = ">> TERMINAL OUTPUT (Click to jump to error)"
     let ide_text_x = 10
     let ide_text_y = 357
-    let ide_text_col = col_title
+    if error_line > 0 {
+        let ide_text_col = col_error_gutter
+    } else {
+        let ide_text_col = col_title
+    }
     call ide_draw_text
 
     # 7. Console Content
@@ -371,7 +483,11 @@ fn render_screen {
                     let ide_char_code = cch
                     let ide_char_x = con_x
                     let ide_char_y = con_y
-                    let ide_char_col = col_text
+                    if error_line > 0 {
+                        let ide_char_col = col_warn
+                    } else {
+                        let ide_char_col = col_text
+                    }
                     call ide_draw_char
                 }
             }
@@ -385,13 +501,21 @@ fn render_screen {
     let rect_y = 460
     let rect_w = fb_width
     let rect_h = 20
-    let rect_col = col_status_bg
+    if error_line > 0 {
+        let rect_col = col_status_err_bg
+    } else {
+        let rect_col = col_status_bg
+    }
     call ide_draw_rect
 
     let ide_text_ptr = console_status
     let ide_text_x = 10
     let ide_text_y = 465
-    let ide_text_col = col_success
+    if error_line > 0 {
+        let ide_text_col = col_error_gutter
+    } else {
+        let ide_text_col = col_success
+    }
     call ide_draw_text
 
     call fb_present
@@ -455,11 +579,11 @@ fn append_line {
 
 fn init_starter_code {
     let text_len = 0
-    let append_src = "# Welcome to NEXUS Native IDE v1.0!"
+    let append_src = "# Welcome to NEXUS Native IDE v1.1!"
     call append_line
     let append_src = "# 0% C - 0% libc - 0% Xlib - 100% Machine Code"
     call append_line
-    let append_src = "# Press [F5] to Run, [F6] to Compile, [Esc] to Quit"
+    let append_src = "# Click [Run] or press [F5] to execute directly!"
     call append_line
     let append_src = ""
     call append_line
@@ -483,6 +607,127 @@ fn init_starter_code {
     call append_line
 
     let cursor_pos = text_len
+}
+
+# --- Cursor Movement to Target Line & Column ---
+let target_ln = 1
+let target_col = 1
+
+fn move_cursor_to_target {
+    let cur_scan_ln = 1
+    let cur_scan_col = 1
+    let p = 0
+    let result_pos = 0
+    let search_on = 1
+    while search_on == 1 {
+        if p >= text_len {
+            let result_pos = text_len
+            let search_on = 0
+        } else {
+            if cur_scan_ln == target_ln {
+                if cur_scan_col >= target_col {
+                    let result_pos = p
+                    let search_on = 0
+                }
+            }
+            if search_on == 1 {
+                let b = load [text_buf + p]
+                if b == 10 {
+                    if cur_scan_ln == target_ln {
+                        let result_pos = p
+                        let search_on = 0
+                    }
+                    let cur_scan_ln = cur_scan_ln + 1
+                    let cur_scan_col = 1
+                } else {
+                    let cur_scan_col = cur_scan_col + 1
+                }
+                let p = p + 1
+            }
+        }
+    }
+    let cursor_pos = result_pos
+}
+
+# --- Diagnostic Error Parser ---
+fn parse_compiler_errors {
+    let error_line = 0
+    let error_col = 0
+    let pi = 0
+    let search_lim = console_len - 10
+    if search_lim < 0 {
+        let console_status = "Execution complete! Exit code 0."
+        return
+    }
+
+    let has_err = 0
+    while pi < search_lim {
+        # Check for "[!] Line:"
+        # 91='[', 33='!', 93=']', 32=' ', 76='L', 105='i'
+        let c0 = load [console_buf + pi]
+        if c0 == 91 {
+            let p1 = pi + 1
+            let c1 = load [console_buf + p1]
+            if c1 == 33 {
+                let p2 = pi + 2
+                let c2 = load [console_buf + p2]
+                if c2 == 93 {
+                    let p4 = pi + 4
+                    let c4 = load [console_buf + p4]
+                    if c4 == 76 {
+                        let p5 = pi + 5
+                        let c5 = load [console_buf + p5]
+                        if c5 == 105 {
+                            let has_err = 1
+                            let pi = pi + 9
+                            # Skip whitespace and newlines
+                            let skip_ws_loop = 1
+                            while skip_ws_loop == 1 {
+                                let c_num = load [console_buf + pi]
+                                if c_num <= 32 {
+                                    let pi = pi + 1
+                                } else {
+                                    let skip_ws_loop = 0
+                                }
+                            }
+                            # Parse line number
+                            let parsed_n = 0
+                            let digit_loop = 1
+                            while digit_loop == 1 {
+                                let dc = load [console_buf + pi]
+                                if dc >= 48 {
+                                    if dc <= 57 {
+                                        let dv = dc - 48
+                                        let parsed_n = parsed_n * 10 + dv
+                                        let pi = pi + 1
+                                    } else {
+                                        let digit_loop = 0
+                                    }
+                                } else {
+                                    let digit_loop = 0
+                                }
+                            }
+                            let error_line = parsed_n
+                            let pi = search_lim
+                        }
+                    }
+                }
+            }
+        }
+        let pi = pi + 1
+    }
+
+    if has_err == 1 {
+        let console_status = "[!] Error on Line highlighted in red in the gutter!"
+        # Auto-scroll so error line is in view
+        if error_line > 20 {
+            let scroll_line = error_line - 5
+        } else {
+            let scroll_line = 0
+        }
+    } else {
+        let console_status = "Execution complete! Exit code 0."
+    }
 }
 
 # --- Child Execution via Linux Kernel Syscalls ---
@@ -538,7 +783,8 @@ fn execute_user_code {
         file_close out_file_h
     }
 
-    let console_status = "Execution complete! Exit code 0."
+    # 6. Parse compiler output for errors
+    call parse_compiler_errors
     call render_screen
 }
 
@@ -580,11 +826,14 @@ fn compile_tri_platform {
         file_close out_file_h
     }
 
-    let console_status = "Tri-Platform compilation successful!"
+    call parse_compiler_errors
+    if error_line == 0 {
+        let console_status = "Tri-Platform compilation successful!"
+    }
     call render_screen
 }
 
-# --- Main Event Loop and Keycode Decoder ---
+# --- Main Event Loop, Mouse & Keycode Decoder ---
 fn run_ide {
     let fb_width = 640
     let fb_height = 480
@@ -603,7 +852,96 @@ fn run_ide {
                 let ev_code = ev_code - 128
             }
 
-            # KeyPress Event
+            # ------------------------------------------------------------------
+            # Mouse ButtonPress Event (Click & Scroll Wheel)
+            # ------------------------------------------------------------------
+            if ev_code == 4 {
+                let mouse_btn = load [x11_ev_buf + 1]
+                let mouse_x = load16 [x11_ev_buf + 24]
+                let mouse_y = load16 [x11_ev_buf + 26]
+
+                # 1. Wheel Up -> Scroll Up
+                if mouse_btn == 4 {
+                    if scroll_line > 0 {
+                        let scroll_line = scroll_line - 1
+                        call render_screen
+                    }
+                }
+
+                # 2. Wheel Down -> Scroll Down
+                if mouse_btn == 5 {
+                    let scroll_line = scroll_line + 1
+                    call render_screen
+                }
+
+                # 3. Left Click
+                if mouse_btn == 1 {
+                    # Top Header Bar Click
+                    if mouse_y <= 24 {
+                        # [F5] Run Button
+                        if mouse_x >= 340 {
+                            if mouse_x <= 420 {
+                                call execute_user_code
+                            }
+                        }
+                        # [F6] Tri-Platform Button
+                        if mouse_x >= 428 {
+                            if mouse_x <= 544 {
+                                call compile_tri_platform
+                            }
+                        }
+                        # [Esc] Quit Button
+                        if mouse_x >= 550 {
+                            if mouse_x <= 634 {
+                                let ide_running = 0
+                            }
+                        }
+                    }
+
+                    # Editor Canvas Click -> Move Cursor
+                    if mouse_y >= 25 {
+                        if mouse_y < 350 {
+                            let click_rel_y = mouse_y - 30
+                            if click_rel_y < 0 {
+                                let click_rel_y = 0
+                            }
+                            let click_row = click_rel_y / 11
+                            let target_ln = click_row + 1
+                            let target_ln = target_ln + scroll_line
+
+                            let target_col = 1
+                            if mouse_x >= 48 {
+                                let click_rel_x = mouse_x - 48
+                                let target_col = click_rel_x / 8 + 1
+                            }
+
+                            call move_cursor_to_target
+                            call render_screen
+                        }
+                    }
+
+                    # Bottom Console / Status Area Click -> Jump to Error
+                    if mouse_y >= 350 {
+                        if error_line > 0 {
+                            let target_ln = error_line
+                            let target_col = 1
+                            call move_cursor_to_target
+
+                            # Ensure error line is scrolled into view
+                            if error_line > 20 {
+                                let scroll_line = error_line - 5
+                            } else {
+                                let scroll_line = 0
+                            }
+                            call render_screen
+                        }
+                    }
+                }
+            }
+
+            # ------------------------------------------------------------------
+            # Keyboard KeyPress Event
+            # ------------------------------------------------------------------
             if ev_code == 2 {
                 let keycode = load [x11_ev_buf + 1]
                 let keystate = load16 [x11_ev_buf + 28]
@@ -664,7 +1002,31 @@ fn run_ide {
                     }
                 }
 
-                # 10. Number Keys 1..0 (10..19)
+                # 10. Up Arrow (111)
+                if keycode == 111 {
+                    if cursor_line > 1 {
+                        let target_ln = cursor_line - 1
+                        let target_col = cursor_col
+                        call move_cursor_to_target
+                        let prev_ln = cursor_line - 1
+                        if prev_ln < scroll_line {
+                            let scroll_line = prev_ln
+                        }
+                    }
+                }
+
+                # 11. Down Arrow (116)
+                if keycode == 116 {
+                    let target_ln = cursor_line + 1
+                    let target_col = cursor_col
+                    call move_cursor_to_target
+                    let max_vis_ln = scroll_line + 28
+                    if cursor_line > max_vis_ln {
+                        let scroll_line = cursor_line - 28
+                    }
+                }
+
+                # 12. Number Keys 1..0 (10..19)
                 if keycode >= 10 {
                     if keycode <= 19 {
                         let n_val = keycode - 9
@@ -709,7 +1071,7 @@ fn run_ide {
                     }
                 }
 
-                # 11. Punctuation
+                # 13. Punctuation
                 if keycode == 20 {
                     let insert_ch = 45
                     if is_shift == 1 {
@@ -781,7 +1143,7 @@ fn run_ide {
                     call buf_insert
                 }
 
-                # 12. Alphabetic Keys (QWERTY rows)
+                # 14. Alphabetic Keys (QWERTY rows)
                 let alpha_ch = 0
                 if keycode == 24 {
                     let alpha_ch = 113
