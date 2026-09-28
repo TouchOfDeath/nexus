@@ -1,0 +1,76 @@
+# test_multi_return.nex
+# Tests: Multiple Return Values / Tuples + Named Function Arguments
+
+# ─── Helpers ───────────────────────────────────────────────────────────────
+fn divmod(a, b) {
+    let q = a / b
+    let r = a % b
+    return q, r
+}
+
+fn minmax(x, y) {
+    let lo = x
+    let hi = y
+    if y < x {
+        let lo = y
+        let hi = x
+    }
+    return lo, hi
+}
+
+fn add(a, b) {
+    return a + b
+}
+
+fn greet(name, times) {
+    let i = 0
+    while i < times {
+        print_str "Hello"
+        let i = i + 1
+    }
+}
+
+# ─── Test 1: Basic multi-return destructuring ──────────────────────────────
+let q, r = divmod(17, 5)
+# 17 / 5 = 3 rem 2
+assert_eq q, 3
+assert_eq r, 2
+print q    # expect 3
+print r    # expect 2
+
+# ─── Test 2: Multi-return with expression args ─────────────────────────────
+let lo, hi = minmax(42, 7)
+assert_eq lo, 7
+assert_eq hi, 42
+print lo   # expect 7
+print hi   # expect 42
+
+# ─── Test 3: Named arguments (reordered) ──────────────────────────────────
+let s1 = add(b=10, a=5)   # should be 5+10 = 15
+assert_eq s1, 15
+print s1   # expect 15
+
+# ─── Test 4: Named arguments in order (same as positional) ────────────────
+let s2 = add(a=3, b=4)    # 3+4 = 7
+assert_eq s2, 7
+print s2   # expect 7
+
+# ─── Test 5: Named args in statement call ─────────────────────────────────
+greet(times=2, name=0)   # prints "Hello" twice
+
+# ─── Test 6: Multi-return from inside a function ──────────────────────────
+fn outer(n) {
+    let a, b = divmod(n, 3)
+    let result = a + b
+    return result
+}
+let v = outer(10)   # divmod(10,3) -> q=3, r=1 -> 3+1=4
+assert_eq v, 4
+print v   # expect 4
+
+# ─── Test 7: Single return still works (backward compat) ──────────────────
+let x = add(100, 200)
+assert_eq x, 300
+print x   # expect 300
+
+print_str "ALL TESTS PASSED"

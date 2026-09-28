@@ -1,0 +1,108 @@
+# ==============================================================================
+#                 TEST: LEXICAL LOCAL SCOPING IN NEXUS
+# ==============================================================================
+
+# --- Test 1: Explicit Local Shadowing at File Level ---
+let x = 10
+if x > 5 {
+    local x = 20
+    assert_eq x, 20
+    print x
+}
+assert_eq x, 10
+print x
+
+# --- Test 2: Function Parameter Shadowing in Nested Block ---
+fn test_param_shadow(a) {
+    assert_eq a, 5
+    if a > 0 {
+        local a = 999
+        assert_eq a, 999
+        print a
+    }
+    assert_eq a, 5
+    print a
+    return a
+}
+let res2 = test_param_shadow(5)
+assert_eq res2, 5
+
+# --- Test 3: Deeply Nested Block Scopes (4 Levels) ---
+fn test_deep_nesting() {
+    let depth_val = 1
+    if 1 == 1 {
+        local depth_val = 2
+        if 1 == 1 {
+            local depth_val = 3
+            if 1 == 1 {
+                local depth_val = 4
+                assert_eq depth_val, 4
+            }
+            assert_eq depth_val, 3
+        }
+        assert_eq depth_val, 2
+    }
+    assert_eq depth_val, 1
+    print depth_val
+    return depth_val
+}
+let res3 = test_deep_nesting()
+assert_eq res3, 1
+
+# --- Test 4: Sibling Blocks Variable Independence ---
+if 1 == 1 {
+    local temp_var = 42
+    assert_eq temp_var, 42
+    print temp_var
+}
+if 1 == 1 {
+    local temp_var = 99
+    assert_eq temp_var, 99
+    print temp_var
+}
+
+# --- Test 5: While Loop with Local Variable and Outer Mutation ---
+let loop_sum = 0
+let idx = 0
+while idx < 4 {
+    local loop_delta = idx * 10
+    loop_sum = loop_sum + loop_delta
+    idx = idx + 1
+}
+# idx=0: delta=0, sum=0
+# idx=1: delta=10, sum=10
+# idx=2: delta=20, sum=30
+# idx=3: delta=30, sum=60
+assert_eq loop_sum, 60
+print loop_sum
+
+# --- Test 6: Backward Compatibility (let in while loop mutates outer) ---
+let outer_acc = 0
+let step_i = 1
+while step_i <= 5 {
+    let outer_acc = outer_acc + step_i
+    let step_i = step_i + 1
+}
+assert_eq outer_acc, 15
+print outer_acc
+
+# --- Test 7: Bare Assignment Syntax (without let) ---
+let counter = 100
+counter = 250
+assert_eq counter, 250
+counter = counter + 50
+assert_eq counter, 300
+print counter
+
+# --- Test 8: Recursive Function Stack-Frame Safety for Local Variables ---
+fn rec_scoped(n) {
+    if n > 0 {
+        local frame_val = n * 111
+        rec_scoped(n - 1)
+        assert_eq frame_val, n * 111
+    }
+    return 0
+}
+rec_scoped(4)
+
+print_str "[+] Lexical Local Scoping: ALL ASSERTIONS PASSED!"

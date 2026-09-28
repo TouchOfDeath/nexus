@@ -20,6 +20,34 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **Lexical Local Scoping (v6.6)**:
+  - Block-scoped local variables strictly bounded by `{ ... }` blocks (Feature #6).
+  - Explicit local declarations: `local x = expr` (as well as `var x`, `int x`, `float x`) create block-scoped local variables that shadow outer variables without clobbering them.
+  - Automatic unshadowing: when block `{ ... }` exits, all variables declared within that block go out of scope and any outer shadowed variables are immediately restored.
+  - Sibling block variable isolation: consecutive sibling blocks (e.g. `if ... { local t = 1 } if ... { local t = 2 }`) maintain independent variables without collisions.
+  - Deep multi-level nesting: supports arbitrary block nesting depth (tested up to 4+ levels) with innermost-to-outermost resolution.
+  - Reentrant stack-frame preservation: scoped local variables (`_ls_`) are automatically registered in `cur_fn_locals` and preserved across recursive calls on the `_nx_sp` runtime stack.
+  - Bare assignment syntax: supports direct mutation statements `x = expr` without requiring `let`.
+  - 100% backward compatibility: existing loops and re-assignments (`let i = i + 1`, `let f = f * n`, `let sum = sum + i`) that mutate enclosing variables continue to work without modification.
+  - Test: `tests/test_lexical_scoping.nex` — 8 assertion groups covering shadowing, functions, deep nesting, loops, recursion, and bare assignments: ALL PASS.
+- **Multiple Return Values / Tuples & Named Function Arguments (v6.5)**:
+  - Multi-value return: `return a, b, c` emits `_ret_fn_0`, `_ret_fn_1`, ... and a bare `return`.
+  - Multi-destination destructuring: `let q, r = divmod(10, 3)` calls the function then assigns from indexed return slots.
+  - Named function arguments: `add(b=10, a=5)` reorders args to match the function's declared parameter order using a function signature registry.
+  - Named args work in both assignment form (`let x = fn(b=v2, a=v1)`) and statement form (`greet(times=2, name=0)`).
+  - Function signature registry (`fn_registry[]`) built from parameterized `fn name(p1, p2) {` declarations; zero compiler (`nexc.nex`) changes required.
+  - Mixed positional + named args: unkeyed args fill first available slot in the registered signature order.
+  - Fully backward-compatible: all existing single-return, positional-arg code unchanged.
+  - Test: `tests/test_multi_return.nex` — 7 assertion groups, all PASS.
+- **First-Class Parameterized Functions & Return Values (v6.4)**:
+  - Direct function call syntax: `let x = add(a, b)` and standalone `add(a, b)` without requiring the legacy `call` keyword.
+  - Zero-argument function declarations (`fn get_ans() { ... }`) and calls (`get_ans()`, `let a = get_ans()`).
+  - Arbitrary nested expression hoisting: multiple calls in expressions (`let z = add(1, 2) + mul(3, 4)`), nested calls (`add(1, mul(2, 3))`), and calls in `print` (`print add(10, 20)`).
+  - Expression return values: `return expr` with arithmetic, literals, variables, and recursive returns (`return fib(n - 1) + fib(n - 2)`).
+  - Tree recursion stack frame safety: hoisted temporary variables (`_fcall_`) are preserved across caller/callee stack frames in `_nx_sp`.
+  - Type declaration aliases (`int x = 5`, `float y = 1.0`, `var z = 42`) and expression `print(x + y)` syntax support.
+  - Full suite verified: 28/28 examples passing, 100% bit-for-bit self-hosting parity verified.
+
 - **Pure Native NEXUS IDE & Code Studio (`examples/nexus_ide.nex`, `./nexus ide`, v6.3)**:
   - 100% written in pure NEXUS source code (**0% C, 0% libc, 0% Xlib, 0% Python, 100% machine code**).
   - Direct Linux X11 wire protocol graphical windowing via Unix domain sockets (`stdlib/x11.nex`) without Xlib or libxcb.

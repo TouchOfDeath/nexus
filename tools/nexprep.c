@@ -88,12 +88,14 @@ static int is_ident1(int c) { return isalnum((unsigned char)c) || c == '_'; }
 
 static int is_nexus_keyword(const char *tok) {
     static const char *kw[] = {
-        "if", "else", "while", "for", "fn", "call", "return", "print",
+        "if", "else", "while", "for", "fn", "let", "call", "return", "print",
         "print_str", "print_float", "read", "struct", "include", "import",
         "break", "continue", "alloc", "store", "store64", "store32", "store16",
         "load", "load64", "load32", "load16", "fload", "fstore",
         "file_open", "file_create", "file_read", "file_write", "file_close",
-        "assert_eq", "assert_ne", "os_argc", "os_argv", NULL
+        "assert_eq", "assert_ne", "os_argc", "os_argv",
+        "syscall", "abs", "len", "itof", "ftoi", "fadd", "fsub", "fmul",
+        "fdiv", "fsqrt", "fneg", "int", "float", "var", "local", NULL
     };
     for (int i = 0; kw[i]; i++) {
         if (!strcmp(tok, kw[i])) return 1;
@@ -538,6 +540,477 @@ static void track_alloc_type(const char *line) {
  * -------------------------------------------------------------------------- */
 static char cur_fn_name[128] = "";
 static int fn_block_depth = 0;
+
+/* --------------------------------------------------------------------------
+ * function signature registry - maps function name to ordered param names
+ * populated when we process 'fn name(p1, p2, ...) {' declarations
+ * used for: named argument reordering, multi-return destructuring
+ * -------------------------------------------------------------------------- */
+#define MAXFNS      128
+#define MAXFNPARAMS  32
+
+static struct {
+    char name[128];
+    int  nparams;
+    char params[MAXFNPARAMS][128];
+} fn_registry[MAXFNS];
+static int fn_registry_count = 0;
+
+static void fn_registry_add(const char *name, char param_names[][512], int nparams) {
+    /* Update existing entry if found */
+    for (int i = 0; i < fn_registry_count; i++) {
+        if (!strcmp(fn_registry[i].name, name)) {
+            fn_registry[i].nparams = nparams < MAXFNPARAMS ? nparams : MAXFNPARAMS;
+            for (int j = 0; j < fn_registry[i].nparams; j++) {
+                snprintf(fn_registry[i].params[j], 128, "%s", param_names[j]);
+            }
+            return;
+        }
+    }
+    if (fn_registry_count >= MAXFNS) return;
+    int idx = fn_registry_count++;
+    snprintf(fn_registry[idx].name, 128, "%s", name);
+    fn_registry[idx].nparams = nparams < MAXFNPARAMS ? nparams : MAXFNPARAMS;
+    for (int j = 0; j < fn_registry[idx].nparams; j++) {
+        snprintf(fn_registry[idx].params[j], 128, "%s", param_names[j]);
+    }
+}
+
+static int fn_registry_find(const char *name) {
+    for (int i = 0; i < fn_registry_count; i++) {
+        if (!strcmp(fn_registry[i].name, name)) return i;
+    }
+    return -1;
+}
+
+/* ==========================================================================
+ * Lexical Local Scoping Engine (v2)
+ * ==========================================================================
+ * Implements block-scoped local variables strictly bounded by { ... } blocks.
+ *
+ * Scopes:
+ *   depth 1  = file/global level
+ *   depth 2  = function body (fn name { ... })
+ *   depth 3+ = nested block inside function (if/while/for/{})
+ *   or depth 2+ at file level = nested block at file level
+ *
+ * Rules:
+ *   1. 'local x = expr', 'var x = expr', 'int x = expr', 'float x = expr'
+ *      Explicit local declaration: ALWAYS creates a new local variable for
+ *      the current block, shadowing any variable in outer scopes.
+ *   2. 'let x = expr'
+ *      - If 'x' is already declared in an enclosing outer scope, it mutates
+ *        that outer variable (100% backward-compatible with loops like let i = i + 1).
+ *      - If 'x' is NOT declared in any outer scope, it declares a new local
+ *        variable strictly bounded to the current block.
+ *   3. 'x = expr' (bare assignment without let)
+ *      Assigns to the existing variable in scope (or declares if none).
+ *   4. All references in expressions resolve innermost-to-outermost.
+ *   5. When '}' exits a block, all variables declared in that block go out
+ *      of scope, and shadowed outer variables are unshadowed.
+ * ========================================================================== */
+
+#define LS_MAX_DEPTH     64
+#define LS_MAX_VARS      128
+#define LS_NAME_LEN      128
+#define LS_SNAME_LEN     192
+
+typedef struct {
+    char orig[LS_NAME_LEN];
+    char scoped[LS_SNAME_LEN];
+    int is_explicit;
+} LSScopeVar;
+
+typedef struct {
+    LSScopeVar vars[LS_MAX_VARS];
+    int nvars;
+    int scope_id;
+} LSScopeFrame;
+
+static LSScopeFrame ls_stack[LS_MAX_DEPTH];
+static int ls_depth = 1;           /* 1 = global scope */
+static int ls_scope_counter = 1;
+static int ls_in_fn = 0;
+static int ls_fn_depth = 0;
+
+static void ls_init(void) {
+    ls_depth = 1;
+    ls_stack[0].nvars = 0;
+    ls_stack[0].scope_id = 0;
+    ls_scope_counter = 1;
+    ls_in_fn = 0;
+    ls_fn_depth = 0;
+}
+
+static const char *ls_lookup(const char *name) {
+    for (int d = ls_depth - 1; d >= 0; d--) {
+        for (int i = 0; i < ls_stack[d].nvars; i++) {
+            if (!strcmp(ls_stack[d].vars[i].orig, name)) {
+                return ls_stack[d].vars[i].scoped;
+            }
+        }
+    }
+    return NULL;
+}
+
+static int ls_exists_in_enclosing(const char *name) {
+    if (ls_depth <= 1) return 0;
+    for (int d = ls_depth - 2; d >= 0; d--) {
+        for (int i = 0; i < ls_stack[d].nvars; i++) {
+            if (!strcmp(ls_stack[d].vars[i].orig, name)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int ls_exists_in_current(const char *name) {
+    if (ls_depth < 1) return 0;
+    int d = ls_depth - 1;
+    for (int i = 0; i < ls_stack[d].nvars; i++) {
+        if (!strcmp(ls_stack[d].vars[i].orig, name)) return 1;
+    }
+    return 0;
+}
+
+static const char *ls_declare(const char *name, int is_explicit_local) {
+    if (ls_depth < 1) return name;
+    if (name[0] == '_' || !strncmp(name, "nx_", 3)) return name;
+
+    int should_rename = 0;
+    if (is_explicit_local) {
+        should_rename = 1;
+    } else if (ls_in_fn && ls_depth >= 3) {
+        /* Nested block inside a function */
+        should_rename = 1;
+    }
+
+    LSScopeFrame *f = should_rename ? &ls_stack[ls_depth - 1] : &ls_stack[0];
+
+    /* Check if already in this exact frame */
+    for (int i = 0; i < f->nvars; i++) {
+        if (!strcmp(f->vars[i].orig, name)) {
+            return f->vars[i].scoped;
+        }
+    }
+
+    if (f->nvars >= LS_MAX_VARS) return name;
+    LSScopeVar *v = &f->vars[f->nvars++];
+    snprintf(v->orig, LS_NAME_LEN, "%s", name);
+    v->is_explicit = is_explicit_local;
+
+    if (should_rename) {
+        snprintf(v->scoped, LS_SNAME_LEN, "_ls_%d_%s", f->scope_id, name);
+    } else {
+        snprintf(v->scoped, LS_SNAME_LEN, "%s", name);
+    }
+    return v->scoped;
+}
+
+static void ls_push(void) {
+    if (ls_depth >= LS_MAX_DEPTH) return;
+    LSScopeFrame *f = &ls_stack[ls_depth];
+    f->nvars = 0;
+    f->scope_id = ls_scope_counter++;
+    ls_depth++;
+}
+
+static void ls_pop(void) {
+    if (ls_depth > 1) {
+        ls_depth--;
+        if (ls_in_fn && ls_depth <= ls_fn_depth) {
+            ls_in_fn = 0;
+            ls_fn_depth = 0;
+        }
+    }
+}
+
+static int is_bare_assignment(const char *p, char *dest, size_t dest_cap, const char **rhs_out) {
+    while (*p == ' ' || *p == '\t') p++;
+    if (!is_ident0((unsigned char)*p)) return 0;
+
+    int n = 0;
+    while (is_ident1((unsigned char)*p)) {
+        if (n < (int)dest_cap - 1) dest[n++] = *p;
+        p++;
+    }
+    dest[n] = '\0';
+    if (!n) return 0;
+    if (is_nexus_keyword(dest)) return 0;
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '=' && *(p + 1) != '=') {
+        *rhs_out = p + 1;
+        return 1;
+    }
+    return 0;
+}
+
+static int ls_substitute(const char *src, char *dst, size_t cap) {
+    int len = (int)strlen(src);
+    int changed = 0;
+    int in_str = 0;
+    size_t out_pos = 0;
+
+    for (int i = 0; i < len; ) {
+        char c = src[i];
+
+        if (c == '"') {
+            in_str = !in_str;
+            if (out_pos < cap - 1) dst[out_pos++] = c;
+            i++;
+            continue;
+        }
+        if (in_str) {
+            if (out_pos < cap - 1) dst[out_pos++] = c;
+            i++;
+            continue;
+        }
+
+        if (c == '#' || c == ';') {
+            while (i < len && out_pos < cap - 1) dst[out_pos++] = src[i++];
+            break;
+        }
+
+        if (is_ident0((unsigned char)c) && (i == 0 || !is_ident1((unsigned char)src[i-1]))) {
+            int prev = i - 1;
+            while (prev >= 0 && (src[prev] == ' ' || src[prev] == '\t')) prev--;
+            if (prev >= 0 && src[prev] == '.') {
+                while (i < len && is_ident1((unsigned char)src[i])) {
+                    if (out_pos < cap - 1) dst[out_pos++] = src[i++];
+                }
+                continue;
+            }
+
+            int id_start = i;
+            while (i < len && is_ident1((unsigned char)src[i])) i++;
+            int id_len = i - id_start;
+            char id[LS_NAME_LEN];
+            if (id_len >= LS_NAME_LEN) id_len = LS_NAME_LEN - 1;
+            memcpy(id, src + id_start, id_len);
+            id[id_len] = '\0';
+
+            if (!is_nexus_keyword(id) && id[0] != '_' && strncmp(id, "nx_", 3) != 0) {
+                int is_fn_target = 0;
+                int pkw = id_start - 1;
+                while (pkw >= 0 && (src[pkw] == ' ' || src[pkw] == '\t')) pkw--;
+                if (pkw >= 3 && !strncmp(src + pkw - 3, "call", 4) && (pkw - 4 < 0 || !is_ident1((unsigned char)src[pkw - 4]))) {
+                    is_fn_target = 1;
+                }
+                if (pkw >= 1 && !strncmp(src + pkw - 1, "fn", 2) && (pkw - 2 < 0 || !is_ident1((unsigned char)src[pkw - 2]))) {
+                    is_fn_target = 1;
+                }
+
+                int next_c = i;
+                while (next_c < len && (src[next_c] == ' ' || src[next_c] == '\t')) next_c++;
+                if (next_c < len && src[next_c] == '(' && fn_registry_find(id) >= 0) {
+                    is_fn_target = 1;
+                }
+
+                if (!is_fn_target) {
+                    const char *sub = ls_lookup(id);
+                    if (sub && strcmp(sub, id) != 0) {
+                        size_t slen = strlen(sub);
+                        if (out_pos + slen < cap) {
+                            memcpy(dst + out_pos, sub, slen);
+                            out_pos += slen;
+                            changed = 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            if (out_pos + id_len < cap) {
+                memcpy(dst + out_pos, src + id_start, id_len);
+                out_pos += id_len;
+            }
+            continue;
+        }
+
+        if (out_pos < cap - 1) dst[out_pos++] = c;
+        i++;
+    }
+    dst[out_pos] = '\0';
+    return changed;
+}
+
+static int ls_apply(const char *raw, char *dst, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", raw);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') {
+        return 0;
+    }
+
+    if (*p == '_' && (strncmp(p, "_ls_", 4) == 0 || strncmp(p, "_fcall_", 7) == 0 ||
+                      strncmp(p, "_c_arg_", 7) == 0 || strncmp(p, "_ret_", 5) == 0 ||
+                      strncmp(p, "_nx_", 4) == 0 || strncmp(p, "_as_", 4) == 0)) {
+        return 0;
+    }
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        int il = indent_len < 127 ? indent_len : 127;
+        memcpy(indent, clean, il);
+        indent[il] = '\0';
+    }
+
+    char body[MAXLINE];
+    snprintf(body, sizeof body, "%s", p);
+    int blen = (int)strlen(body);
+    while (blen > 0 && (body[blen - 1] == '\n' || body[blen - 1] == '\r')) body[--blen] = '\0';
+
+    /* 1. Track any '}' that appears before any '{' */
+    int in_str = 0;
+    for (int i = 0; body[i]; i++) {
+        if (body[i] == '"') in_str = !in_str;
+        if (in_str) continue;
+        if (body[i] == '#' || body[i] == ';') break;
+        if (body[i] == '}') {
+            ls_pop();
+        } else if (body[i] == '{') {
+            break;
+        }
+    }
+
+    /* 2. Check for function header */
+    if (!strncmp(body, "fn ", 3) || !strncmp(body, "fn\t", 3)) {
+        if (strchr(body, '(')) {
+            return 0;
+        } else if (strchr(body, '{')) {
+            ls_push();
+            ls_in_fn = 1;
+            ls_fn_depth = ls_depth - 1;
+            return 0;
+        }
+    }
+
+    /* 3. Check for explicit local declaration: local x = ... */
+    if (!strncmp(body, "local ", 6) || !strncmp(body, "local\t", 6)) {
+        char *after_kw = body + 6;
+        while (*after_kw == ' ' || *after_kw == '\t') after_kw++;
+        char vname[LS_NAME_LEN] = "";
+        int vn = 0;
+        char *vp = after_kw;
+        while (*vp && is_ident1((unsigned char)*vp)) {
+            if (vn < LS_NAME_LEN - 1) vname[vn++] = *vp;
+            vp++;
+        }
+        vname[vn] = '\0';
+        while (*vp == ' ' || *vp == '\t') vp++;
+        if (*vp == '=' && *(vp + 1) != '=') {
+            const char *scoped = ls_declare(vname, 1);
+            char rhs_sub[MAXLINE];
+            ls_substitute(vp + 1, rhs_sub, sizeof rhs_sub);
+            snprintf(dst, cap, "%slet %s =%s\n", indent, scoped, rhs_sub);
+            return 1;
+        }
+    }
+
+    /* 4. Check for type-alias declarations: var x = ..., int x = ..., float x = ... */
+    if (!strncmp(body, "var ", 4) || !strncmp(body, "var\t", 4) ||
+        !strncmp(body, "int ", 4) || !strncmp(body, "int\t", 4) ||
+        !strncmp(body, "float ", 6) || !strncmp(body, "float\t", 6)) {
+        const char *after_kw = strchr(body, ' ');
+        if (!after_kw) after_kw = strchr(body, '\t');
+        while (after_kw && (*after_kw == ' ' || *after_kw == '\t')) after_kw++;
+        if (after_kw) {
+            char vname[LS_NAME_LEN] = "";
+            int vn = 0;
+            const char *vp = after_kw;
+            while (*vp && is_ident1((unsigned char)*vp)) {
+                if (vn < LS_NAME_LEN - 1) vname[vn++] = *vp;
+                vp++;
+            }
+            vname[vn] = '\0';
+            while (*vp == ' ' || *vp == '\t') vp++;
+            if (*vp == '=' && *(vp + 1) != '=') {
+                const char *scoped = ls_declare(vname, 1);
+                char rhs_sub[MAXLINE];
+                ls_substitute(vp + 1, rhs_sub, sizeof rhs_sub);
+                snprintf(dst, cap, "%slet %s =%s\n", indent, scoped, rhs_sub);
+                return 1;
+            }
+        }
+    }
+
+    /* 5. Check for 'let dest = rhs' */
+    if (!strncmp(body, "let ", 4) || !strncmp(body, "let\t", 4)) {
+        char *after_let = body + 4;
+        while (*after_let == ' ' || *after_let == '\t') after_let++;
+        char vname[LS_NAME_LEN] = "";
+        int vn = 0;
+        char *vp = after_let;
+        while (*vp && is_ident1((unsigned char)*vp)) {
+            if (vn < LS_NAME_LEN - 1) vname[vn++] = *vp;
+            vp++;
+        }
+        vname[vn] = '\0';
+        while (*vp == ' ' || *vp == '\t') vp++;
+
+        if (*vp == ',') {
+            char *eq = strchr(vp, '=');
+            if (eq && *(eq + 1) != '=') {
+                char rhs_sub[MAXLINE];
+                if (ls_substitute(eq + 1, rhs_sub, sizeof rhs_sub)) {
+                    int dlen = (int)(eq - clean) + 1;
+                    snprintf(dst, cap, "%.*s%s\n", dlen, clean, rhs_sub);
+                    return 1;
+                }
+            }
+            return 0;
+        }
+
+        if (*vp == '=' && *(vp + 1) != '=') {
+            const char *scoped = NULL;
+            if (ls_exists_in_enclosing(vname) && !ls_exists_in_current(vname)) {
+                scoped = ls_lookup(vname);
+            } else {
+                scoped = ls_declare(vname, 0);
+            }
+            char rhs_sub[MAXLINE];
+            ls_substitute(vp + 1, rhs_sub, sizeof rhs_sub);
+            snprintf(dst, cap, "%slet %s =%s\n", indent, scoped ? scoped : vname, rhs_sub);
+            return 1;
+        }
+    }
+
+    /* 6. Check for bare assignment: <ident> = <rhs> */
+    char bare_dest[LS_NAME_LEN];
+    const char *bare_rhs = NULL;
+    if (is_bare_assignment(body, bare_dest, sizeof bare_dest, &bare_rhs)) {
+        const char *scoped = ls_lookup(bare_dest);
+        char rhs_sub[MAXLINE];
+        ls_substitute(bare_rhs, rhs_sub, sizeof rhs_sub);
+        snprintf(dst, cap, "%slet %s =%s\n", indent, scoped ? scoped : bare_dest, rhs_sub);
+        return 1;
+    }
+
+    /* 7. General identifier substitution & '{' tracking */
+    char subbed[MAXLINE];
+    int changed = ls_substitute(raw, subbed, sizeof subbed);
+
+    in_str = 0;
+    for (int i = 0; body[i]; i++) {
+        if (body[i] == '"') in_str = !in_str;
+        if (in_str) continue;
+        if (body[i] == '#' || body[i] == ';') break;
+        if (body[i] == '{') {
+            ls_push();
+        }
+    }
+
+    if (changed) {
+        snprintf(dst, cap, "%s", subbed);
+        return 1;
+    }
+    return 0;
+}
+
 
 typedef enum {
     TY_UNKNOWN = 0,
@@ -1244,16 +1717,16 @@ static int desugar_print(const char *in, char *out, size_t cap) {
  * -------------------------------------------------------------------------- */
 static int call_tmp_counter = 0;
 static int cur_fn_is_scoped = 0;
-static char cur_fn_locals[64][64];
+static char cur_fn_locals[256][64];
 static int cur_fn_nlocals = 0;
 
 static void fn_add_local(const char *var) {
     if (!var || !*var) return;
-    if (var[0] == '_') return; /* skip compiler temporaries */
+    if (var[0] == '_' && strncmp(var, "_fcall_", 7) != 0 && strncmp(var, "_ls_", 4) != 0) return; /* save _fcall_ call temporaries and _ls_ scoped locals in stack frame */
     for (int i = 0; i < cur_fn_nlocals; i++) {
         if (!strcmp(cur_fn_locals[i], var)) return;
     }
-    if (cur_fn_nlocals < 64) {
+    if (cur_fn_nlocals < 256) {
         snprintf(cur_fn_locals[cur_fn_nlocals++], 64, "%s", var);
     }
 }
@@ -1312,13 +1785,53 @@ static int split_args(const char *arg_str, char args[][512], int max_args) {
     return count;
 }
 
+static int find_matching_paren(const char *s, int open_idx) {
+    int depth = 0;
+    int in_str = 0;
+    int len = (int)strlen(s);
+    for (int i = open_idx; i < len; i++) {
+        if (s[i] == '"') in_str = !in_str;
+        if (in_str) continue;
+        if (s[i] == '(') depth++;
+        else if (s[i] == ')') {
+            depth--;
+            if (depth == 0) return i;
+        }
+    }
+    return -1;
+}
+
+static int contains_fn_call(const char *s) {
+    int len = (int)strlen(s);
+    int in_str = 0;
+    for (int i = 0; i < len; i++) {
+        if (s[i] == '"') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (s[i] == '#' || s[i] == ';') break;
+        if (is_ident0((unsigned char)s[i]) && (i == 0 || !is_ident1((unsigned char)s[i-1]))) {
+            int start = i;
+            while (i < len && is_ident1((unsigned char)s[i])) i++;
+            int id_len = i - start;
+            if (id_len >= 128) continue;
+            char id[128];
+            memcpy(id, s + start, id_len);
+            id[id_len] = '\0';
+            if (is_nexus_keyword(id)) continue;
+            int j = i;
+            while (j < len && (s[j] == ' ' || s[j] == '\t')) j++;
+            if (j < len && s[j] == '(') return 1;
+        }
+    }
+    return 0;
+}
+
 static void emit_scoped_call(const char *indent, const char *fn_name, char args[][512], int nargs, const char *dest, char *out, size_t cap) {
     char line_buf[MAXLINE];
     int arg_tmp_indices[32];
 
     /* 0. Handle any nested calls in arguments first */
     for (int i = 0; i < nargs; i++) {
-        if (strstr(args[i], "call ") || strstr(args[i], "call\t")) {
+        if (strstr(args[i], "call ") || strstr(args[i], "call\t") || contains_fn_call(args[i])) {
             int tmp_id = call_tmp_counter++;
             snprintf(line_buf, sizeof line_buf, "%slet _c_tmp_%d = %s\n",
                      indent, tmp_id, args[i]);
@@ -1391,6 +1904,229 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
     }
 }
 
+static int desugar_var_decl(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "int ", 4) || !strncmp(p, "int\t", 4) ||
+        !strncmp(p, "float ", 6) || !strncmp(p, "float\t", 6) ||
+        !strncmp(p, "var ", 4) || !strncmp(p, "var\t", 4)) {
+        const char *after_kw = strchr(p, ' ');
+        if (!after_kw) after_kw = strchr(p, '\t');
+        while (after_kw && (*after_kw == ' ' || *after_kw == '\t')) after_kw++;
+        if (after_kw) {
+            snprintf(out, cap, "%slet %s\n", indent, after_kw);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int desugar_print_parens(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "print(", 6) || !strncmp(p, "print (", 7)) {
+        char *open_p = strchr(p, '(');
+        char *close_p = strrchr(p, ')');
+        if (open_p && close_p && close_p > open_p) {
+            char inner[MAXLINE];
+            int ilen = (int)(close_p - (open_p + 1));
+            snprintf(inner, sizeof inner, "%.*s", ilen, open_p + 1);
+            char *i_start = inner;
+            while (*i_start == ' ' || *i_start == '\t') i_start++;
+            char *i_end = i_start + strlen(i_start);
+            while (i_end > i_start && (i_end[-1] == ' ' || i_end[-1] == '\t')) *--i_end = '\0';
+
+            char *comment = strchr(close_p + 1, '#');
+            if (!comment) comment = strchr(close_p + 1, ';');
+
+            int has_op = 0;
+            for (int i = 0; i_start[i]; i++) {
+                if (i_start[i] == '+' || i_start[i] == '-' || i_start[i] == '*' ||
+                    i_start[i] == '/' || i_start[i] == '%') {
+                    has_op = 1; break;
+                }
+            }
+            if (has_op) {
+                int tmp_id = call_tmp_counter++;
+                if (comment) {
+                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%sprint _p_tmp_%d %s\n",
+                             indent, tmp_id, i_start, indent, tmp_id, comment);
+                } else {
+                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%sprint _p_tmp_%d\n",
+                             indent, tmp_id, i_start, indent, tmp_id);
+                }
+                return 1;
+            } else {
+                if (comment) {
+                    snprintf(out, cap, "%sprint %s %s\n", indent, i_start, comment);
+                } else {
+                    snprintf(out, cap, "%sprint %s\n", indent, i_start);
+                }
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int hoist_embedded_calls(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3) ||
+        !strncmp(p, "include ", 8) || !strncmp(p, "import ", 7) ||
+        !strncmp(p, "struct ", 7)) {
+        return 0;
+    }
+
+    /* Check pure statement call: name(args) or call name(args) */
+    char *cp = p;
+    if (!strncmp(cp, "call ", 5) || !strncmp(cp, "call\t", 5)) {
+        cp += 5;
+        while (*cp == ' ' || *cp == '\t') cp++;
+    }
+    char first_ident[128] = "";
+    int fi_len = 0;
+    while (*cp && is_ident1((unsigned char)*cp)) {
+        if (fi_len < 127) first_ident[fi_len++] = *cp;
+        cp++;
+    }
+    first_ident[fi_len] = '\0';
+    while (*cp == ' ' || *cp == '\t') cp++;
+    if (*cp == '(') {
+        int close_p = find_matching_paren(cp, 0);
+        if (close_p >= 0) {
+            char *t = cp + close_p + 1;
+            while (*t == ' ' || *t == '\t') t++;
+            if (*t == '\0' || *t == '#' || *t == ';' || *t == '\n' || *t == '\r') {
+                return 0;
+            }
+        }
+    }
+
+    /* Check pure let assignment call: let dest = name(args) or let dest = call name(args) */
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        char *eq = strchr(p, '=');
+        if (eq) {
+            char *rhs = eq + 1;
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+            if (!strncmp(rhs, "call ", 5) || !strncmp(rhs, "call\t", 5)) {
+                rhs += 5;
+                while (*rhs == ' ' || *rhs == '\t') rhs++;
+            }
+            char r_ident[128] = "";
+            int ri_len = 0;
+            while (*rhs && is_ident1((unsigned char)*rhs)) {
+                if (ri_len < 127) r_ident[ri_len++] = *rhs;
+                rhs++;
+            }
+            r_ident[ri_len] = '\0';
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+            if (*rhs == '(') {
+                int close_p = find_matching_paren(rhs, 0);
+                if (close_p >= 0) {
+                    char *t = rhs + close_p + 1;
+                    while (*t == ' ' || *t == '\t') t++;
+                    if (*t == '\0' || *t == '#' || *t == ';' || *t == '\n' || *t == '\r') {
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+
+    int len = (int)strlen(p);
+    int in_str = 0;
+    for (int i = 0; i < len; i++) {
+        if (p[i] == '"') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (p[i] == '#' || p[i] == ';') break;
+
+        if (is_ident0((unsigned char)p[i]) && (i == 0 || !is_ident1((unsigned char)p[i-1]))) {
+            int id_start = i;
+            while (i < len && is_ident1((unsigned char)p[i])) i++;
+            int id_len = i - id_start;
+            if (id_len >= 128) continue;
+            char id[128];
+            memcpy(id, p + id_start, id_len);
+            id[id_len] = '\0';
+
+            if (is_nexus_keyword(id)) continue;
+
+            int j = i;
+            while (j < len && (p[j] == ' ' || p[j] == '\t')) j++;
+            if (j < len && p[j] == '(') {
+                int open_paren = j;
+                int close_paren = -1;
+                int has_nested = 0;
+                int k = open_paren + 1;
+                int k_in_str = 0;
+                while (k < len) {
+                    if (p[k] == '"') { k_in_str = !k_in_str; k++; continue; }
+                    if (k_in_str) { k++; continue; }
+                    if (p[k] == '(') { has_nested = 1; break; }
+                    if (p[k] == ')') { close_paren = k; break; }
+                    k++;
+                }
+                if (has_nested) {
+                    i = open_paren;
+                    continue;
+                }
+                if (close_paren > open_paren) {
+                    char call_expr[MAXLINE];
+                    int clen = close_paren - id_start + 1;
+                    snprintf(call_expr, sizeof call_expr, "%.*s", clen, p + id_start);
+
+                    int tmp_id = call_tmp_counter++;
+                    char tmp_var[64];
+                    snprintf(tmp_var, sizeof tmp_var, "_fcall_%d", tmp_id);
+
+                    char mod_line[MAXLINE];
+                    snprintf(mod_line, sizeof mod_line, "%.*s%s%s",
+                             id_start, p, tmp_var, p + close_paren + 1);
+
+                    snprintf(out, cap, "%slet %s = %s\n%s%s",
+                             indent, tmp_var, call_expr, indent, mod_line);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static int desugar_fn(const char *in, char *out, size_t cap) {
     char clean[MAXLINE];
     snprintf(clean, sizeof clean, "%s", in);
@@ -1429,6 +2165,9 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     }
                     char params[32][512];
                     int nparams = split_args(param_str, params, 32);
+
+                    /* Register function signature for named-arg and multi-return support */
+                    fn_registry_add(fn_name, params, nparams);
 
                     snprintf(cur_fn_name, sizeof cur_fn_name, "%s", fn_name);
                     fn_block_depth = 0;
@@ -1471,7 +2210,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
         }
     }
 
-    /* 2. Check for 'return <expr>' */
+    /* 2. Check for 'return <expr>' or 'return a, b, c' (multi-value) */
     if (!strncmp(p, "return", 6)) {
         if (p[6] == ' ' || p[6] == '\t') {
             char *expr = p + 6;
@@ -1485,92 +2224,315 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     ret_expr[--elen] = '\0';
                 }
 
+                /* Remove trailing comment */
+                char *comment_pos = NULL;
+                {
+                    int in_s = 0, paren_d = 0;
+                    for (int ci = 0; ret_expr[ci]; ci++) {
+                        if (ret_expr[ci] == '"') in_s = !in_s;
+                        if (in_s) continue;
+                        if (ret_expr[ci] == '(') paren_d++;
+                        else if (ret_expr[ci] == ')') paren_d--;
+                        else if ((ret_expr[ci] == '#' || ret_expr[ci] == ';') && paren_d == 0) {
+                            comment_pos = ret_expr + ci;
+                            break;
+                        }
+                    }
+                }
+                if (comment_pos) *comment_pos = '\0';
+                elen = (int)strlen(ret_expr);
+                while (elen > 0 && (ret_expr[elen-1] == ' ' || ret_expr[elen-1] == '\t')) ret_expr[--elen] = '\0';
+
                 const char *target_fn = cur_fn_name[0] ? cur_fn_name : "_main";
-                snprintf(out, cap, "%slet _ret_%s = %s\n%sreturn\n",
-                         indent, target_fn, ret_expr, indent);
+
+                /* Check for comma-separated multiple return values */
+                char ret_vals[MAXFNPARAMS][512];
+                int nret = split_args(ret_expr, ret_vals, MAXFNPARAMS);
+
+                if (nret > 1) {
+                    /* Multi-value return: return a, b, c */
+                    out[0] = '\0';
+                    char line_buf[MAXLINE];
+                    for (int i = 0; i < nret; i++) {
+                        snprintf(line_buf, sizeof line_buf, "%slet _ret_%s_%d = %s\n",
+                                 indent, target_fn, i, ret_vals[i]);
+                        strncat(out, line_buf, cap - strlen(out) - 1);
+                    }
+                    snprintf(line_buf, sizeof line_buf, "%sreturn\n", indent);
+                    strncat(out, line_buf, cap - strlen(out) - 1);
+                } else {
+                    /* Single return value: backward-compatible _ret_fn */
+                    snprintf(out, cap, "%slet _ret_%s = %s\n%sreturn\n",
+                             indent, target_fn, ret_expr, indent);
+                }
                 return 1;
             }
         }
     }
 
-    /* 3. Check for 'let <dest> = call <name>(<args>)' or 'let <dest> = call <name>' */
+    /* 3. Check for 'let <dest> = call <name>(<args>)' OR 'let <dest> = <name>(<args>)'
+     *    Including multi-return: 'let x, y = name(args)'
+     *    Including named args:   'let x = name(b=10, a=5)' */
     if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
-        char *eq = strchr(p, '=');
+        /* Find the '=' that separates dest from rhs.
+         * We must skip '==' (comparison) and commas in dest list. */
+        char *eq = NULL;
+        {
+            int in_s = 0;
+            for (char *scan = p + 4; *scan; scan++) {
+                if (*scan == '"') { in_s = !in_s; continue; }
+                if (in_s) continue;
+                if (*scan == '=' && *(scan+1) != '=') { eq = scan; break; }
+            }
+        }
         if (eq) {
+            /* Extract dest portion: everything between 'let ' and '=' */
+            char dest_full[MAXLINE] = "";
+            int dlen = (int)(eq - (p + 4));
+            snprintf(dest_full, sizeof dest_full, "%.*s", dlen, p + 4);
+            char *df = dest_full;
+            while (*df == ' ' || *df == '\t') df++;
+            char *df_end = df + strlen(df);
+            while (df_end > df && (df_end[-1]==' ' || df_end[-1]=='\t')) *--df_end = '\0';
+
             char *rhs = eq + 1;
             while (*rhs == ' ' || *rhs == '\t') rhs++;
-            if (!strncmp(rhs, "call ", 5) || !strncmp(rhs, "call\t", 5)) {
-                char dest[128] = "";
-                int dlen = (int)(eq - (p + 4));
-                snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
-                char *dstart = dest;
-                while (*dstart == ' ' || *dstart == '\t') dstart++;
-                char *dend = dstart + strlen(dstart);
-                while (dend > dstart && (dend[-1] == ' ' || dend[-1] == '\t')) *--dend = '\0';
-
-                char *call_target = rhs + 5;
+            char *call_target = rhs;
+            int had_call = 0;
+            if (!strncmp(call_target, "call ", 5) || !strncmp(call_target, "call\t", 5)) {
+                had_call = 1;
+                call_target += 5;
                 while (*call_target == ' ' || *call_target == '\t') call_target++;
-                char fn_name[128] = "";
-                int fn_len = 0;
-                while (*call_target && is_ident1((unsigned char)*call_target)) {
-                    fn_name[fn_len++] = *call_target++;
-                }
-                fn_name[fn_len] = '\0';
+            }
+            char fn_name[128] = "";
+            int fn_len = 0;
+            while (*call_target && is_ident1((unsigned char)*call_target)) {
+                if (fn_len < 127) fn_name[fn_len++] = *call_target;
+                call_target++;
+            }
+            fn_name[fn_len] = '\0';
 
-                if (fn_len > 0) {
-                    while (*call_target == ' ' || *call_target == '\t') call_target++;
-                    if (*call_target == '(') {
-                        char *paren_open = call_target;
-                        char *paren_close = strrchr(call_target, ')');
-                        if (paren_close) {
+            if (fn_len > 0 && !is_nexus_keyword(fn_name)) {
+                while (*call_target == ' ' || *call_target == '\t') call_target++;
+                if (*call_target == '(') {
+                    int close_idx = find_matching_paren(call_target, 0);
+                    if (close_idx >= 0) {
+                        char *tail = call_target + close_idx + 1;
+                        while (*tail == ' ' || *tail == '\t') tail++;
+                        if (*tail == '\0' || *tail == '#' || *tail == ';' || *tail == '\n' || *tail == '\r') {
                             char arg_str[MAXLINE] = "";
-                            int alen = (int)(paren_close - (paren_open + 1));
+                            int alen = close_idx - 1;
                             if (alen > 0) {
-                                snprintf(arg_str, sizeof arg_str, "%.*s", alen, paren_open + 1);
+                                snprintf(arg_str, sizeof arg_str, "%.*s", alen, call_target + 1);
                             }
                             char args[32][512];
                             int nargs = split_args(arg_str, args, 32);
 
-                            out[0] = '\0';
-                            emit_scoped_call(indent, fn_name, args, nargs, dstart, out, cap);
-                            return 1;
+                            /* --- Named argument reordering ---
+                             * Detect if any arg has the form 'name=value'.
+                             * If so, reorder them to match the registered signature. */
+                            int has_named = 0;
+                            for (int i = 0; i < nargs; i++) {
+                                char *eq2 = strchr(args[i], '=');
+                                if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
+                                    /* verify everything before '=' is an identifier */
+                                    int ok = 1;
+                                    for (char *cp = args[i]; cp < eq2; cp++) {
+                                        if (!is_ident1((unsigned char)*cp)) { ok = 0; break; }
+                                    }
+                                    if (ok) { has_named = 1; break; }
+                                }
+                            }
+                            if (has_named) {
+                                int reg_idx = fn_registry_find(fn_name);
+                                if (reg_idx >= 0) {
+                                    int reg_nparams = fn_registry[reg_idx].nparams;
+                                    char ordered[32][512];
+                                    /* Initialize all slots empty */
+                                    for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
+                                    for (int i = 0; i < nargs; i++) {
+                                        char *eq2 = strchr(args[i], '=');
+                                        if (eq2) {
+                                            char kname[128] = "";
+                                            int klen = (int)(eq2 - args[i]);
+                                            if (klen < 128) {
+                                                memcpy(kname, args[i], klen);
+                                                kname[klen] = '\0';
+                                                char *kv = eq2 + 1;
+                                                while (*kv == ' ' || *kv == '\t') kv++;
+                                                /* find position in registry */
+                                                for (int j = 0; j < reg_nparams; j++) {
+                                                    if (!strcmp(fn_registry[reg_idx].params[j], kname)) {
+                                                        snprintf(ordered[j], 512, "%s", kv);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            /* positional arg mixed in - put at first empty slot */
+                                            for (int j = 0; j < reg_nparams; j++) {
+                                                if (!ordered[j][0]) {
+                                                    snprintf(ordered[j], 512, "%s", args[i]);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    for (int i = 0; i < reg_nparams; i++) {
+                                        snprintf(args[i], 512, "%s", ordered[i]);
+                                    }
+                                    nargs = reg_nparams;
+                                }
+                            }
+
+                            /* --- Multi-return destructuring ---
+                             * 'let x, y = fn(args)' -> split dest by comma */
+                            char dest_parts[MAXFNPARAMS][128];
+                            int ndest = 0;
+                            {
+                                /* Count commas in df (the dest) */
+                                char tmp_df[MAXLINE];
+                                snprintf(tmp_df, sizeof tmp_df, "%s", df);
+                                char *tp = tmp_df;
+                                while (*tp) {
+                                    char *comma = strchr(tp, ',');
+                                    char part[128] = "";
+                                    if (comma) {
+                                        int plen2 = (int)(comma - tp);
+                                        if (plen2 < 128) {
+                                            memcpy(part, tp, plen2);
+                                            part[plen2] = '\0';
+                                        }
+                                        tp = comma + 1;
+                                    } else {
+                                        snprintf(part, sizeof part, "%s", tp);
+                                        tp += strlen(tp);
+                                    }
+                                    /* trim */
+                                    char *ps = part;
+                                    while (*ps==' '||*ps=='\t') ps++;
+                                    char *pe = ps + strlen(ps);
+                                    while (pe > ps && (pe[-1]==' '||pe[-1]=='\t')) *--pe = '\0';
+                                    if (*ps && ndest < MAXFNPARAMS) {
+                                        snprintf(dest_parts[ndest++], 128, "%s", ps);
+                                    }
+                                }
+                            }
+
+                            if (ndest > 1) {
+                                /* Multi-destination: call without dest, then destructure */
+                                out[0] = '\0';
+                                emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
+                                char line_buf[MAXLINE];
+                                for (int i = 0; i < ndest; i++) {
+                                    snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s_%d\n",
+                                             indent, dest_parts[i], fn_name, i);
+                                    strncat(out, line_buf, cap - strlen(out) - 1);
+                                    if (cur_fn_is_scoped) fn_add_local(dest_parts[i]);
+                                }
+                                return 1;
+                            } else {
+                                /* Single destination */
+                                out[0] = '\0';
+                                emit_scoped_call(indent, fn_name, args, nargs, df, out, cap);
+                                return 1;
+                            }
                         }
-                    } else {
-                        /* let dest = call name (zero args, no parens) */
-                        char args[1][512];
-                        out[0] = '\0';
-                        emit_scoped_call(indent, fn_name, args, 0, dstart, out, cap);
-                        return 1;
                     }
+                } else if (had_call) {
+                    /* let dest = call name (zero args, no parens) */
+                    char args[1][512];
+                    out[0] = '\0';
+                    emit_scoped_call(indent, fn_name, args, 0, df, out, cap);
+                    return 1;
                 }
             }
         }
     }
 
-    /* 4. Check for statement 'call <name>(<args>)' */
-    if (!strncmp(p, "call ", 5) || !strncmp(p, "call\t", 5)) {
-        char *call_target = p + 5;
-        while (*call_target == ' ' || *call_target == '\t') call_target++;
-        char fn_name[128] = "";
-        int fn_len = 0;
-        while (*call_target && is_ident1((unsigned char)*call_target)) {
-            fn_name[fn_len++] = *call_target++;
-        }
-        fn_name[fn_len] = '\0';
 
-        if (fn_len > 0) {
-            while (*call_target == ' ' || *call_target == '\t') call_target++;
-            if (*call_target == '(') {
-                char *paren_open = call_target;
-                char *paren_close = strrchr(call_target, ')');
-                if (paren_close) {
+    /* 4. Check for statement 'call <name>(<args>)' OR '<name>(<args>)' */
+    char *call_target = p;
+    int had_call = 0;
+    if (!strncmp(p, "call ", 5) || !strncmp(p, "call\t", 5)) {
+        had_call = 1;
+        call_target = p + 5;
+        while (*call_target == ' ' || *call_target == '\t') call_target++;
+    }
+    char fn_name[128] = "";
+    int fn_len = 0;
+    while (*call_target && is_ident1((unsigned char)*call_target)) {
+        if (fn_len < 127) fn_name[fn_len++] = *call_target;
+        call_target++;
+    }
+    fn_name[fn_len] = '\0';
+
+    if (fn_len > 0 && !is_nexus_keyword(fn_name)) {
+        while (*call_target == ' ' || *call_target == '\t') call_target++;
+        if (*call_target == '(') {
+            int close_idx = find_matching_paren(call_target, 0);
+            if (close_idx >= 0) {
+                char *tail = call_target + close_idx + 1;
+                while (*tail == ' ' || *tail == '\t') tail++;
+                if (*tail == '\0' || *tail == '#' || *tail == ';' || *tail == '\n' || *tail == '\r') {
                     char arg_str[MAXLINE] = "";
-                    int alen = (int)(paren_close - (paren_open + 1));
+                    int alen = close_idx - 1;
                     if (alen > 0) {
-                        snprintf(arg_str, sizeof arg_str, "%.*s", alen, paren_open + 1);
+                        snprintf(arg_str, sizeof arg_str, "%.*s", alen, call_target + 1);
                     }
                     char args[32][512];
                     int nargs = split_args(arg_str, args, 32);
+
+                    /* Named argument reordering for statement calls */
+                    int has_named = 0;
+                    for (int i = 0; i < nargs; i++) {
+                        char *eq2 = strchr(args[i], '=');
+                        if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
+                            int ok = 1;
+                            for (char *cp = args[i]; cp < eq2; cp++) {
+                                if (!is_ident1((unsigned char)*cp)) { ok = 0; break; }
+                            }
+                            if (ok) { has_named = 1; break; }
+                        }
+                    }
+                    if (has_named) {
+                        int reg_idx = fn_registry_find(fn_name);
+                        if (reg_idx >= 0) {
+                            int reg_nparams = fn_registry[reg_idx].nparams;
+                            char ordered[32][512];
+                            for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
+                            for (int i = 0; i < nargs; i++) {
+                                char *eq2 = strchr(args[i], '=');
+                                if (eq2) {
+                                    char kname[128] = "";
+                                    int klen = (int)(eq2 - args[i]);
+                                    if (klen < 128) {
+                                        memcpy(kname, args[i], klen);
+                                        kname[klen] = '\0';
+                                        char *kv = eq2 + 1;
+                                        while (*kv == ' ' || *kv == '\t') kv++;
+                                        for (int j = 0; j < reg_nparams; j++) {
+                                            if (!strcmp(fn_registry[reg_idx].params[j], kname)) {
+                                                snprintf(ordered[j], 512, "%s", kv);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    for (int j = 0; j < reg_nparams; j++) {
+                                        if (!ordered[j][0]) {
+                                            snprintf(ordered[j], 512, "%s", args[i]);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            for (int i = 0; i < reg_nparams; i++) {
+                                snprintf(args[i], 512, "%s", ordered[i]);
+                            }
+                            nargs = reg_nparams;
+                        }
+                    }
 
                     out[0] = '\0';
                     emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
@@ -1579,6 +2541,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
             }
         }
     }
+
 
     return 0;
 }
@@ -2712,6 +3675,11 @@ static int desugar_constant_folding(const char *in, char *out, size_t cap) {
  * per-line transform
  * -------------------------------------------------------------------------- */
 static void emit_line(const char *raw, FILE *out) {
+    char ls_buf[MAXLINE];
+    if (ls_apply(raw, ls_buf, sizeof ls_buf)) {
+        raw = ls_buf;
+    }
+
     reset_hoist();
 
     char u_buf[MAXLINE];
@@ -2724,6 +3692,38 @@ static void emit_line(const char *raw, FILE *out) {
     char pow_desugared[MAXLINE * 4];
     if (desugar_power(raw, pow_desugared, sizeof pow_desugared)) {
         char *p = pow_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char v_desugared[MAXLINE];
+    if (desugar_var_decl(raw, v_desugared, sizeof v_desugared)) {
+        emit_line(v_desugared, out);
+        return;
+    }
+
+    char pp_desugared[MAXLINE * 2];
+    if (desugar_print_parens(raw, pp_desugared, sizeof pp_desugared)) {
+        char *p = pp_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char hoist_desugared[MAXLINE * 4];
+    if (hoist_embedded_calls(raw, hoist_desugared, sizeof hoist_desugared)) {
+        char *p = hoist_desugared;
         while (*p) {
             char *next = strchr(p, '\n');
             if (next) *next = '\0';
@@ -3371,6 +4371,8 @@ int main(int argc, char **argv) {
         return 0;
     }
     run_type_inference_pass(canon);
+
+    ls_init();
 
     if (out_path) {
         FILE *out = fopen(out_path, "w");

@@ -1,0 +1,72 @@
+# ==============================================================================
+#      NEXUS TEST: FIRST-CLASS PARAMETERIZED FUNCTIONS & RETURN VALUES
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# 1. Parameterized function with expression return
+fn add(a, b) {
+    return a + b
+}
+
+fn mul(a, b) {
+    return a * b
+}
+
+# 2. Zero-parameter function with return
+fn get_answer() {
+    return 42
+}
+
+# 3. Direct statement function call (no call keyword required)
+let side_effect = 0
+fn set_flag(v) {
+    let side_effect = v
+}
+
+# 4. Recursive Fibonacci with return expression
+fn fib(n) {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+# --- TESTS ---
+
+# Test 1: Direct function assignment
+let sum1 = add(15, 27)
+assert_eq sum1, 42
+
+# Test 2: Zero-arg call
+let ans = get_answer()
+assert_eq ans, 42
+
+# Test 3: Multiple function calls in an arithmetic expression
+let combo = add(10, 20) + mul(3, 4)
+assert_eq combo, 42
+
+# Test 4: Statement call without 'call' keyword
+set_flag(999)
+assert_eq side_effect, 999
+
+# Test 5: Recursive fibonacci
+let f7 = fib(7)
+assert_eq f7, 13
+let f8 = fib(8)
+assert_eq f8, 21
+
+# Test 6: Direct function call in conditional statement
+if add(2, 3) == 5 {
+    let cond_ok = 1
+} else {
+    let cond_ok = 0
+}
+assert_eq cond_ok, 1
+
+# Test 7: Type aliases (int, var) and print expression
+int x = 5
+int y = 10
+var sum_xy = x + y
+assert_eq sum_xy, 15
+
+print "[+] First-Class Parameterized Functions and Return Values: ALL ASSERTIONS PASSED!"

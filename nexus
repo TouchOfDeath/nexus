@@ -363,7 +363,7 @@ examples = sorted(glob.glob(os.path.join(base_dir, "examples", "*.nex")))
 passed = 0
 for ex in examples:
     name = os.path.basename(ex)
-    if any(k in name for k in ["interactive", "prime", "master", "gui", "server", "ide"]):
+    if any(k in name for k in ["interactive", "prime", "master", "gui", "server", "ide", "framebuffer", "raycaster", "sound"]):
         continue
     subprocess.run([nexprep, ex, os.path.join(compiler_dir, "code.nex")], check=True)
     for f_clean in ["app.exe", "app.elf"]:
