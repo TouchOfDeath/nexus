@@ -1,0 +1,270 @@
+# NEXUS Programming Language: LLM Reference & Code Generation Specification
+
+> This document is designed for AI coding assistants (ChatGPT, Claude, Cursor, Copilot, etc.) to generate 100% syntactically valid and idiomatically correct NEXUS (`.nex`) code.
+
+---
+
+## 1. Language Overview
+NEXUS is a compiled, statically typed systems language with a 100% self-hosted native compiler (`compiler/nexc.nex`) emitting direct x86-64 Linux ELF64 and Windows PE32+ binaries with **0% C runtime and 0% libc dependency**.
+
+- **File Extension**: `.nex`
+- **Comments**: `#` starts a comment to the end of the line.
+- **Top-Level Execution**: Execution proceeds from top to bottom. There is no `main` function wrapper; top-level statements run sequentially.
+- **Function Order**: Declare functions (`fn ...`) before any top-level statements that call them.
+- **Standard Library**: Always include standard library at the top when needed:
+  ```nexus
+  include "stdlib/nstdlib.nex"
+  ```
+
+---
+
+## 2. Variables and Types
+
+### Declarations
+```nexus
+let x = 42                 # Standard variable declaration or reassignment
+local y = 100              # Lexical block-scoped local variable (scoped to { ... })
+int count = 0              # Explicit integer alias
+float pi = 3.14159         # Explicit float alias
+x = x + 1                  # Bare mutation assignment without let
+x += 1                     # Compound assignment (+=, -=, *=, /=, %=, **=)
+```
+
+### Operators
+- **Integer Arithmetic**: `+`, `-`, `*`, `/`, `%`, `**` (power)
+- **Float Arithmetic**: `+.`, `-.`, `*.`, `/.`, `**.`
+- **Compound**: `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `+=.`, `-=.`
+- **Relational Comparisons**: `==`, `!=`, `<`, `>`, `<=`, `>=`
+
+> **CRITICAL RULE**: Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) can **ONLY** appear inside `if` and `while` conditions. Never assign comparisons directly (`let flag = a > b` is INVALID).
+>
+> **Correct Way**:
+> ```nexus
+> let flag = 0
+> if a > b {
+>     let flag = 1
+> }
+> ```
+
+---
+
+## 3. Control Flow
+
+### If / Else
+```nexus
+if x > 10 {
+    print "Greater"
+} else if x == 10 {
+    print "Equal"
+} else {
+    print "Lesser"
+}
+```
+
+### Loops
+```nexus
+# While loop
+let i = 0
+while i < 10 {
+    let i = i + 1
+}
+
+# For loop (var, start, count)
+for i, 0, 10 {
+    print i
+}
+
+# Break and continue
+while i < 100 {
+    let i = i + 1
+    if i == 50 {
+        break
+    }
+}
+```
+
+---
+
+## 4. Functions
+
+### Declaration and Calling
+```nexus
+# Parameterized function with return expression
+fn add(a, b) {
+    return a + b
+}
+
+# Calling directly without 'call' keyword
+let sum = add(10, 20)
+
+# Optional default parameter values
+fn greet(name, times = 1) {
+    let i = 0
+    while i < times {
+        print name
+        let i = i + 1
+    }
+}
+greet("Alice")          # Uses default times = 1
+greet("Bob", 3)         # Overrides default
+
+# Named arguments
+let res = add(b=30, a=15)
+
+# Multiple return values (destructuring)
+fn divmod(a, b) {
+    let q = a / b
+    let r = a % b
+    return q, r
+}
+let q, r = divmod(14, 3)
+```
+
+---
+
+## 5. Closures & Anonymous Functions (Lambdas)
+
+### Syntax
+```nexus
+# 1. Single-expression 1-arg lambda
+let double = |x| x * 2
+let r1 = double(21)
+
+# 2. Multi-argument lambdas (supports 0 to 4 parameters)
+let add = |a, b| a + b
+let r2 = add(10, 20)
+
+# 3. Zero-argument lambda
+let get_magic = || 999
+let m = get_magic()
+
+# 4. Environment capture (captures enclosing local variables by value)
+let factor = 10
+let offset = 5
+let calc = |x| x * factor + offset
+let r3 = calc(4)        # 45
+
+# 5. Block-body lambda with local statements and loop
+let sum_n = |n| {
+    let acc = 0
+    let i = 1
+    while i <= n {
+        let acc = acc + i
+        let i = i + 1
+    }
+    return acc
+}
+let r4 = sum_n(5)       # 15
+
+# 6. Higher-order function taking closure argument
+fn apply_twice(f, val) {
+    let s1 = f(val)
+    let s2 = f(s1)
+    return s2
+}
+let r5 = apply_twice(|x| x + 1, 10) # 12
+
+# 7. Function returning a closure (closure factory)
+fn make_adder(k) {
+    let adder = |x| x + k
+    return adder
+}
+let add100 = make_adder(100)
+let r6 = add100(25)     # 125
+```
+
+---
+
+## 6. Arrays, Memory & Buffers
+
+### Array Literals & Indexing
+```nexus
+# Array literals allocate 64-bit integer elements
+let arr = [10, 20, 30, 40]
+
+# Element read
+let first = arr[0]
+
+# Element write
+arr[1] = 99
+```
+
+### Raw Pointer Operations
+```nexus
+let buf = alloc 1024            # Allocate 1024 zero-initialized bytes
+
+# 8-bit byte read / write
+store [buf + 0] 65              # ASCII 'A'
+let ch = load [buf + 0]
+
+# 64-bit word read / write
+store64 [buf + 8] 123456789
+let val = load64 [buf + 8]
+let scaled = load64 [buf + i * 8]
+```
+
+### Structs
+```nexus
+struct Point {
+    x
+    y
+}
+let p = alloc Point.size
+p.x = 10
+p.y = 20
+let dist_sq = p.x * p.x + p.y * p.y
+```
+
+---
+
+## 7. Builtins & I/O
+```nexus
+print "Hello World"             # Print string + newline
+print 42                        # Print integer + newline
+print_str s                     # Print string pointer without newline
+let s_len = len "NEXUS"         # String length (5)
+let a = abs -15                 # Absolute value (15)
+
+# Frame pointer introspection
+let fp = frame_pointer()
+let sp = stack_pointer()
+let parent_fp = frame_parent(fp)
+```
+
+---
+
+## 8. Assertions & Testing
+```nexus
+include "stdlib/nstdlib.nex"
+
+let actual = add(20, 22)
+assert_eq actual, 42            # Compares equal
+assert_ne actual, 0             # Compares not equal
+```
+
+---
+
+## 9. Common Pitfalls & What NOT to Do
+
+| Incorrect / Do Not Write | Correct NEXUS Syntax |
+|--------------------------|----------------------|
+| `let x = a > b` (relational operator in let) | `let x = 0 \n if a > b { let x = 1 }` |
+| `def func():` or `fn func() -> int` | `fn func(a, b) { ... }` (no return type annotations in header) |
+| `let mut x = 5` | `let x = 5` (variables are mutable by default) |
+| `true` or `false` | `1` and `0` |
+| `// comment` or `/* */` | `# comment` |
+| Calling function before declaration in script | Put all `fn` declarations at top of file |
+| `import std.math` | `include "stdlib/nstdlib.nex"` |
+| `[1, 2, 3].len()` | Use standard library or tracking variable |
+
+---
+
+## 10. Execution Command
+To run any NEXUS program:
+```bash
+./nexus run <file.nex>
+```
+To run the full regression test suite:
+```bash
+./nexus test
+```

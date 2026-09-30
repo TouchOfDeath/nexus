@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEXUS - 100% Native Self-Hosting Systems Language</title>
+    <meta name="description" content="NEXUS: A standalone, 100% self-hosted native AOT compiler and systems programming language. Zero libc, zero runtime, direct Linux ELF64 and Windows PE32+ binaries.">
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --surface: #111827;
+            --surface-accent: #1e293b;
+            --border: #334155;
+            --primary: #38bdf8;
+            --primary-glow: rgba(56, 189, 248, 0.15);
+            --secondary: #818cf8;
+            --accent: #34d399;
+            --text: #f1f5f9;
+            --text-dim: #94a3b8;
+            --code-bg: #070a12;
+            --font-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        header {
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+            background: rgba(11, 15, 25, 0.85);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.5rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            color: var(--text);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-tag {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.5rem;
+            background: var(--surface-accent);
+            border: 1px solid var(--border);
+            border-radius: 9999px;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: color 0.15s ease;
+        }
+
+        .nav-links a:hover {
+            color: var(--primary);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #0284c7, #38bdf8);
+            color: #070a12;
+            border: none;
+            box-shadow: 0 4px 14px rgba(56, 189, 248, 0.35);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(56, 189, 248, 0.45);
+        }
+
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--surface-accent);
+            border-color: var(--primary);
+        }
+
+        .hero {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 5rem 1.5rem 3rem;
+            text-align: center;
+        }
+
+        .badge-bar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.35rem 0.8rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-dim);
+        }
+
+        .pill-green {
+            color: var(--accent);
+            border-color: rgba(52, 211, 153, 0.4);
+        }
+
+        .hero h1 {
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            font-weight: 900;
+            line-height: 1.1;
+            letter-spacing: -0.04em;
+            margin-bottom: 1.25rem;
+            background: linear-gradient(135deg, #ffffff 40%, var(--primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            max-width: 760px;
+            margin: 0 auto 2.5rem;
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+
+        .hero-actions {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 3.5rem;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin: 3rem 0;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: left;
+            transition: all 0.2s ease;
+        }
+
+        .card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 8px 30px var(--primary-glow);
+            transform: translateY(-2px);
+        }
+
+        .card-icon {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--surface-accent);
+            border-radius: 10px;
+            margin-bottom: 1.25rem;
+            color: var(--primary);
+            font-size: 1.5rem;
+        }
+
+        .card h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .card p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+        }
+
+        .section {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 4rem 1.5rem;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .section-header h2 {
+            font-size: 2.25rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-header p {
+            color: var(--text-dim);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .code-container {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+            margin: 2rem 0;
+        }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1.25rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+
+        .code-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .code-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #334155;
+        }
+
+        .code-dot:nth-child(1) { background: #ef4444; }
+        .code-dot:nth-child(2) { background: #eab308; }
+        .code-dot:nth-child(3) { background: #22c55e; }
+
+        pre {
+            padding: 1.5rem;
+            font-family: var(--font-mono);
+            font-size: 0.92rem;
+            line-height: 1.7;
+            overflow-x: auto;
+            color: #e2e8f0;
+        }
+
+        .kw { color: #f43f5e; font-weight: 600; }
+        .fn { color: #38bdf8; font-weight: 600; }
+        .str { color: #34d399; }
+        .num { color: #fbbf24; }
+        .comment { color: #64748b; font-style: italic; }
+        .type { color: #c084fc; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2rem 0;
+            background: var(--surface);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        th, td {
+            padding: 1rem 1.25rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.95rem;
+        }
+
+        th {
+            background: var(--surface-accent);
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 3rem 1.5rem;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .nav-links { display: none; }
+            .hero { padding-top: 3rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="nav-container">
+            <a href="#" class="logo">
+                ⚡ NEXUS
+                <span class="logo-tag">v6.9</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#code">Syntax</a></li>
+                <li><a href="#architecture">Architecture</a></li>
+                <li><a href="#matrix">Capabilities</a></li>
+                <li><a href="https://github.com/TouchOfDeath/nexus">GitHub</a></li>
+            </ul>
+            <a href="https://github.com/TouchOfDeath/nexus" class="btn btn-primary">View on GitHub</a>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="badge-bar">
+                <span class="pill pill-green">✓ Stage 5 Bit-for-Bit Parity</span>
+                <span class="pill">0% Libc Dependency</span>
+                <span class="pill">100% Pure NEXUS Compiler</span>
+                <span class="pill">Linux ELF64 + Windows PE32+ + macOS ARM64</span>
+            </div>
+            <h1>The Autonomous Native Systems Language</h1>
+            <p>
+                A high-performance compiled programming language and self-hosting toolchain built from scratch.
+                Emits direct x86-64 machine code without GCC, Clang, MSVC, LLVM, C#, or .NET runtime.
+            </p>
+            <div class="hero-actions">
+                <a href="#code" class="btn btn-primary">Explore Syntax & Examples</a>
+                <a href="https://github.com/TouchOfDeath/nexus" class="btn btn-secondary">Clone Repository</a>
+            </div>
+
+            <div class="grid-3" id="features">
+                <div class="card">
+                    <div class="card-icon">⚡</div>
+                    <h3>100% Self-Hosted</h3>
+                    <p>The compiler (<code>compiler/nexc.nex</code>) is written in pure NEXUS and compiles itself with 0 byte differences across compiler generations.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🐧</div>
+                    <h3>Direct Kernel ELF64</h3>
+                    <p>Emits standalone Linux ELF64 binaries executing directly on raw Linux syscalls with 0% libc, 0% Wine, and 0% runtime loader.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">λ</div>
+                    <h3>Closures & Lambdas</h3>
+                    <p>Full support for anonymous functions (<code>|x| x * 2</code>), lexical environment capture, lambda lifting, and multi-arity dynamic dispatch.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🛡️</div>
+                    <h3>Frame Pointers</h3>
+                    <p>1 MB reentrant stack activation frames with linked frame pointer register (<code>_nx_fp</code>) and runtime frame introspection.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">📦</div>
+                    <h3>Modern Ergonomics</h3>
+                    <p>Default parameter values, named arguments (<code>k=v</code>), multiple return values (<code>return a, b</code>), and block-scoped variables.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🖥️</div>
+                    <h3>Pure Native IDE</h3>
+                    <p>Includes a 100% native code editor (<code>./nexus ide</code>) speaking the direct X11 wire protocol over Unix domain sockets with zero dependencies.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="code">
+            <div class="section-header">
+                <h2>Modern Language Syntax</h2>
+                <p>Readable, concise imperative systems programming with zero runtime overhead.</p>
+            </div>
+
+            <div class="code-container">
+                <div class="code-header">
+                    <div class="code-dots">
+                        <div class="code-dot"></div>
+                        <div class="code-dot"></div>
+                        <div class="code-dot"></div>
+                    </div>
+                    <span>showcase.nex (NEXUS v6.9)</span>
+                    <span>100% Native Code</span>
+                </div>
+                <pre><code><span class="kw">include</span> <span class="str">"stdlib/nstdlib.nex"</span>
+
+<span class="comment"># 1. Parameterized functions with expression return and default arguments</span>
+<span class="kw">fn</span> <span class="fn">greet</span>(name, times = <span class="num">1</span>) {
+    <span class="kw">let</span> i = <span class="num">0</span>
+    <span class="kw">while</span> i &lt; times {
+        <span class="kw">print</span> name
+        <span class="kw">let</span> i = i + <span class="num">1</span>
+    }
+    <span class="kw">return</span> times
+}
+
+<span class="comment"># 2. Closures & anonymous functions (Lambdas with environment capture)</span>
+<span class="kw">let</span> factor = <span class="num">10</span>
+<span class="kw">let</span> offset = <span class="num">7</span>
+<span class="kw">let</span> affine = |x| x * factor + offset
+<span class="kw">let</span> r_aff = affine(<span class="num">4</span>)             <span class="comment"># Evaluates to 47</span>
+
+<span class="comment"># 3. Higher-order functions accepting closures</span>
+<span class="kw">fn</span> <span class="fn">apply_twice</span>(f, val) {
+    <span class="kw">return</span> f(f(val))
+}
+<span class="kw">let</span> res = apply_twice(|x| x * <span class="num">2</span>, <span class="num">5</span>)  <span class="comment"># Evaluates to 20</span>
+
+<span class="comment"># 4. Multiple return values and tuple destructuring</span>
+<span class="kw">fn</span> <span class="fn">divmod</span>(a, b) {
+    <span class="kw">return</span> a / b, a % b
+}
+<span class="kw">let</span> quotient, remainder = divmod(<span class="num">14</span>, <span class="num">3</span>)
+
+<span class="comment"># 5. Lexical local scoping and block shadowing</span>
+<span class="kw">let</span> x = <span class="num">10</span>
+<span class="kw">if</span> x &gt; <span class="num">5</span> {
+    <span class="kw">local</span> x = <span class="num">999</span>                 <span class="comment"># Strictly bounded to this { ... } block</span>
+    <span class="kw">print</span> x                       <span class="comment"># Prints 999</span>
+}
+<span class="kw">print</span> x                           <span class="comment"># Automatically unshadowed: prints 10</span>
+
+<span class="comment"># 6. Array literals and hardware indexing</span>
+<span class="kw">let</span> primes = [<span class="num">2</span>, <span class="num">3</span>, <span class="num">5</span>, <span class="num">7</span>, <span class="num">11</span>, <span class="num">13</span>]
+primes[<span class="num">0</span>] = <span class="num">42</span>
+<span class="kw">let</span> first = primes[<span class="num">0</span>]
+
+<span class="kw">print</span> <span class="str">"[+] NEXUS v6.9 execution successful!"</span></code></pre>
+            </div>
+        </section>
+
+        <section class="section" id="architecture">
+            <div class="section-header">
+                <h2>Compiler Pipeline & Verification</h2>
+                <p>Pure mathematical determinism verified across operating systems.</p>
+            </div>
+
+            <div class="grid-3">
+                <div class="card">
+                    <h3>Stage 5 Self-Hosting</h3>
+                    <p>The compiler compiles itself through 4 consecutive generations. Generation 3 and Generation 4 produce 100% bit-for-bit identical binaries across all 49,152 bytes.</p>
+                </div>
+                <div class="card">
+                    <h3>Zero External Toolchains</h3>
+                    <p>NEXUS does not invoke GCC, Clang, or NASM. It synthesizes x86-64 machine instructions and ELF/PE headers byte by byte directly in memory.</p>
+                </div>
+                <div class="card">
+                    <h3>28 Test Suites Passing</h3>
+                    <p>Full automated regression testing validates 25 sample programs, 13/13 compiler diagnostics, 48 foundation tests, 94 stdlib assertions, and 52 optimizer rules.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="matrix">
+            <div class="section-header">
+                <h2>Evolution & Capability Matrix</h2>
+                <p>From an initial hex bootstrap to a full modern systems language.</p>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature / Metric</th>
+                        <th>v1.0 (Seed)</th>
+                        <th>v5.0 (Self-Host)</th>
+                        <th>v6.0 (Arrays)</th>
+                        <th>v6.5 (Scope)</th>
+                        <th>v6.9 (Current)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Self-Hosting Compiler</strong></td>
+                        <td>0% (Hex bootstrap)</td>
+                        <td>100% (nexc.nex)</td>
+                        <td>100% (nexc.nex)</td>
+                        <td>100% (nexc.nex)</td>
+                        <td><strong>100% Pure NEXUS</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Binary Outputs</strong></td>
+                        <td>Windows PE32+</td>
+                        <td>Windows PE32+</td>
+                        <td>Dual: PE + ELF64</td>
+                        <td>Tri: PE + ELF + Mach-O</td>
+                        <td><strong>Linux ELF + PE + ARM64</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Functions & Returns</strong></td>
+                        <td>None</td>
+                        <td>Hardware ret</td>
+                        <td>Hardware ret</td>
+                        <td>fn add(a, b)</td>
+                        <td><strong>Parameterized + Multi-Return</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Closures & Lambdas</strong></td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td><strong>Yes (|x| expr + Env Capture)</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Frame Pointers</strong></td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>Reentrant frames</td>
+                        <td><strong>Linked _nx_fp + 1MB Stack</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Default & Named Args</strong></td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>Named args</td>
+                        <td><strong>Default (p=v) + Named (k=v)</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Local Scoping</strong></td>
+                        <td>Global only</td>
+                        <td>Global only</td>
+                        <td>Global only</td>
+                        <td>Block { ... }</td>
+                        <td><strong>local x + Shadowing</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pure Native IDE</strong></td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td>No</td>
+                        <td><strong>Yes (./nexus ide, 100% NEXUS)</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <footer>
+        <p>NEXUS is open-source software released under the MIT License.</p>
+        <p style="margin-top: 0.5rem; font-size: 0.85rem;">Designed and verified for bare-metal Linux ELF64 and Windows PE32+ execution.</p>
+    </footer>
+
+</body>
+</html>

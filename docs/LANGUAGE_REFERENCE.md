@@ -506,6 +506,101 @@ fn greet {
 call greet
 ```
 
+### 6.6 Default Parameter Values (v6.7)
+Functions can specify default parameter values for trailing arguments:
+```nex
+fn greet(name, times = 1) {
+    let i = 0
+    while i < times {
+        print name
+        let i = i + 1
+    }
+}
+greet("Alice")          # Uses default times = 1
+greet("Bob", 3)         # Overrides default
+```
+
+### 6.7 Named Arguments (v6.5)
+Call sites can supply arguments by name in any order:
+```nex
+fn render_box(x, y, w, h) {
+    # ...
+}
+render_box(w=100, h=50, y=20, x=10)
+```
+Named arguments automatically resolve against the function's declared parameter list, and can be freely mixed with positional arguments.
+
+### 6.8 Multiple Return Values & Tuple Destructuring (v6.5)
+Functions can return multiple values simultaneously using comma separation:
+```nex
+fn divmod(a, b) {
+    let q = a / b
+    let r = a % b
+    return q, r
+}
+
+let quotient, remainder = divmod(14, 3)
+```
+
+### 6.9 Closures & Anonymous Functions (Lambdas, v6.9)
+NEXUS supports first-class anonymous functions that capture environment state from enclosing scopes:
+```nex
+# 1. Single-expression 1-arg lambda
+let double = |x| x * 2
+let ans = double(21)            # 42
+
+# 2. Multi-argument lambdas
+let add = |a, b| a + b
+let sum = add(10, 20)           # 30
+
+# 3. Environment capture (lexical closure)
+let factor = 10
+let offset = 7
+let affine = |x| x * factor + offset
+let res = affine(4)             # 47
+
+# 4. Multi-statement block-body lambda
+let sum_n = |n| {
+    let acc = 0
+    let i = 1
+    while i <= n {
+        let acc = acc + i
+        let i = i + 1
+    }
+    return acc
+}
+let total = sum_n(5)            # 15
+
+# 5. Higher-order functions
+fn apply_twice(f, val) {
+    return f(f(val))
+}
+let r = apply_twice(|x| x + 1, 10)  # 12
+
+# 6. Closure factories (returning closures)
+fn make_multiplier(m) {
+    return |v| v * m
+}
+let times10 = make_multiplier(10)
+let r10 = times10(7)            # 70
+```
+
+### 6.10 Stack-Allocated Frame Pointers & Introspection (v6.8)
+NEXUS manages reentrant stack frames using an internal 1 MB runtime call stack and frame pointer register (`_nx_fp`):
+- `frame_pointer()`: returns current frame pointer integer.
+- `stack_pointer()`: returns current runtime stack pointer integer.
+- `frame_parent(fp)`: loads caller frame pointer from `load64 [fp + 0]`.
+
+```nex
+fn check_depth {
+    let my_fp = frame_pointer()
+    let parent = frame_parent(my_fp)
+    if my_fp > parent {
+        print "Frame correctly allocated on stack"
+    }
+}
+```
+
 ---
 
 ## 7. Memory: alloc / load / store / load64 / store64
