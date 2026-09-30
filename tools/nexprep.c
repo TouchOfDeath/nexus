@@ -95,7 +95,8 @@ static int is_nexus_keyword(const char *tok) {
         "file_open", "file_create", "file_read", "file_write", "file_close",
         "assert_eq", "assert_ne", "os_argc", "os_argv",
         "syscall", "abs", "len", "itof", "ftoi", "fadd", "fsub", "fmul",
-        "fdiv", "fsqrt", "fneg", "int", "float", "var", "local", NULL
+        "fdiv", "fsqrt", "fneg", "int", "float", "var", "local",
+        "frame_pointer", "stack_pointer", "frame_parent", NULL
     };
     for (int i = 0; kw[i]; i++) {
         if (!strcmp(tok, kw[i])) return 1;
@@ -546,34 +547,86 @@ static int fn_block_depth = 0;
  * populated when we process 'fn name(p1, p2, ...) {' declarations
  * used for: named argument reordering, multi-return destructuring
  * -------------------------------------------------------------------------- */
-#define MAXFNS      128
+#define MAXFNS      256
 #define MAXFNPARAMS  32
 
-static struct {
+static int split_args(const char *arg_str, char args[][512], int max_args);
+
+typedef struct {
     char name[128];
     int  nparams;
     char params[MAXFNPARAMS][128];
-} fn_registry[MAXFNS];
+    int  param_has_default[MAXFNPARAMS];
+    char param_defaults[MAXFNPARAMS][256];
+} FnRegistryEntry;
+
+static FnRegistryEntry fn_registry[MAXFNS];
 static int fn_registry_count = 0;
 
-static void fn_registry_add(const char *name, char param_names[][512], int nparams) {
-    /* Update existing entry if found */
+static void fn_registry_add_full(const char *name, char raw_params[][512], int nparams) {
+    int idx = -1;
     for (int i = 0; i < fn_registry_count; i++) {
         if (!strcmp(fn_registry[i].name, name)) {
-            fn_registry[i].nparams = nparams < MAXFNPARAMS ? nparams : MAXFNPARAMS;
-            for (int j = 0; j < fn_registry[i].nparams; j++) {
-                snprintf(fn_registry[i].params[j], 128, "%s", param_names[j]);
-            }
-            return;
+            idx = i;
+            break;
         }
     }
-    if (fn_registry_count >= MAXFNS) return;
-    int idx = fn_registry_count++;
-    snprintf(fn_registry[idx].name, 128, "%s", name);
+    if (idx >= 0 && fn_registry[idx].nparams > 0 && nparams == 0) {
+        return;
+    }
+    if (idx < 0) {
+        if (fn_registry_count >= MAXFNS) return;
+        idx = fn_registry_count++;
+        snprintf(fn_registry[idx].name, 128, "%s", name);
+    }
+
     fn_registry[idx].nparams = nparams < MAXFNPARAMS ? nparams : MAXFNPARAMS;
     for (int j = 0; j < fn_registry[idx].nparams; j++) {
-        snprintf(fn_registry[idx].params[j], 128, "%s", param_names[j]);
+        char raw[512];
+        snprintf(raw, sizeof raw, "%s", raw_params[j]);
+
+        /* Check for '=' (default parameter value) */
+        char *eq = strchr(raw, '=');
+        char pname[128] = "";
+        char pdef[256] = "";
+
+        if (eq) {
+            int nlen = (int)(eq - raw);
+            if (nlen >= 128) nlen = 127;
+            snprintf(pname, sizeof pname, "%.*s", nlen, raw);
+            char *def_start = eq + 1;
+            while (*def_start == ' ' || *def_start == '\t') def_start++;
+            int dlen = (int)strlen(def_start);
+            while (dlen > 0 && (def_start[dlen-1] == ' ' || def_start[dlen-1] == '\t' ||
+                                def_start[dlen-1] == '\r' || def_start[dlen-1] == '\n')) {
+                dlen--;
+            }
+            snprintf(pdef, sizeof pdef, "%.*s", dlen, def_start);
+            fn_registry[idx].param_has_default[j] = 1;
+            snprintf(fn_registry[idx].param_defaults[j], 256, "%s", pdef);
+        } else {
+            snprintf(pname, sizeof pname, "%s", raw);
+            fn_registry[idx].param_has_default[j] = 0;
+            fn_registry[idx].param_defaults[j][0] = '\0';
+        }
+
+        /* Check for ':' (type annotation, e.g. 'path: string') */
+        char *colon = strchr(pname, ':');
+        if (colon) *colon = '\0';
+
+        /* Trim pname */
+        char *ps = pname;
+        while (*ps == ' ' || *ps == '\t') ps++;
+        int plen = (int)strlen(ps);
+        while (plen > 0 && (ps[plen-1] == ' ' || ps[plen-1] == '\t')) plen--;
+        ps[plen] = '\0';
+
+        snprintf(fn_registry[idx].params[j], 128, "%s", ps);
     }
+}
+
+static void fn_registry_add(const char *name, char param_names[][512], int nparams) {
+    fn_registry_add_full(name, param_names, nparams);
 }
 
 static int fn_registry_find(const char *name) {
@@ -581,6 +634,90 @@ static int fn_registry_find(const char *name) {
         if (!strcmp(fn_registry[i].name, name)) return i;
     }
     return -1;
+}
+
+static int g_dispatch_needed[8] = {0};
+static int g_lambda_count = 0;
+
+static void init_closure_dispatch_sigs(void) {
+    char p0[1][512] = {"_nx_cl"};
+    fn_registry_add("_nx_dispatch_closure_0", p0, 1);
+
+    char p1[2][512] = {"_nx_cl", "_nx_a0"};
+    fn_registry_add("_nx_dispatch_closure_1", p1, 2);
+
+    char p2[3][512] = {"_nx_cl", "_nx_a0", "_nx_a1"};
+    fn_registry_add("_nx_dispatch_closure_2", p2, 3);
+
+    char p3[4][512] = {"_nx_cl", "_nx_a0", "_nx_a1", "_nx_a2"};
+    fn_registry_add("_nx_dispatch_closure_3", p3, 4);
+
+    char p4[5][512] = {"_nx_cl", "_nx_a0", "_nx_a1", "_nx_a2", "_nx_a3"};
+    fn_registry_add("_nx_dispatch_closure_4", p4, 5);
+}
+
+static void scan_signatures_in_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char curdir[MAXLINE];
+    snprintf(curdir, sizeof curdir, "%s", path);
+    char *d = strrchr(curdir, '/');
+    if (d) *d = '\0'; else snprintf(curdir, sizeof curdir, ".");
+
+    char *line = NULL;
+    size_t cap = 0;
+    while (getline(&line, &cap, f) != -1) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!strncmp(p, "include ", 8) || !strncmp(p, "include\t", 8) ||
+            !strncmp(p, "import ", 7) || !strncmp(p, "import\t", 7)) {
+            char *quote1 = strchr(p, '"');
+            if (quote1) {
+                char *quote2 = strchr(quote1 + 1, '"');
+                if (quote2) {
+                    int ilen = (int)(quote2 - quote1 - 1);
+                    char sub[MAXLINE];
+                    snprintf(sub, sizeof sub, "%.*s", ilen, quote1 + 1);
+                    char full[MAXLINE * 2];
+                    if (sub[0] == '/') snprintf(full, sizeof full, "%s", sub);
+                    else snprintf(full, sizeof full, "%s/%s", curdir, sub);
+                    char canon_inc[MAXLINE * 2];
+                    if (realpath(full, canon_inc)) {
+                        scan_signatures_in_file(canon_inc);
+                    }
+                }
+            }
+        } else if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3)) {
+            p += 3;
+            while (*p == ' ' || *p == '\t') p++;
+            char fn_name[128] = "";
+            int fn_len = 0;
+            while (*p && is_ident1((unsigned char)*p)) {
+                if (fn_len < 127) fn_name[fn_len++] = *p;
+                p++;
+            }
+            fn_name[fn_len] = '\0';
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '(') {
+                char *paren_close = strrchr(p, ')');
+                if (paren_close) {
+                    char param_str[MAXLINE] = "";
+                    int plen = (int)(paren_close - (p + 1));
+                    if (plen > 0) snprintf(param_str, sizeof param_str, "%.*s", plen, p + 1);
+                    char raw_params[32][512];
+                    int nparams = split_args(param_str, raw_params, 32);
+                    fn_registry_add_full(fn_name, raw_params, nparams);
+                }
+            } else if (*p == '{' || *p == '\0' || *p == '#' || *p == ';' || *p == '\n' || *p == '\r') {
+                if (fn_len > 0) {
+                    char raw_params[1][512];
+                    fn_registry_add_full(fn_name, raw_params, 0);
+                }
+            }
+        }
+    }
+    if (line) free(line);
+    fclose(f);
 }
 
 /* ==========================================================================
@@ -1848,16 +1985,31 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    /* 2. If caller is a scoped function with local variables, save frame to _nx_sp */
-    int frame_size = cur_fn_nlocals * 8;
-    if (cur_fn_is_scoped && cur_fn_nlocals > 0) {
+    /* 2. Save stack frame activation record:
+     *    [_nx_sp + 0] = caller _nx_fp (previous frame pointer link)
+     *    [_nx_sp + 8] = frame depth / metadata
+     *    [_nx_sp + 16 + i * 8] = caller local variables (cur_fn_locals[i])
+     */
+    int frame_size = 16 + cur_fn_nlocals * 8;
+    if (cur_fn_is_scoped) {
+        snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + 0] _nx_fp\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
         for (int i = 0; i < cur_fn_nlocals; i++) {
             snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + %d] %s\n",
-                     indent, i * 8, cur_fn_locals[i]);
+                     indent, 16 + i * 8, cur_fn_locals[i]);
             strncat(out, line_buf, cap - strlen(out) - 1);
         }
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = _nx_sp\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
         snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + %d\n",
                  indent, frame_size);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    } else {
+        snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + 0] _nx_fp\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = _nx_sp\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + 16\n", indent);
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
@@ -1881,16 +2033,22 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    /* 6. If caller had a saved frame, restore all caller locals from _nx_sp */
-    if (cur_fn_is_scoped && cur_fn_nlocals > 0) {
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp - %d\n",
-                 indent, frame_size);
+    /* 6. Restore caller frame and caller locals from _nx_fp */
+    if (cur_fn_is_scoped) {
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
         strncat(out, line_buf, cap - strlen(out) - 1);
         for (int i = 0; i < cur_fn_nlocals; i++) {
-            snprintf(line_buf, sizeof line_buf, "%slet %s = load64 [_nx_sp + %d]\n",
-                     indent, cur_fn_locals[i], i * 8);
+            snprintf(line_buf, sizeof line_buf, "%slet %s = load64 [_nx_fp + %d]\n",
+                     indent, cur_fn_locals[i], 16 + i * 8);
             strncat(out, line_buf, cap - strlen(out) - 1);
         }
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = load64 [_nx_fp + 0]\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    } else {
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = load64 [_nx_fp + 0]\n", indent);
+        strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
     /* 7. Assign destination variable */
@@ -2166,15 +2324,16 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     char params[32][512];
                     int nparams = split_args(param_str, params, 32);
 
-                    /* Register function signature for named-arg and multi-return support */
-                    fn_registry_add(fn_name, params, nparams);
+                    /* Register function signature for named-arg, default-args, and multi-return support */
+                    fn_registry_add_full(fn_name, params, nparams);
+                    int reg_idx = fn_registry_find(fn_name);
 
                     snprintf(cur_fn_name, sizeof cur_fn_name, "%s", fn_name);
                     fn_block_depth = 0;
                     cur_fn_is_scoped = 1;
                     cur_fn_nlocals = 0;
                     for (int i = 0; i < nparams; i++) {
-                        fn_add_local(params[i]);
+                        fn_add_local(fn_registry[reg_idx].params[i]);
                     }
 
                     out[0] = '\0';
@@ -2190,13 +2349,15 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
 
                     for (int i = 0; i < nparams; i++) {
                         snprintf(line_buf, sizeof line_buf, "%s    let %s = _arg_%s_%d\n",
-                                 indent, params[i], fn_name, i);
+                                 indent, fn_registry[reg_idx].params[i], fn_name, i);
                         strncat(out, line_buf, cap - strlen(out) - 1);
                     }
                     return 1;
                 }
             } else if (*q == '{' || *q == '\0' || *q == '#' || *q == ';') {
                 /* Parameterless function: fn name { */
+                char raw_params[1][512];
+                fn_registry_add_full(fn_name, raw_params, 0);
                 if (cur_fn_is_scoped && !strcmp(cur_fn_name, fn_name)) {
                     /* Re-entrant emission of desugared fn header, keep scoped state */
                     return 0;
@@ -2331,58 +2492,84 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                             /* --- Named argument reordering ---
                              * Detect if any arg has the form 'name=value'.
                              * If so, reorder them to match the registered signature. */
-                            int has_named = 0;
-                            for (int i = 0; i < nargs; i++) {
-                                char *eq2 = strchr(args[i], '=');
-                                if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
-                                    /* verify everything before '=' is an identifier */
-                                    int ok = 1;
-                                    for (char *cp = args[i]; cp < eq2; cp++) {
-                                        if (!is_ident1((unsigned char)*cp)) { ok = 0; break; }
-                                    }
-                                    if (ok) { has_named = 1; break; }
-                                }
-                            }
-                            if (has_named) {
-                                int reg_idx = fn_registry_find(fn_name);
-                                if (reg_idx >= 0) {
-                                    int reg_nparams = fn_registry[reg_idx].nparams;
-                                    char ordered[32][512];
-                                    /* Initialize all slots empty */
-                                    for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
-                                    for (int i = 0; i < nargs; i++) {
-                                        char *eq2 = strchr(args[i], '=');
-                                        if (eq2) {
-                                            char kname[128] = "";
-                                            int klen = (int)(eq2 - args[i]);
-                                            if (klen < 128) {
-                                                memcpy(kname, args[i], klen);
-                                                kname[klen] = '\0';
-                                                char *kv = eq2 + 1;
-                                                while (*kv == ' ' || *kv == '\t') kv++;
-                                                /* find position in registry */
-                                                for (int j = 0; j < reg_nparams; j++) {
-                                                    if (!strcmp(fn_registry[reg_idx].params[j], kname)) {
-                                                        snprintf(ordered[j], 512, "%s", kv);
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            /* positional arg mixed in - put at first empty slot */
+                            int reg_idx = fn_registry_find(fn_name);
+                            if (reg_idx >= 0) {
+                                int reg_nparams = fn_registry[reg_idx].nparams;
+                                char ordered[32][512];
+                                for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
+
+                                /* 1. Place named arguments */
+                                for (int i = 0; i < nargs; i++) {
+                                    char *eq2 = strchr(args[i], '=');
+                                    if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
+                                        char kname[128] = "";
+                                        int klen = (int)(eq2 - args[i]);
+                                        if (klen < 128) {
+                                            memcpy(kname, args[i], klen);
+                                            kname[klen] = '\0';
+                                            char *kp = kname + strlen(kname);
+                                            while (kp > kname && (kp[-1] == ' ' || kp[-1] == '\t')) *--kp = '\0';
+                                            char *kv = eq2 + 1;
+                                            while (*kv == ' ' || *kv == '\t') kv++;
                                             for (int j = 0; j < reg_nparams; j++) {
-                                                if (!ordered[j][0]) {
-                                                    snprintf(ordered[j], 512, "%s", args[i]);
+                                                if (!strcmp(fn_registry[reg_idx].params[j], kname)) {
+                                                    snprintf(ordered[j], 512, "%s", kv);
                                                     break;
                                                 }
                                             }
                                         }
                                     }
-                                    for (int i = 0; i < reg_nparams; i++) {
-                                        snprintf(args[i], 512, "%s", ordered[i]);
-                                    }
-                                    nargs = reg_nparams;
                                 }
+
+                                /* 2. Place positional arguments into remaining empty slots */
+                                int pos_slot = 0;
+                                for (int i = 0; i < nargs; i++) {
+                                    char *eq2 = strchr(args[i], '=');
+                                    int is_named = 0;
+                                    if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
+                                        is_named = 1;
+                                        for (char *cp = args[i]; cp < eq2; cp++) {
+                                            if (!is_ident1((unsigned char)*cp) && *cp != ' ' && *cp != '\t') { is_named = 0; break; }
+                                        }
+                                    }
+                                    if (!is_named) {
+                                        while (pos_slot < reg_nparams && ordered[pos_slot][0] != '\0') pos_slot++;
+                                        if (pos_slot < reg_nparams) {
+                                            snprintf(ordered[pos_slot], 512, "%s", args[i]);
+                                            pos_slot++;
+                                        }
+                                    }
+                                }
+
+                                /* 3. Fill in defaults for remaining empty slots */
+                                for (int j = 0; j < reg_nparams; j++) {
+                                    if (ordered[j][0] == '\0' && fn_registry[reg_idx].param_has_default[j]) {
+                                        snprintf(ordered[j], 512, "%s", fn_registry[reg_idx].param_defaults[j]);
+                                    }
+                                }
+
+                                for (int i = 0; i < reg_nparams; i++) {
+                                    snprintf(args[i], 512, "%s", ordered[i]);
+                                }
+                                nargs = reg_nparams;
+                            } else if (g_lambda_count > 0 && nargs <= 4) {
+                                /* Closure call via _nx_dispatch_closure_N */
+                                g_dispatch_needed[nargs] = 1;
+                                char disp_fn[64];
+                                snprintf(disp_fn, sizeof disp_fn, "_nx_dispatch_closure_%d", nargs);
+                                char c_args[5][512];
+                                snprintf(c_args[0], 512, "%s", fn_name);
+                                for (int i = 0; i < nargs; i++) {
+                                    snprintf(c_args[i+1], 512, "%s", args[i]);
+                                }
+                                out[0] = '\0';
+                                emit_scoped_call(indent, disp_fn, c_args, nargs + 1, df, out, cap);
+                                return 1;
+                            } else {
+                                /* Unregistered or forward-declared normal function */
+                                out[0] = '\0';
+                                emit_scoped_call(indent, fn_name, args, nargs, df, out, cap);
+                                return 1;
                             }
 
                             /* --- Multi-return destructuring ---
@@ -2483,60 +2670,89 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     char args[32][512];
                     int nargs = split_args(arg_str, args, 32);
 
-                    /* Named argument reordering for statement calls */
-                    int has_named = 0;
-                    for (int i = 0; i < nargs; i++) {
-                        char *eq2 = strchr(args[i], '=');
-                        if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
-                            int ok = 1;
-                            for (char *cp = args[i]; cp < eq2; cp++) {
-                                if (!is_ident1((unsigned char)*cp)) { ok = 0; break; }
-                            }
-                            if (ok) { has_named = 1; break; }
-                        }
-                    }
-                    if (has_named) {
-                        int reg_idx = fn_registry_find(fn_name);
-                        if (reg_idx >= 0) {
-                            int reg_nparams = fn_registry[reg_idx].nparams;
-                            char ordered[32][512];
-                            for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
-                            for (int i = 0; i < nargs; i++) {
-                                char *eq2 = strchr(args[i], '=');
-                                if (eq2) {
-                                    char kname[128] = "";
-                                    int klen = (int)(eq2 - args[i]);
-                                    if (klen < 128) {
-                                        memcpy(kname, args[i], klen);
-                                        kname[klen] = '\0';
-                                        char *kv = eq2 + 1;
-                                        while (*kv == ' ' || *kv == '\t') kv++;
-                                        for (int j = 0; j < reg_nparams; j++) {
-                                            if (!strcmp(fn_registry[reg_idx].params[j], kname)) {
-                                                snprintf(ordered[j], 512, "%s", kv);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                } else {
+                    int reg_idx = fn_registry_find(fn_name);
+                    if (reg_idx >= 0) {
+                        int reg_nparams = fn_registry[reg_idx].nparams;
+                        char ordered[32][512];
+                        for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
+
+                        /* 1. Place named arguments */
+                        for (int i = 0; i < nargs; i++) {
+                            char *eq2 = strchr(args[i], '=');
+                            if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
+                                char kname[128] = "";
+                                int klen = (int)(eq2 - args[i]);
+                                if (klen < 128) {
+                                    memcpy(kname, args[i], klen);
+                                    kname[klen] = '\0';
+                                    char *kp = kname + strlen(kname);
+                                    while (kp > kname && (kp[-1] == ' ' || kp[-1] == '\t')) *--kp = '\0';
+                                    char *kv = eq2 + 1;
+                                    while (*kv == ' ' || *kv == '\t') kv++;
                                     for (int j = 0; j < reg_nparams; j++) {
-                                        if (!ordered[j][0]) {
-                                            snprintf(ordered[j], 512, "%s", args[i]);
+                                        if (!strcmp(fn_registry[reg_idx].params[j], kname)) {
+                                            snprintf(ordered[j], 512, "%s", kv);
                                             break;
                                         }
                                     }
                                 }
                             }
-                            for (int i = 0; i < reg_nparams; i++) {
-                                snprintf(args[i], 512, "%s", ordered[i]);
-                            }
-                            nargs = reg_nparams;
                         }
-                    }
 
-                    out[0] = '\0';
-                    emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
-                    return 1;
+                        /* 2. Place positional arguments into remaining empty slots */
+                        int pos_slot = 0;
+                        for (int i = 0; i < nargs; i++) {
+                            char *eq2 = strchr(args[i], '=');
+                            int is_named = 0;
+                            if (eq2 && eq2 > args[i] && is_ident0((unsigned char)args[i][0])) {
+                                is_named = 1;
+                                for (char *cp = args[i]; cp < eq2; cp++) {
+                                    if (!is_ident1((unsigned char)*cp) && *cp != ' ' && *cp != '\t') { is_named = 0; break; }
+                                }
+                            }
+                            if (!is_named) {
+                                while (pos_slot < reg_nparams && ordered[pos_slot][0] != '\0') pos_slot++;
+                                if (pos_slot < reg_nparams) {
+                                    snprintf(ordered[pos_slot], 512, "%s", args[i]);
+                                    pos_slot++;
+                                }
+                            }
+                        }
+
+                        /* 3. Fill in defaults for remaining empty slots */
+                        for (int j = 0; j < reg_nparams; j++) {
+                            if (ordered[j][0] == '\0' && fn_registry[reg_idx].param_has_default[j]) {
+                                snprintf(ordered[j], 512, "%s", fn_registry[reg_idx].param_defaults[j]);
+                            }
+                        }
+
+                        for (int i = 0; i < reg_nparams; i++) {
+                            snprintf(args[i], 512, "%s", ordered[i]);
+                        }
+                        nargs = reg_nparams;
+
+                        out[0] = '\0';
+                        emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
+                        return 1;
+                    } else if (g_lambda_count > 0 && nargs <= 4) {
+                        /* Closure statement call via _nx_dispatch_closure_N */
+                        g_dispatch_needed[nargs] = 1;
+                        char disp_fn[64];
+                        snprintf(disp_fn, sizeof disp_fn, "_nx_dispatch_closure_%d", nargs);
+                        char c_args[5][512];
+                        snprintf(c_args[0], 512, "%s", fn_name);
+                        for (int i = 0; i < nargs; i++) {
+                            snprintf(c_args[i+1], 512, "%s", args[i]);
+                        }
+                        out[0] = '\0';
+                        emit_scoped_call(indent, disp_fn, c_args, nargs + 1, NULL, out, cap);
+                        return 1;
+                    } else {
+                        /* Unregistered normal statement call */
+                        out[0] = '\0';
+                        emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
+                        return 1;
+                    }
                 }
             }
         }
@@ -3672,15 +3888,424 @@ static int desugar_constant_folding(const char *in, char *out, size_t cap) {
 }
 
 /* --------------------------------------------------------------------------
+ * frame built-in desugaring: frame_pointer(), stack_pointer(), frame_parent(p)
+ * -------------------------------------------------------------------------- */
+static int desugar_frame_builtins(const char *in, char *out, size_t cap) {
+    if (!strstr(in, "frame_pointer()") && !strstr(in, "stack_pointer()") && !strstr(in, "frame_parent(")) {
+        return 0;
+    }
+    char buf[MAXLINE * 2];
+    snprintf(buf, sizeof buf, "%s", in);
+
+    char *fp_call;
+    while ((fp_call = strstr(buf, "frame_pointer()")) != NULL) {
+        char temp[MAXLINE * 2];
+        int pre_len = (int)(fp_call - buf);
+        snprintf(temp, sizeof temp, "%.*s_nx_fp%s", pre_len, buf, fp_call + 15);
+        snprintf(buf, sizeof buf, "%s", temp);
+    }
+
+    char *sp_call;
+    while ((sp_call = strstr(buf, "stack_pointer()")) != NULL) {
+        char temp[MAXLINE * 2];
+        int pre_len = (int)(sp_call - buf);
+        snprintf(temp, sizeof temp, "%.*s_nx_sp%s", pre_len, buf, sp_call + 15);
+        snprintf(buf, sizeof buf, "%s", temp);
+    }
+
+    char *par_call;
+    while ((par_call = strstr(buf, "frame_parent(")) != NULL) {
+        int close_idx = find_matching_paren(par_call, 12);
+        if (close_idx > 13) {
+            char arg[128] = "";
+            int alen = close_idx - 13;
+            if (alen < 128) {
+                snprintf(arg, sizeof arg, "%.*s", alen, par_call + 13);
+                char *as = arg;
+                while (*as == ' ' || *as == '\t') as++;
+                char *ae = as + strlen(as);
+                while (ae > as && (ae[-1] == ' ' || ae[-1] == '\t')) *--ae = '\0';
+                char temp[MAXLINE * 2];
+                int pre_len = (int)(par_call - buf);
+                snprintf(temp, sizeof temp, "%.*sload64 [%s + 0]%s",
+                         pre_len, buf, as, par_call + close_idx + 1);
+                snprintf(buf, sizeof buf, "%s", temp);
+            } else break;
+        } else break;
+    }
+
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
+ * closures & anonymous functions (lambdas)
+ * -------------------------------------------------------------------------- */
+typedef struct {
+    int id;
+    char name[64];
+    int nparams;
+    char params[16][64];
+    int ncaptured;
+    char captured[16][64];
+    char body[MAXLINE * 4];
+    int is_block;
+} LambdaDef;
+
+static LambdaDef g_lambdas[64];
+
+static int is_unclosed_lambda(const char *line) {
+    const char *bar = strchr(line, '|');
+    if (!bar) return 0;
+    const char *second_bar = strchr(bar + 1, '|');
+    if (!second_bar) return 0;
+    const char *brace = strchr(second_bar + 1, '{');
+    if (!brace) return 0;
+
+    int depth = 0;
+    int in_str = 0;
+    for (const char *p = brace; *p; p++) {
+        if (*p == '"') in_str = !in_str;
+        if (in_str) continue;
+        if (*p == '#' || *p == ';') break;
+        if (*p == '{') depth++;
+        else if (*p == '}') depth--;
+    }
+    return depth > 0;
+}
+
+static int desugar_lambda(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) p += 4;
+    else if (!strncmp(p, "var ", 4) || !strncmp(p, "var\t", 4)) p += 4;
+    else if (!strncmp(p, "local ", 6) || !strncmp(p, "local\t", 6)) p += 6;
+    while (*p == ' ' || *p == '\t') p++;
+
+    if (!is_ident0((unsigned char)*p)) return 0;
+    char dest[128] = "";
+    int dlen = 0;
+    while (*p && is_ident1((unsigned char)*p)) {
+        if (dlen < 127) dest[dlen++] = *p;
+        p++;
+    }
+    dest[dlen] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+
+    if (*p != '|') return 0;
+    char *first_bar = p;
+    char *second_bar = strchr(first_bar + 1, '|');
+    if (!second_bar) return 0;
+
+    char pstr[MAXLINE];
+    int plen = (int)(second_bar - (first_bar + 1));
+    snprintf(pstr, sizeof pstr, "%.*s", plen, first_bar + 1);
+
+    char lparams[16][512];
+    int nlparams = split_args(pstr, lparams, 16);
+    char clean_params[16][64];
+    for (int i = 0; i < nlparams; i++) {
+        char *col = strchr(lparams[i], ':');
+        if (col) *col = '\0';
+        char *ps = lparams[i];
+        while (*ps == ' ' || *ps == '\t') ps++;
+        char *pe = ps + strlen(ps);
+        while (pe > ps && (pe[-1] == ' ' || pe[-1] == '\t')) *--pe = '\0';
+        snprintf(clean_params[i], 64, "%s", ps);
+    }
+
+    char *body_start = second_bar + 1;
+    while (*body_start == ' ' || *body_start == '\t') body_start++;
+    char body[MAXLINE * 4] = "";
+    int is_block = 0;
+    if (*body_start == '{') {
+        is_block = 1;
+        char *close_brace = strrchr(body_start, '}');
+        if (close_brace) {
+            int blen = (int)(close_brace - (body_start + 1));
+            snprintf(body, sizeof body, "%.*s", blen, body_start + 1);
+        } else {
+            snprintf(body, sizeof body, "%s", body_start + 1);
+        }
+    } else {
+        snprintf(body, sizeof body, "%s", body_start);
+        int blen = (int)strlen(body);
+        while (blen > 0 && (body[blen-1] == '\n' || body[blen-1] == '\r' || body[blen-1] == ' ' || body[blen-1] == '\t')) {
+            body[--blen] = '\0';
+        }
+    }
+
+    /* Find captured variables */
+    char captured[16][64];
+    int ncaptured = 0;
+    int blen = (int)strlen(body);
+    for (int i = 0; i < blen; i++) {
+        if (is_ident0((unsigned char)body[i]) && (i == 0 || !is_ident1((unsigned char)body[i-1]))) {
+            char tok[64] = "";
+            int tlen = 0;
+            while (i < blen && is_ident1((unsigned char)body[i])) {
+                if (tlen < 63) tok[tlen++] = body[i];
+                i++;
+            }
+            tok[tlen] = '\0';
+            if (is_nexus_keyword(tok)) continue;
+            if (fn_registry_find(tok) >= 0) continue;
+            if (!strncmp(tok, "_nx_", 4) || !strncmp(tok, "_ret_", 5) || !strncmp(tok, "_arg_", 5)) continue;
+
+            int is_param = 0;
+            for (int k = 0; k < nlparams; k++) {
+                if (!strcmp(clean_params[k], tok)) { is_param = 1; break; }
+            }
+            if (is_param) continue;
+
+            int already = 0;
+            for (int k = 0; k < ncaptured; k++) {
+                if (!strcmp(captured[k], tok)) { already = 1; break; }
+            }
+            if (already) continue;
+
+            if (ncaptured < 16) {
+                snprintf(captured[ncaptured++], 64, "%s", tok);
+            }
+        }
+    }
+
+    if (g_lambda_count >= 64) return 0;
+    int lid = g_lambda_count++;
+    LambdaDef *lam = &g_lambdas[lid];
+    lam->id = lid;
+    snprintf(lam->name, sizeof lam->name, "_nx_lambda_%d", lid);
+    lam->nparams = nlparams;
+    for (int k = 0; k < nlparams; k++) snprintf(lam->params[k], 64, "%s", clean_params[k]);
+    lam->ncaptured = ncaptured;
+    for (int k = 0; k < ncaptured; k++) snprintf(lam->captured[k], 64, "%s", captured[k]);
+    snprintf(lam->body, sizeof lam->body, "%s", body);
+    lam->is_block = is_block;
+
+    /* Register lambda in fn_registry */
+    char l_args[16][512];
+    for (int k = 0; k < nlparams; k++) snprintf(l_args[k], 512, "%s", clean_params[k]);
+    fn_registry_add(lam->name, l_args, nlparams);
+
+    /* Emit closure allocation at definition site */
+    out[0] = '\0';
+    char line_buf[MAXLINE];
+    snprintf(line_buf, sizeof line_buf, "%slet %s = alloc %d\n", indent, dest, 16 + ncaptured * 8);
+    strncat(out, line_buf, cap - strlen(out) - 1);
+    snprintf(line_buf, sizeof line_buf, "%sstore64 [%s + 0] %d\n", indent, dest, lid);
+    strncat(out, line_buf, cap - strlen(out) - 1);
+    snprintf(line_buf, sizeof line_buf, "%sstore64 [%s + 8] %d\n", indent, dest, ncaptured);
+    strncat(out, line_buf, cap - strlen(out) - 1);
+    for (int k = 0; k < ncaptured; k++) {
+        snprintf(line_buf, sizeof line_buf, "%sstore64 [%s + %d] %s\n",
+                 indent, dest, 16 + k * 8, captured[k]);
+        strncat(out, line_buf, cap - strlen(out) - 1);
+    }
+    if (cur_fn_is_scoped) fn_add_local(dest);
+    return 1;
+}
+
+static int desugar_fn_pointer(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) p += 4;
+    else if (!strncmp(p, "var ", 4) || !strncmp(p, "var\t", 4)) p += 4;
+    else if (!strncmp(p, "local ", 6) || !strncmp(p, "local\t", 6)) p += 6;
+    while (*p == ' ' || *p == '\t') p++;
+
+    if (!is_ident0((unsigned char)*p)) return 0;
+    char dest[128] = "";
+    int dlen = 0;
+    while (*p && is_ident1((unsigned char)*p)) {
+        if (dlen < 127) dest[dlen++] = *p;
+        p++;
+    }
+    dest[dlen] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+
+    char target[128] = "";
+    int tlen = 0;
+    while (*p && is_ident1((unsigned char)*p)) {
+        if (tlen < 127) target[tlen++] = *p;
+        p++;
+    }
+    target[tlen] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '\0' && *p != '#' && *p != ';' && *p != '\n' && *p != '\r') return 0;
+
+    int reg_idx = fn_registry_find(target);
+    if (reg_idx < 0) return 0;
+
+    int np = fn_registry[reg_idx].nparams;
+    char syn_line[MAXLINE];
+    if (np == 0) {
+        snprintf(syn_line, sizeof syn_line, "%slet %s = || %s()\n", indent, dest, target);
+    } else if (np == 1) {
+        snprintf(syn_line, sizeof syn_line, "%slet %s = |_p0| %s(_p0)\n", indent, dest, target);
+    } else if (np == 2) {
+        snprintf(syn_line, sizeof syn_line, "%slet %s = |_p0, _p1| %s(_p0, _p1)\n", indent, dest, target);
+    } else if (np == 3) {
+        snprintf(syn_line, sizeof syn_line, "%slet %s = |_p0, _p1, _p2| %s(_p0, _p1, _p2)\n", indent, dest, target);
+    } else if (np == 4) {
+        snprintf(syn_line, sizeof syn_line, "%slet %s = |_p0, _p1, _p2, _p3| %s(_p0, _p1, _p2, _p3)\n", indent, dest, target);
+    } else {
+        return 0;
+    }
+    return desugar_lambda(syn_line, out, cap);
+}
+
+static void emit_lambdas_and_dispatchers(FILE *out) {
+    int any_disp = 0;
+    for (int a = 0; a <= 4; a++) {
+        if (g_dispatch_needed[a]) any_disp = 1;
+    }
+    if (g_lambda_count == 0 && !any_disp) return;
+
+    /* 1. Emit each lifted lambda function */
+    for (int k = 0; k < g_lambda_count; k++) {
+        LambdaDef *lam = &g_lambdas[k];
+        fprintf(out, "\n# --- Lifted Closure: %s ---\n", lam->name);
+        fprintf(out, "fn %s {\n", lam->name);
+        for (int p = 0; p < lam->nparams; p++) {
+            fprintf(out, "    let %s = _arg_%s_%d\n", lam->params[p], lam->name, p);
+        }
+        for (int c = 0; c < lam->ncaptured; c++) {
+            fprintf(out, "    let %s = load64 [_nx_cur_closure + %d]\n",
+                    lam->captured[c], 16 + c * 8);
+        }
+        if (!lam->is_block) {
+            fprintf(out, "    let _ret_%s = %s\n    return\n", lam->name, lam->body);
+        } else {
+            char *line_p = lam->body;
+            while (*line_p) {
+                char *next_nl = strchr(line_p, '\n');
+                if (next_nl) *next_nl = '\0';
+                char *s = line_p;
+                while (*s == ' ' || *s == '\t') s++;
+                if (!strncmp(s, "return ", 7) || !strncmp(s, "return\t", 7)) {
+                    char *rexpr = s + 7;
+                    while (*rexpr == ' ' || *rexpr == '\t') rexpr++;
+                    fprintf(out, "    let _ret_%s = %s\n    return\n", lam->name, rexpr);
+                } else if (!strcmp(s, "return")) {
+                    fprintf(out, "    return\n");
+                } else if (*s) {
+                    fprintf(out, "    %s\n", s);
+                }
+                if (!next_nl) break;
+                line_p = next_nl + 1;
+            }
+            fprintf(out, "    return\n");
+        }
+        fprintf(out, "}\n");
+    }
+
+    /* 2. Emit closure dispatchers for arities 0..4 */
+    for (int arity = 0; arity <= 4; arity++) {
+        int has_any = 0;
+        for (int k = 0; k < g_lambda_count; k++) {
+            if (g_lambdas[k].nparams == arity) { has_any = 1; break; }
+        }
+        if (!has_any && !g_dispatch_needed[arity]) continue;
+
+        fprintf(out, "\n# --- Closure Dispatcher Arity %d ---\n", arity);
+        fprintf(out, "fn _nx_dispatch_closure_%d {\n", arity);
+        fprintf(out, "    let _nx_target_cl = _arg__nx_dispatch_closure_%d_0\n", arity);
+        for (int a = 0; a < arity; a++) {
+            fprintf(out, "    let _nx_ca_%d = _arg__nx_dispatch_closure_%d_%d\n",
+                    a, arity, a + 1);
+        }
+        fprintf(out, "    let _nx_prev_cl = _nx_cur_closure\n");
+        fprintf(out, "    let _nx_cur_closure = _nx_target_cl\n");
+        fprintf(out, "    let _nx_cid = load64 [_nx_target_cl + 0]\n");
+        fprintf(out, "    let _nx_c_res = 0\n");
+
+        for (int k = 0; k < g_lambda_count; k++) {
+            if (g_lambdas[k].nparams == arity) {
+                fprintf(out, "    if _nx_cid == %d {\n", k);
+                for (int a = 0; a < arity; a++) {
+                    fprintf(out, "        let _arg__nx_lambda_%d_%d = _nx_ca_%d\n", k, a, a);
+                }
+                fprintf(out, "        call _nx_lambda_%d\n", k);
+                fprintf(out, "        let _nx_c_res = _ret__nx_lambda_%d\n", k);
+                fprintf(out, "    }\n");
+            }
+        }
+        fprintf(out, "    let _nx_cur_closure = _nx_prev_cl\n");
+        fprintf(out, "    let _ret__nx_dispatch_closure_%d = _nx_c_res\n", arity);
+        fprintf(out, "    return\n");
+        fprintf(out, "}\n");
+    }
+}
+
+/* --------------------------------------------------------------------------
  * per-line transform
  * -------------------------------------------------------------------------- */
 static void emit_line(const char *raw, FILE *out) {
+    char fb_desugared[MAXLINE * 2];
+    if (desugar_frame_builtins(raw, fb_desugared, sizeof fb_desugared)) {
+        raw = fb_desugared;
+    }
+
     char ls_buf[MAXLINE];
     if (ls_apply(raw, ls_buf, sizeof ls_buf)) {
         raw = ls_buf;
     }
 
     reset_hoist();
+
+    char lam_desugared[MAXLINE * 4];
+    if (desugar_lambda(raw, lam_desugared, sizeof lam_desugared)) {
+        char *p = lam_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char fp_desugared[MAXLINE * 4];
+    if (desugar_fn_pointer(raw, fp_desugared, sizeof fp_desugared)) {
+        char *p = fp_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
 
     char u_buf[MAXLINE];
     snprintf(u_buf, sizeof u_buf, "%s", raw);
@@ -4317,7 +4942,7 @@ static void process_file(const char *path, FILE *out) {
             fprintf(out, "# %s", line);     /* comment out declaration */
             continue;
         }
-        if (is_unclosed_array(line)) {
+        if (is_unclosed_array(line) || is_unclosed_lambda(line)) {
             char *extra = NULL;
             size_t extra_cap = 0;
             while (getline(&extra, &extra_cap, in) != -1) {
@@ -4325,12 +4950,12 @@ static void process_file(const char *path, FILE *out) {
                 size_t l2 = strlen(extra);
                 size_t new_cap = l1 + l2 + 2;
                 char *new_line = realloc(line, new_cap);
-                if (!new_line) die("out of memory in array literal", NULL);
+                if (!new_line) die("out of memory in multiline construct", NULL);
                 line = new_line;
                 cap = new_cap;
-                strcat(line, " ");
+                strcat(line, "\n");
                 strcat(line, extra);
-                if (!is_unclosed_array(line)) break;
+                if (!is_unclosed_array(line) && !is_unclosed_lambda(line)) break;
             }
             if (extra) free(extra);
         }
@@ -4371,18 +4996,28 @@ int main(int argc, char **argv) {
         return 0;
     }
     run_type_inference_pass(canon);
+    init_closure_dispatch_sigs();
+    scan_signatures_in_file(canon);
 
     ls_init();
 
-    if (out_path) {
-        FILE *out = fopen(out_path, "w");
-        if (!out) die("Cannot write", out_path);
-        fprintf(out, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 262144\nlet _nx_sp = _nx_call_stack\n");
-        process_file(canon, out);
-        fclose(out);
-    } else {
-        fprintf(stdout, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 262144\nlet _nx_sp = _nx_call_stack\n");
-        process_file(canon, stdout);
+    FILE *body_tmp = tmpfile();
+    if (!body_tmp) die("Cannot create temporary stream", NULL);
+    process_file(canon, body_tmp);
+
+    FILE *dest_out = out_path ? fopen(out_path, "w") : stdout;
+    if (!dest_out) die("Cannot write", out_path);
+
+    fprintf(dest_out, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 1048576\nlet _nx_sp = _nx_call_stack\nlet _nx_fp = _nx_call_stack\nlet _nx_cur_closure = 0\n");
+    emit_lambdas_and_dispatchers(dest_out);
+
+    rewind(body_tmp);
+    char copy_buf[8192];
+    size_t nr;
+    while ((nr = fread(copy_buf, 1, sizeof copy_buf, body_tmp)) > 0) {
+        fwrite(copy_buf, 1, nr, dest_out);
     }
+    fclose(body_tmp);
+    if (out_path) fclose(dest_out);
     return 0;
 }

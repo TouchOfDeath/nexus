@@ -20,6 +20,27 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **Closures & Anonymous Functions / Lambdas (v6.9)**:
+  - Anonymous lambda expressions: single-expression syntax `|params| expr` and block-body syntax `|params| { ... }` (Feature #8).
+  - Environment capture: inline lambdas capture enclosing local variables from surrounding scopes, automatically storing them into heap-allocated closure records (`alloc (16 + ncaptured * 8)`).
+  - Lambda lifting & closure dispatch: preprocessor lifts anonymous functions to unique top-level functions `_nx_lambda_K` and generates multi-arity dynamic dispatchers `_nx_dispatch_closure_N` (`N` in 0..4).
+  - Multi-line block lambdas: support multi-statement block lambdas with local variables, while loops, and early `return`.
+  - Higher-order functions: supports passing closures as first-class arguments to functions (`apply_twice(inc, 10)`).
+  - Closure factory & heap persistence: functions can return closures that capture caller parameters across stack frame unwinding (`make_multiplier(10) -> times10(7) == 70`).
+  - Zero-argument lambdas: `|| 999` syntax for deferred evaluation.
+  - Test: `tests/test_closures.nex` — 8 tests covering 1-arg, multi-arg, zero-arg, environment capture, higher-order functions, block lambdas, and factory closures: ALL PASS.
+- **Stack-Allocated Frame Pointers & Call Chain Linkage (v6.8)**:
+  - 1 MB runtime call stack: expanded call stack allocation (`alloc 1048576`) supporting deep recursion and frame chains (Feature #7).
+  - Frame pointer register (`_nx_fp`): tracks current activation record base pointer, linked through `[_nx_sp + 0] = _nx_fp` on call and restored on return.
+  - Built-in frame introspection: `frame_pointer()` returns current `_nx_fp`, `stack_pointer()` returns `_nx_sp`, and `frame_parent(fp)` loads caller frame pointer from `[fp + 0]`.
+  - Reentrant activation record preservation: caller locals and frame links preserved across recursive and nested function calls.
+  - Stack pointer restoration: stack pointer cleanly unwinds and restores to pre-call offset upon function completion.
+  - Test: `tests/test_frame_pointers.nex` — query base pointers, nested chain linkage (level 1 -> 2 -> 3), recursive FP check, and stack pointer restoration: ALL PASS.
+- **Default Parameter Values (v6.7)**:
+  - Optional default values in function signatures: `fn name(param1, param2 = default_val)` (Feature #5).
+  - Recursive include signature scanning: `scan_signatures_in_file()` discovers all parameter defaults across imported modules.
+  - Call-site argument auto-fill: omitted arguments at call sites are automatically populated from registered defaults for positional, named, and mixed calls.
+  - Test: `tests/test_default_params.nex` — default args, named overrides, mixed positional/named defaults, trailing defaults: ALL PASS.
 - **Lexical Local Scoping (v6.6)**:
   - Block-scoped local variables strictly bounded by `{ ... }` blocks (Feature #6).
   - Explicit local declarations: `local x = expr` (as well as `var x`, `int x`, `float x`) create block-scoped local variables that shadow outer variables without clobbering them.

@@ -45,14 +45,14 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 
 ## 1. Core Language Syntax, Compiler Semantics & Type System
 
-1. **Parameterized Functions**: Support true function argument lists `fn name(a: int, b: int)` rather than routing all arguments through global mutable state variables.
-2. **Function Return Values**: Allow functions to return typed values via `return expr;` and propagate caller stack values in RAX/x0 without global result slots.
-3. **Multiple Return Values / Tuples**: Support returning multiple values `fn divmod(a, b) -> (int, int)` or lightweight stack-allocated tuples.
-4. **Named Function Arguments**: Support calling functions with explicit parameter labels `draw_rect(x=10, y=20, w=100, h=50)` to eliminate call-site ordering bugs.
-5. **Default Parameter Values**: Permit optional default argument values `fn open_file(path: string, mode: int = 0)` in function signatures.
-6. **Lexical Local Scoping**: Implement true stack-frame based local variables where variable lifetime and visibility are strictly bounded by `{ ... }` blocks.
-7. **Stack-Allocated Frame Pointers**: Maintain proper RBP/x29 stack frames with compiler-managed frame offsets for reentrant and recursive functions.
-8. **Closures & Anonymous Functions (Lambdas)**: Support capturing surrounding environment state in inline anonymous functions `let cb = |event| handle(event);` for GUI event listeners.
+1. **Parameterized Functions** *(COMPLETED)*: Support true function argument lists `fn name(a: int, b: int)` rather than routing all arguments through global mutable state variables.
+2. **Function Return Values** *(COMPLETED)*: Allow functions to return typed values via `return expr;` and propagate caller stack values in RAX/x0 without global result slots.
+3. **Multiple Return Values / Tuples** *(COMPLETED)*: Support returning multiple values `fn divmod(a, b) -> (int, int)` or lightweight stack-allocated tuples.
+4. **Named Function Arguments** *(COMPLETED)*: Support calling functions with explicit parameter labels `draw_rect(x=10, y=20, w=100, h=50)` to eliminate call-site ordering bugs.
+5. **Default Parameter Values** *(COMPLETED)*: Permit optional default argument values `fn open_file(path: string, mode: int = 0)` in function signatures.
+6. **Lexical Local Scoping** *(COMPLETED)*: Implement true stack-frame based local variables where variable lifetime and visibility are strictly bounded by `{ ... }` blocks.
+7. **Stack-Allocated Frame Pointers** *(COMPLETED)*: Maintain proper RBP/x29 stack frames with compiler-managed frame offsets for reentrant and recursive functions.
+8. **Closures & Anonymous Functions (Lambdas)** *(COMPLETED)*: Support capturing surrounding environment state in inline anonymous functions `let cb = |event| handle(event);` for GUI event listeners.
 9. **Function Pointers / First-Class Functions**: Enable passing function addresses as first-class variables and callbacks `let on_click: fn(int, int) -> void`.
 10. **Static Typing with Inference**: Provide full bidirectional type inference (`let x = 5` infers `int64`) while enforcing compile-time type safety on mismatches.
 11. **Struct Definitions with Named Fields**: Enable composite data types `struct Point { x: int, y: int }` with compiler-computed field byte offsets.

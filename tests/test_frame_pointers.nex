@@ -1,0 +1,110 @@
+# ==============================================================================
+#      NEXUS TEST: STACK-ALLOCATED FRAME POINTERS & CHAIN (FEATURE #7)
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# Test 1: Query base pointers
+let base_fp = frame_pointer()
+let base_sp = stack_pointer()
+let check_bfp = 0
+if base_fp > 0 {
+    let check_bfp = 1
+}
+assert_eq check_bfp, 1
+
+let check_bsp = 0
+if base_sp >= base_fp {
+    let check_bsp = 1
+}
+assert_eq check_bsp, 1
+
+# Test 2: Nested frame pointer chain linkage
+fn level_3() {
+    let fp3 = frame_pointer()
+    let fp2 = frame_parent(fp3)
+    let fp1 = frame_parent(fp2)
+
+    # Verify frame pointers grow upward in the stack allocation
+    let check32 = 0
+    if fp3 > fp2 {
+        let check32 = 1
+    }
+    let check21 = 0
+    if fp2 > fp1 {
+        let check21 = 1
+    }
+    let check10 = 0
+    if fp1 > 0 {
+        let check10 = 1
+    }
+    assert_eq check32, 1
+    assert_eq check21, 1
+    assert_eq check10, 1
+    return 777
+}
+
+fn level_2() {
+    let l2_local = 222
+    let res = level_3()
+    # Verify local untouched after child frame unwinds
+    assert_eq l2_local, 222
+    return res
+}
+
+fn level_1() {
+    let l1_local = 111
+    let res = level_2()
+    # Verify local untouched after child frame unwinds
+    assert_eq l1_local, 111
+    return res
+}
+
+let r = level_1()
+assert_eq r, 777
+
+# Test 3: Recursive frame pointer chain verification
+fn recursive_fp_check(depth) {
+    if depth <= 1 {
+        let leaf_fp = frame_pointer()
+        let parent = frame_parent(leaf_fp)
+        let is_higher = 0
+        if leaf_fp > parent {
+            let is_higher = 1
+        }
+        assert_eq is_higher, 1
+        return 1
+    }
+    let my_fp = frame_pointer()
+    let parent = frame_parent(my_fp)
+    if depth < 6 {
+        let is_higher = 0
+        if my_fp > parent {
+            let is_higher = 1
+        }
+        assert_eq is_higher, 1
+    }
+
+    let sub = recursive_fp_check(depth - 1)
+    # After recursive unwinding, verify this frame's pointer is still intact
+    let cur_fp = frame_pointer()
+    assert_eq cur_fp, my_fp
+    return sub + 1
+}
+
+let rec_res = recursive_fp_check(6)
+assert_eq rec_res, 6
+
+# Test 4: Stack pointer restoration check
+let sp_before = stack_pointer()
+fn dummy_work(a, b, c) {
+    let t1 = a + b
+    let t2 = t1 + c
+    return t2
+}
+let d1 = dummy_work(10, 20, 30)
+assert_eq d1, 60
+let sp_after = stack_pointer()
+# Stack pointer should be cleanly restored to where it was before call
+assert_eq sp_after, sp_before
+
+print "[+] Stack-Allocated Frame Pointers: ALL ASSERTIONS PASSED!"

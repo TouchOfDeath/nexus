@@ -1,0 +1,85 @@
+# ==============================================================================
+#      NEXUS TEST: CLOSURES & ANONYMOUS FUNCTIONS (FEATURE #8)
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# Test 1: Single-expression 1-arg lambda
+let double = |x| x * 2
+let r1 = double(21)
+assert_eq r1, 42
+
+# Test 2: Multi-argument lambda (2, 3, 4 arguments)
+let add2 = |a, b| a + b
+let r2 = add2(15, 27)
+assert_eq r2, 42
+
+let add3 = |a, b, c| a + b + c
+let r3 = add3(10, 20, 12)
+assert_eq r3, 42
+
+let add4 = |a, b, c, d| a + b + c + d
+let r4 = add4(10, 10, 10, 12)
+assert_eq r4, 42
+
+# Test 3: Zero-argument lambda
+let get_magic = || 999
+let r0 = get_magic()
+assert_eq r0, 999
+
+# Test 4: Environment capture from surrounding scope
+let factor = 10
+let offset = 7
+let affine = |x| x * factor + offset
+let r_aff = affine(4)
+assert_eq r_aff, 47
+
+# Test 5: Multiple environment variable captures
+let ca = 100
+let cb = 20
+let cc = 3
+let multi_cap = |x| x + ca + cb + cc
+let r_mcap = multi_cap(7)
+assert_eq r_mcap, 130
+
+# Test 6: Higher-order function taking closure argument
+fn apply_twice(f, val) {
+    let s1 = f(val)
+    let s2 = f(s1)
+    return s2
+}
+
+let inc = |x| x + 1
+let r_ho = apply_twice(inc, 10)
+assert_eq r_ho, 12
+
+let quad = |x| x * 2
+let r_ho2 = apply_twice(quad, 5)
+assert_eq r_ho2, 20
+
+# Test 7: Block-body lambda with statements, local loop, and return
+let sum_upto = |n| {
+    let acc = 0
+    let i = 1
+    while i <= n {
+        let acc = acc + i
+        let i = i + 1
+    }
+    return acc
+}
+let r_sum = sum_upto(5)
+assert_eq r_sum, 15
+
+# Test 8: Closure returned from a function (heap persistence across stack unwinds)
+fn make_multiplier(m) {
+    let mul_cl = |v| v * m
+    return mul_cl
+}
+let times10 = make_multiplier(10)
+let r_m1 = times10(7)
+assert_eq r_m1, 70
+
+let times3 = make_multiplier(3)
+let r_m2 = times3(9)
+assert_eq r_m2, 27
+
+print "[+] Closures & Anonymous Functions (Lambdas): ALL ASSERTIONS PASSED!"
