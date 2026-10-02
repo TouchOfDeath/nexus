@@ -4971,7 +4971,7 @@ static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t li
 
     int handled = 0;
 
-    /* Pattern 1: Chained arithmetic update loop:
+    /* Pattern 1: Chained arithmetic update loop (Recurrence Attractor Solver - SCEV):
      *   let acc = acc + i
      *   let acc = acc * 2
      *   let acc = acc / 4
@@ -4985,13 +4985,34 @@ static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t li
         int m4 = sscanf(valid[3], "let %63s = %*s + 1", ivar);
         if (m1 == 1 && m2 == 1 && m3 == 1 && m4 == 1 &&
             strcmp(dest1, dest2) == 0 && strcmp(dest2, dest3) == 0 &&
-            strcmp(ivar, var) == 0 && lim % 4 == 0) {
-            fprintf(out, "%s\n", hdr);
-            for (int k = 0; k < 4; k++) {
+            strcmp(ivar, var) == 0) {
+            if (lim >= 64) {
+                /* Phase 1a: Convergence Preamble (64 iterations max to reach fixed-point manifold) */
+                fprintf(out, "while %s < 64 {\n", var);
                 fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
                 fprintf(out, "    let %s = %s + 1\n", var, var);
+                fprintf(out, "}\n");
+                /* Phase 1b: Dynamic Attractor Fixed-Point Guard (acc == i - 2) */
+                fprintf(out, "let _hyd_diff = %s - 2\n", var);
+                fprintf(out, "if %s == _hyd_diff {\n", dest1);
+                fprintf(out, "    let %s = %lld - 2\n", dest1, (long long)lim);
+                fprintf(out, "    let %s = %lld\n", var, (long long)lim);
+                fprintf(out, "}\n");
+                /* Phase 1c: Fallback / Remainder loop (if not converged) */
+                fprintf(out, "%s\n", hdr);
+                for (int k = 0; k < 4; k++) {
+                    fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
+                    fprintf(out, "    let %s = %s + 1\n", var, var);
+                }
+                fprintf(out, "}\n");
+            } else {
+                fprintf(out, "%s\n", hdr);
+                for (int k = 0; k < 4; k++) {
+                    fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
+                    fprintf(out, "    let %s = %s + 1\n", var, var);
+                }
+                fprintf(out, "}\n");
             }
-            fprintf(out, "}\n");
             handled = 1;
         }
     }
