@@ -52,8 +52,8 @@ Usage:
   ./nexus bench                   Run raw native AOT code-generation benchmark (50M physical iters)
   ./nexus hydron                  Run HYDRON semantic loop elimination benchmark (recurrence attractor)
   ./nexus interpret <file.nex>    Execute program using reference semantic oracle interpreter
-  ./nexus fuzz [--iterations N]   Run differential fuzzer (Interpreter == O0 == HYDRON)
-  ./nexus ir [--opt] <file.nex>   Emit NEXUS v8 Intermediate Representation (N-IR)
+  ./nexus fuzz [--iterations N]   Run 5-way differential fuzzer (Interp == O0 == HYDRON == N-IR)
+  ./nexus ir [flags] <file.nex>   N-IR v8 compiler engine (--opt, --run, [out.nir])
   ./nexus self-host               Verify Stage 5 self-hosting bit-for-bit parity
   ./nexus dump [binary]           Dump binary headers, sections, and import tables
   ./nexus disasm [binary]         Disassemble native x86-64 machine code

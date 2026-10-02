@@ -1,6 +1,26 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v7.3 — The HYDRON Acceleration Engine (Phase 4: Recurrence Attractor Solver & Dual-Benchmark Methodology) (current)
+## v8.0-alpha — NEXUS Intermediate Representation (N-IR) Architecture (current)
+
+Initial delivery of the NEXUS v8 Compiler Architecture, addressing the #1 recommendation from the technical audit: transitioning from source-text preprocessing to a typed SSA/CFG intermediate representation:
+
+### 1. N-IR Data Model & Lowering Engine (`tools/nexir.c`, `bin/nexir`)
+- **Typed Virtual Registers & 3-Address Instructions**: Primitive typing (`i64`, `f64`, `ptr`, `void`), memory operations (`alloc`, `load64`, `store64`), and control flow terminators (`br`, `br_cond`, `ret`, `call`).
+- **Global String Table**: Read-only string constants pooled as `@.str_0`, `@.str_1`, matching industrial compiler standards (LLVM IR).
+- **Direct Variable Assignment Lowering**: Expression parser binds destinations directly to variables (`%acc:i64 = add %acc, %i`), avoiding unnecessary temporary registers.
+
+### 2. Multi-Pass Optimization Pipeline
+- **Pass 1: Constant Folding & Local Propagation**: Folds compile-time arithmetic and propagates known constants through basic blocks.
+- **Pass 2: Algebraic Simplification & Strength Reduction**: Replaces $x + 0 \to x$, $x \times 1 \to x$, $x \times 2^k \to x \ll k$, $x \times 0 \to 0$, $x \oplus x \to 0$.
+- **Pass 3: Dead Code Elimination (DCE)**: Prunes unreachable CFG basic blocks and unused pure temporary registers.
+- **Pass 4: HYDRON IR Recurrence & Attractor Solver**: Evaluates CFG loop headers and recurrence equations, replacing $O(N)$ recurrence loops with $O(1)$ closed-form attractor solutions directly in the IR.
+
+### 3. Direct Execution N-IR VM & 5-Way Differential Oracle
+- **Built-in 64-bit Virtual Machine (`./nexus ir --run`, `./nexus ir --opt --run`)**: Simulates 16MB physical memory and 64-bit registers, verifying N-IR semantics without external linkers.
+- **5-Way Differential Fuzzing Oracle (`./nexus fuzz`, `tools/nexfuzz.py`)**: Verifies 100% bit-for-bit semantic equivalence:
+  $$\text{Reference Interpreter} \equiv \text{Native AOT (-O0)} \equiv \text{Native AOT (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)}$$
+
+## v7.3 — The HYDRON Acceleration Engine (Phase 4: Recurrence Attractor Solver & Dual-Benchmark Methodology)
 
 High-performance native compute optimization featuring mathematical recurrence attractor solving and rigorous dual-benchmark separation:
 

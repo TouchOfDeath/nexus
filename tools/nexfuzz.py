@@ -18,6 +18,7 @@ NEXELF = os.path.join(BASE_DIR, "bin", "nexelf")
 COMPILER_DIR = os.path.join(BASE_DIR, "compiler")
 NEXC_ELF = os.path.join(COMPILER_DIR, "nexc.elf")
 INTERP_PY = os.path.join(BASE_DIR, "tools", "nexinterp.py")
+NEXIR = os.path.join(BASE_DIR, "bin", "nexir")
 
 class ProgramGenerator:
     def __init__(self, seed=None):
@@ -112,6 +113,15 @@ def run_native(src_path, use_hydron=True):
         raise RuntimeError(f"Native binary exited with {res.returncode}")
     return res.stdout.strip()
 
+def run_nir(src_path, opt=False):
+    cmd = [NEXIR, "--run", src_path]
+    if opt:
+        cmd.insert(1, "--opt")
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if res.returncode != 0:
+        raise RuntimeError(f"N-IR VM failed: {res.stderr}")
+    return res.stdout.strip()
+
 def main():
     parser = argparse.ArgumentParser(description="NEXUS Differential Fuzzer")
     parser.add_argument("--iterations", "-n", type=int, default=25, help="Number of random programs to test")
@@ -123,7 +133,8 @@ def main():
 
     print(f"==================================================================")
     print(f"             NEXUS DIFFERENTIAL FUZZING ENGINE                    ")
-    print(f"   Oracle: Reference Interpreter == Native -O0 == Native HYDRON   ")
+    print(f"   5-Way Oracle: Interpreter == Native -O0 == Native HYDRON       ")
+    print(f"                 == N-IR VM (-O0) == N-IR VM (--opt)              ")
     print(f"==================================================================")
     print(f"[*] Starting {args.iterations} iterations (Master Seed: {seed})...\n")
 
@@ -141,16 +152,20 @@ def main():
                 out_interp = run_interpreter(test_file)
                 out_unopt = run_native(test_file, use_hydron=False)
                 out_opt = run_native(test_file, use_hydron=True)
+                out_nir_raw = run_nir(test_file, opt=False)
+                out_nir_opt = run_nir(test_file, opt=True)
 
-                if out_interp == out_unopt == out_opt:
+                if out_interp == out_unopt == out_opt == out_nir_raw == out_nir_opt:
                     passed += 1
-                    sys.stdout.write(f"\r[+] Progress: {passed}/{args.iterations} programs verified (100% semantic identity)")
+                    sys.stdout.write(f"\r[+] Progress: {passed}/{args.iterations} programs verified (5-way 100% semantic identity)")
                     sys.stdout.flush()
                 else:
                     print(f"\n[FAIL] Semantic divergence detected on iteration {it}!")
                     print(f"--- Interpreter Output ---\n{out_interp}")
                     print(f"--- Native -O0 Output ---\n{out_unopt}")
                     print(f"--- Native HYDRON Output ---\n{out_opt}")
+                    print(f"--- N-IR VM (-O0) Output ---\n{out_nir_raw}")
+                    print(f"--- N-IR VM (--opt) Output ---\n{out_nir_opt}")
                     print(f"\nFailed program saved to: {test_file}")
                     sys.exit(1)
 
@@ -160,7 +175,7 @@ def main():
                 sys.exit(1)
 
         print(f"\n\n\033[0;32m[SUCCESS] Differential Fuzzing PASSED: {passed}/{args.iterations} programs verified.\033[0m")
-        print(f"\033[0;32m[VERIFIED] Exact semantic equivalence across Interpreter, Native -O0, and HYDRON.\033[0m")
+        print(f"\033[0;32m[VERIFIED] Exact 5-way semantic equivalence across all engines.\033[0m")
         print(f"==================================================================")
 
     finally:

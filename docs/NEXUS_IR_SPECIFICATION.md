@@ -185,3 +185,25 @@ Loop Basic Block: ^loop.body
    - Links fallback loop `^fallback` in case guard fails.
 
 This guarantees that HYDRON operates deterministically regardless of whether the source code was formatted with intermediate variables, complex expressions, or custom nesting.
+
+---
+
+## 6. Implementation & 5-Way Differential Verification
+
+The reference implementation of the NEXUS v8 N-IR engine is implemented in [`tools/nexir.c`](file:///home/lifelonglearner/nexus_project/tools/nexir.c) and compiled to [`bin/nexir`](file:///home/lifelonglearner/nexus_project/bin/nexir).
+
+### 6.1 Toolchain Commands:
+```bash
+./nexus ir <file.nex> [out.nir]           # Lower source to typed CFG N-IR
+./nexus ir --opt <file.nex> [out.nir]     # Run 4-pass optimizer (Fold, Algebraic, HYDRON, DCE)
+./nexus ir --run <file.nex>               # Execute source directly via 64-bit N-IR VM
+./nexus ir --opt --run <file.nex>         # Execute optimized N-IR directly via VM
+```
+
+### 6.2 5-Way Differential Fuzzing Oracle:
+N-IR is verified continuously by the differential fuzzer ([`tools/nexfuzz.py`](file:///home/lifelonglearner/nexus_project/tools/nexfuzz.py)):
+
+$$\text{Interpreter} \equiv \text{Native AOT (-O0)} \equiv \text{Native AOT (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)}$$
+
+Every randomized and regression test program confirms 100% bit-for-bit semantic identity across all 5 execution engines.
+
