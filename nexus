@@ -53,6 +53,7 @@ Usage:
   ./nexus hydron                  Run HYDRON semantic loop elimination benchmark (recurrence attractor)
   ./nexus interpret <file.nex>    Execute program using reference semantic oracle interpreter
   ./nexus fuzz [--iterations N]   Run differential fuzzer (Interpreter == O0 == HYDRON)
+  ./nexus ir [--opt] <file.nex>   Emit NEXUS v8 Intermediate Representation (N-IR)
   ./nexus self-host               Verify Stage 5 self-hosting bit-for-bit parity
   ./nexus dump [binary]           Dump binary headers, sections, and import tables
   ./nexus disasm [binary]         Disassemble native x86-64 machine code
@@ -343,6 +344,11 @@ PYBUILD
         echo "    Transfer to macOS and run with: chmod +x app.macho && ./app.macho"
         ;;
     test)
+        quiet=0
+        if [ "${2:-}" = "--quiet" ] || [ "${2:-}" = "-q" ]; then
+            quiet=1
+            shift
+        fi
         if [ "${2:-}" = "--file" ] || [ "${2:-}" = "-f" ]; then
             [ -z "${3:-}" ] && usage
             NEXTEST="$BIN_DIR/nextest"
@@ -352,9 +358,16 @@ PYBUILD
             shift 2
             exec "$NEXTEST" "$@"
         fi
-        echo "Running NEXUS test suite on Linux (Direct Native ELF64 Execution)..."
+        if [ "$quiet" -eq 0 ]; then
+            echo "Running NEXUS test suite on Linux (Direct Native ELF64 Execution)..."
+        fi
         python3 -c '
 import subprocess, os, glob
+
+quiet = '"$quiet"' == 1
+def log_pass(msg):
+    if not quiet:
+        print(msg)
 
 base_dir = "'"$SCRIPT_DIR"'"
 compiler_dir = os.path.join(base_dir, "compiler")
@@ -388,7 +401,7 @@ for ex in examples:
     # Direct execution on bare-metal Linux kernel (0% loader, 0% C runtime)
     r_run = subprocess.run([app_elf], cwd=compiler_dir, capture_output=True, text=True)
     if r_run.returncode == 0:
-        print(f"[+] {name:22} PASS (Direct Native ELF64)")
+        log_pass(f"[+] {name:22} PASS (Direct Native ELF64)")
         passed += 1
     else:
         print(f"[-] {name:22} FAIL (runtime)")
@@ -419,7 +432,7 @@ for snippet, test_name, expected_err in diag_tests:
     r = subprocess.run([nexload, os.path.join(compiler_dir, "nexc.exe")], cwd=compiler_dir, capture_output=True, text=True)
     app_exists = os.path.exists(os.path.join(compiler_dir, "app.exe"))
     if not app_exists and expected_err in r.stdout:
-        print(f"[+] Diagnostic: {test_name:24} PASS (gated, error caught)")
+        log_pass(f"[+] Diagnostic: {test_name:24} PASS (gated, error caught)")
         diag_passed += 1
     else:
         print(f"[-] Diagnostic: {test_name:24} FAIL")
@@ -490,7 +503,7 @@ for src, expected, tname in foundation_tests:
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
     if expected in r.stdout:
-        print(f"[+] Foundation: {tname:28} PASS (verified {expected})")
+        log_pass(f"[+] Foundation: {tname:28} PASS (verified {expected})")
         found_passed += 1
     else:
         print(f"[-] Foundation: {tname:28} FAIL")
@@ -508,7 +521,7 @@ if os.path.exists(stdlib_src):
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
     if "[SUCCESS] ALL STDLIB TESTS PASSED!" in r.stdout:
-        print("[+] Stdlib suite: 94 assertions                  PASS")
+        log_pass("[+] Stdlib suite: 94 assertions                  PASS")
         stdlib_ok = True
     else:
         print("[-] Stdlib suite: FAIL")
@@ -526,7 +539,7 @@ if os.path.exists(optimizer_src):
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
     if "[SUCCESS] ALL OPTIMIZER TESTS PASSED!" in r.stdout:
-        print("[+] Optimizer suite: 52 assertions               PASS")
+        log_pass("[+] Optimizer suite: 52 assertions               PASS")
         optimizer_ok = True
     else:
         print("[-] Optimizer suite: FAIL")
@@ -549,7 +562,7 @@ for ex_rel, user_in, expected_list, tname in interactive_tests:
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     r = subprocess.run([os.path.join(compiler_dir, "app.elf")], input=user_in, capture_output=True, text=True)
     if all(exp in r.stdout for exp in expected_list):
-        print(f"[+] Interactive: {tname:27} PASS (Direct Native ELF64)")
+        log_pass(f"[+] Interactive: {tname:27} PASS (Direct Native ELF64)")
         interactive_passed += 1
     else:
         print(f"[-] Interactive: {tname:27} FAIL")
@@ -567,7 +580,7 @@ if os.path.exists(type_infer_src):
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
     if "[SUCCESS] All Type Inference & Unified Syntax Tests Passed!" in r.stdout:
-        print("[+] Type inference suite: 7 categories           PASS")
+        log_pass("[+] Type inference suite: 7 categories           PASS")
         type_infer_ok = True
 # Pure Native NEXUS IDE test suite (0% C, 0% libc, 0% Python, 100% NEXUS)
 ide_ok = False
@@ -581,7 +594,7 @@ if os.path.exists(ide_src):
     if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     if os.path.exists(os.path.join(compiler_dir, "app.elf")):
-        print("[+] Native IDE suite: nexus_ide.nex (100% NEXUS) PASS (PE32+ & ELF64)")
+        log_pass("[+] Native IDE suite: nexus_ide.nex (100% NEXUS) PASS (PE32+ & ELF64)")
         ide_ok = True
     else:
         print("[-] Native IDE suite: FAIL")
@@ -600,7 +613,7 @@ if os.path.exists(hyd_src):
     if os.path.exists(os.path.join(compiler_dir, "app.elf")):
         out_hyd = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
         if "=== ALL HYDRON CORRECTNESS TESTS PASSED ===" in out_hyd:
-            print("[+] HYDRON correctness suite: 7 boundaries       PASS")
+            log_pass("[+] HYDRON correctness suite: 7 boundaries       PASS")
             hydron_correct_ok = True
         else:
             print("[-] HYDRON correctness suite: FAIL (assertion mismatch)")
@@ -610,7 +623,10 @@ o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
 i_ok = "PASS" if ide_ok else "FAIL"
 h_ok = "PASS" if hydron_correct_ok else "FAIL"
-print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}")
+if quiet:
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron (ALL GREEN PASS)")
+else:
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}")
 '
         ;;
     self-host)
@@ -810,6 +826,15 @@ print(f"\033[0;32m[VERIFIED] 100% Fixed-Point Self-Hosting Convergence Verified.
     fuzz)
         shift
         python3 "$SCRIPT_DIR/tools/nexfuzz.py" "$@"
+        ;;
+    ir)
+        shift
+        NEXIR="$BIN_DIR/nexir"
+        if [ ! -f "$NEXIR" ] || [ "$TOOLS_DIR/nexir.c" -nt "$NEXIR" ]; then
+            gcc -O2 "$TOOLS_DIR/nexir.c" -o "$NEXIR"
+        fi
+        [ -z "${1:-}" ] && usage
+        exec "$NEXIR" "$@"
         ;;
     repl)
         exec bash "$SCRIPT_DIR/tools/nexrepl.sh"
