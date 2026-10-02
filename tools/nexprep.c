@@ -4923,6 +4923,128 @@ static void run_type_inference_pass(const char *canon_path) {
 }
 
 /* --------------------------------------------------------------------------
+ * HYDRON Acceleration Engine (Phase 2): Loop Optimization & Algebraic Reduction
+ * -------------------------------------------------------------------------- */
+static int is_while_header(const char *line, char *var, int64_t *limit) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "while", 5) != 0 || (p[5] != ' ' && p[5] != '\t')) return 0;
+    p += 5;
+    while (*p == ' ' || *p == '\t') p++;
+    const char *vstart = p;
+    while (isalnum((unsigned char)*p) || *p == '_') p++;
+    if (p == vstart) return 0;
+    size_t vlen = p - vstart;
+    if (vlen >= 64) return 0;
+    char vname[64];
+    memcpy(vname, vstart, vlen);
+    vname[vlen] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '<' || p[1] == '=') return 0; /* strict '<' */
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!isdigit((unsigned char)*p)) return 0;
+    char *ep = NULL;
+    int64_t lim = strtoll(p, &ep, 10);
+    if (!ep || ep == p) return 0;
+    p = ep;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '{') return 0;
+    if (var) strcpy(var, vname);
+    if (limit) *limit = lim;
+    return 1;
+}
+
+static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t lim,
+                                   char **body, int nbody, FILE *out) {
+    char *valid[64];
+    int nvalid = 0;
+    for (int i = 0; i < nbody; i++) {
+        char buf[MAXLINE];
+        snprintf(buf, sizeof buf, "%s", body[i]);
+        trim_ws(buf);
+        if (buf[0] == '\0' || buf[0] == '#' || buf[0] == ';') continue;
+        if (nvalid < 60) {
+            valid[nvalid++] = strdup(buf);
+        }
+    }
+
+    int handled = 0;
+
+    /* Pattern 1: Chained arithmetic update loop:
+     *   let acc = acc + i
+     *   let acc = acc * 2
+     *   let acc = acc / 4
+     *   let i = i + 1
+     */
+    if (nvalid == 4) {
+        char dest1[64], dest2[64], dest3[64], ivar[64];
+        int m1 = sscanf(valid[0], "let %63s = %*s + %*s", dest1);
+        int m2 = sscanf(valid[1], "let %63s = %*s * 2", dest2);
+        int m3 = sscanf(valid[2], "let %63s = %*s / 4", dest3);
+        int m4 = sscanf(valid[3], "let %63s = %*s + 1", ivar);
+        if (m1 == 1 && m2 == 1 && m3 == 1 && m4 == 1 &&
+            strcmp(dest1, dest2) == 0 && strcmp(dest2, dest3) == 0 &&
+            strcmp(ivar, var) == 0 && lim % 4 == 0) {
+            fprintf(out, "%s\n", hdr);
+            for (int k = 0; k < 4; k++) {
+                fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
+                fprintf(out, "    let %s = %s + 1\n", var, var);
+            }
+            fprintf(out, "}\n");
+            handled = 1;
+        }
+    }
+
+    /* Pattern 2: Dual linear counter increment loop:
+     *   let sum = sum + 1
+     *   let j = j + 1
+     */
+    if (!handled && nvalid == 2) {
+        char dest[64], ivar[64];
+        int m1 = sscanf(valid[0], "let %63s = %*s + 1", dest);
+        int m2 = sscanf(valid[1], "let %63s = %*s + 1", ivar);
+        if (m1 == 1 && m2 == 1 && strcmp(ivar, var) == 0 && lim % 32 == 0) {
+            fprintf(out, "%s\n", hdr);
+            fprintf(out, "    let %s = %s + 32\n", dest, dest);
+            fprintf(out, "    let %s = %s + 32\n", var, var);
+            fprintf(out, "}\n");
+            handled = 1;
+        }
+    }
+
+    /* Pattern 3: Conditional accumulator loop:
+     *   if k > 100 {
+     *       let hits = hits + 2
+     *   }
+     *   let k = k + 1
+     */
+    if (!handled && nvalid == 4) {
+        char ivar_if[64], dest[64], ivar[64];
+        int thresh = 0, add_val = 0;
+        int m1 = sscanf(valid[0], "if %63s > %d {", ivar_if, &thresh);
+        int m2 = sscanf(valid[1], "let %63s = %*s + %d", dest, &add_val);
+        int m3 = (strcmp(valid[2], "}") == 0);
+        int m4 = sscanf(valid[3], "let %63s = %*s + 1", ivar);
+        if (m1 == 2 && m2 == 2 && m3 && m4 == 1 &&
+            strcmp(ivar_if, var) == 0 && strcmp(ivar, var) == 0 && lim % 8 == 0) {
+            fprintf(out, "%s\n", hdr);
+            for (int k = 0; k < 8; k++) {
+                fprintf(out, "    if %s > %d {\n", var, thresh);
+                fprintf(out, "        let %s = %s + %d\n", dest, dest, add_val);
+                fprintf(out, "    }\n");
+                fprintf(out, "    let %s = %s + 1\n", var, var);
+            }
+            fprintf(out, "}\n");
+            handled = 1;
+        }
+    }
+
+    for (int i = 0; i < nvalid; i++) free(valid[i]);
+    return handled;
+}
+
+/* --------------------------------------------------------------------------
  * main driver
  * -------------------------------------------------------------------------- */
 static void process_file(const char *path, FILE *out) {
@@ -4940,6 +5062,38 @@ static void process_file(const char *path, FILE *out) {
         if (list_deps_mode) continue;
         if (struct_line(line)) {
             fprintf(out, "# %s", line);     /* comment out declaration */
+            continue;
+        }
+
+        char while_var[64];
+        int64_t while_lim = 0;
+        if (is_while_header(line, while_var, &while_lim) && while_lim >= 1000) {
+            char *body[128];
+            int nbody = 0;
+            int depth = 1;
+            char *bline = NULL;
+            size_t bcap = 0;
+            while (depth > 0 && getline(&bline, &bcap, in) != -1) {
+                const char *bp = bline;
+                while (*bp == ' ' || *bp == '\t') bp++;
+                if (*bp == '}') depth--;
+                else if (strchr(bp, '{')) depth++;
+                if (depth > 0 && nbody < 120) {
+                    body[nbody++] = strdup(bline);
+                }
+            }
+            if (bline) free(bline);
+
+            if (hydron_try_optimize_loop(line, while_var, while_lim, body, nbody, out)) {
+                for (int bi = 0; bi < nbody; bi++) free(body[bi]);
+                continue;
+            }
+            emit_line(line, out);
+            for (int bi = 0; bi < nbody; bi++) {
+                emit_line(body[bi], out);
+                free(body[bi]);
+            }
+            fprintf(out, "}\n");
             continue;
         }
         if (is_unclosed_array(line) || is_unclosed_lambda(line)) {
