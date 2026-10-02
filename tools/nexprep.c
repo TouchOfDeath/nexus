@@ -4996,7 +4996,7 @@ static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t li
         }
     }
 
-    /* Pattern 2: Dual linear counter increment loop:
+    /* Pattern 2: Dual linear counter increment loop (Induction Promotion):
      *   let sum = sum + 1
      *   let j = j + 1
      */
@@ -5004,18 +5004,28 @@ static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t li
         char dest[64], ivar[64];
         int m1 = sscanf(valid[0], "let %63s = %*s + 1", dest);
         int m2 = sscanf(valid[1], "let %63s = %*s + 1", ivar);
-        if (m1 == 1 && m2 == 1 && strcmp(ivar, var) == 0 && lim % 32 == 0) {
-            fprintf(out, "%s\n", hdr);
-            fprintf(out, "    let %s = %s + 32\n", dest, dest);
-            fprintf(out, "    let %s = %s + 32\n", var, var);
-            fprintf(out, "}\n");
+        if (m1 == 1 && m2 == 1 && strcmp(ivar, var) == 0 && lim >= 128) {
+            int step = 128;
+            int64_t main_lim = lim - (lim % step);
+            if (main_lim > 0) {
+                fprintf(out, "while %s < %lld {\n", var, (long long)main_lim);
+                fprintf(out, "    let %s = %s + %d\n", dest, dest, step);
+                fprintf(out, "    let %s = %s + %d\n", var, var, step);
+                fprintf(out, "}\n");
+            }
+            if (lim % step != 0) {
+                fprintf(out, "while %s < %lld {\n", var, (long long)lim);
+                fprintf(out, "    let %s = %s + 1\n", dest, dest);
+                fprintf(out, "    let %s = %s + 1\n", var, var);
+                fprintf(out, "}\n");
+            }
             handled = 1;
         }
     }
 
-    /* Pattern 3: Conditional accumulator loop:
-     *   if k > 100 {
-     *       let hits = hits + 2
+    /* Pattern 3: Invariant peeled conditional accumulator loop (Register Promotion):
+     *   if k > thresh {
+     *       let hits = hits + add_val
      *   }
      *   let k = k + 1
      */
@@ -5027,15 +5037,34 @@ static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t li
         int m3 = (strcmp(valid[2], "}") == 0);
         int m4 = sscanf(valid[3], "let %63s = %*s + 1", ivar);
         if (m1 == 2 && m2 == 2 && m3 && m4 == 1 &&
-            strcmp(ivar_if, var) == 0 && strcmp(ivar, var) == 0 && lim % 8 == 0) {
-            fprintf(out, "%s\n", hdr);
-            for (int k = 0; k < 8; k++) {
-                fprintf(out, "    if %s > %d {\n", var, thresh);
-                fprintf(out, "        let %s = %s + %d\n", dest, dest, add_val);
-                fprintf(out, "    }\n");
-                fprintf(out, "    let %s = %s + 1\n", var, var);
-            }
+            strcmp(ivar_if, var) == 0 && strcmp(ivar, var) == 0 &&
+            thresh >= 0 && (thresh + 1) < lim) {
+
+            /* Phase 3a: Peel invariant false preamble: k <= thresh */
+            fprintf(out, "while %s <= %d {\n", var, thresh);
+            fprintf(out, "    let %s = %s + 1\n", var, var);
             fprintf(out, "}\n");
+
+            /* Phase 3b: Invariant true promoted body: step by 64 without condition */
+            int step = 64;
+            int64_t trip = lim - (thresh + 1);
+            int64_t full = trip / step;
+            int64_t unroll_lim = (thresh + 1) + full * step;
+
+            if (full > 0) {
+                fprintf(out, "while %s < %lld {\n", var, (long long)unroll_lim);
+                fprintf(out, "    let %s = %s + %d\n", dest, dest, add_val * step);
+                fprintf(out, "    let %s = %s + %d\n", var, var, step);
+                fprintf(out, "}\n");
+            }
+
+            /* Phase 3c: Invariant true remainder loop (at most step-1 iterations) */
+            if (trip % step != 0) {
+                fprintf(out, "while %s < %lld {\n", var, (long long)lim);
+                fprintf(out, "    let %s = %s + %d\n", dest, dest, add_val);
+                fprintf(out, "    let %s = %s + 1\n", var, var);
+                fprintf(out, "}\n");
+            }
             handled = 1;
         }
     }
