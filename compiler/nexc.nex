@@ -1363,6 +1363,7 @@ print "Compiling code.nex -> app.exe..."
 # 3. STATEMENT DISPATCHER LOOP
 # ------------------------------------------------------------------------------
 store [m + 1024] 0
+let hyd_rax_var = 0 - 1
 let r = 1
 while r == 1 {
     call skip_ws
@@ -1371,6 +1372,9 @@ while r == 1 {
     } else {
         store [m + 1032] 0
         let c = load [s + i]
+        if c != 108 {
+            let hyd_rax_var = 0 - 1
+        }
 
         # ----------------------------------------------------------------------
         # PARSE 'let <dest> = ...'
@@ -2419,12 +2423,16 @@ while r == 1 {
                         let b = 0
                         call emit_b
                     }
+                    if g != 0 {
+                        let hyd_rax_var = 0 - 1
+                    }
                     # --- CASE 0: Standard Arithmetic / Assignment Expression ---
                     if g == 0 {
                         call check_has_dot
                         if has_dot == 1 {
                             let g = 18
                             let is_f_dest = 1
+                            let hyd_rax_var = 0 - 1
                             call parse_f_op
                             call st_xmm0
                         } else {
@@ -2440,12 +2448,16 @@ while r == 1 {
                                 call emit_b
                                 let v = u
                                 call emit_d
+                                let hyd_rax_var = 0 - 1
                             } else {
                                 call parse_ident
                                 call resolve_var
                                 let a = w
-                                # mov rax, [rbp + a] (48 8B 85 <a32>)
-                                call ld_rax
+                                if hyd_rax_var != a {
+                                    # mov rax, [rbp + a] (48 8B 85 <a32>)
+                                    call ld_rax
+                                    let hyd_rax_var = a
+                                }
                             }
                         }
                     }
@@ -2510,36 +2522,111 @@ while r == 1 {
                                             call emit_d
                                         }
                                         if o == 42 {
-                                            # imul rax, rax, imm32 (48 69 C0 <u32>)
-                                            let b = 72
-                                            call emit_b
-                                            let b = 105
-                                            call emit_b
-                                            let b = 192
-                                            call emit_b
-                                            let v = u
-                                            call emit_d
+                                            # HYDRON: Fast Power-of-2 Multiplication
+                                            let hyd_k = 0
+                                            let hyd_val = 1
+                                            let hyd_is_p2 = 0
+                                            if u > 0 {
+                                                while hyd_k < 31 {
+                                                    let hyd_k = hyd_k + 1
+                                                    let hyd_val = hyd_val * 2
+                                                    if hyd_val == u {
+                                                        let hyd_is_p2 = 1
+                                                        let hyd_shift = hyd_k
+                                                        let hyd_k = 32
+                                                    }
+                                                }
+                                            }
+                                            if hyd_is_p2 == 1 {
+                                                # shl rax, hyd_shift (48 C1 E0 <hyd_shift>)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 193
+                                                call emit_b
+                                                let b = 224
+                                                call emit_b
+                                                let b = hyd_shift
+                                                call emit_b
+                                            } else {
+                                                # imul rax, rax, imm32 (48 69 C0 <u32>)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 105
+                                                call emit_b
+                                                let b = 192
+                                                call emit_b
+                                                let v = u
+                                                call emit_d
+                                            }
                                         }
                                         if o == 47 {
-                                            # mov rbx, imm32; cqo; idiv rbx
-                                            let b = 72
-                                            call emit_b
-                                            let b = 199
-                                            call emit_b
-                                            let b = 195
-                                            call emit_b
-                                            let v = u
-                                            call emit_d
-                                            let b = 72
-                                            call emit_b
-                                            let b = 153
-                                            call emit_b
-                                            let b = 72
-                                            call emit_b
-                                            let b = 247
-                                            call emit_b
-                                            let b = 251
-                                            call emit_b
+                                            # HYDRON: Fast Power-of-2 Signed Division (cqo + and + add + sar)
+                                            let hyd_k = 0
+                                            let hyd_val = 1
+                                            let hyd_is_p2 = 0
+                                            if u > 0 {
+                                                while hyd_k < 31 {
+                                                    let hyd_k = hyd_k + 1
+                                                    let hyd_val = hyd_val * 2
+                                                    if hyd_val == u {
+                                                        let hyd_is_p2 = 1
+                                                        let hyd_shift = hyd_k
+                                                        let hyd_k = 32
+                                                    }
+                                                }
+                                            }
+                                            if hyd_is_p2 == 1 {
+                                                # cqo (48 99)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 153
+                                                call emit_b
+                                                # and rdx, mask (48 81 E2 <mask32>)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 129
+                                                call emit_b
+                                                let b = 226
+                                                call emit_b
+                                                let v = u - 1
+                                                call emit_d
+                                                # add rax, rdx (48 01 D0)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 1
+                                                call emit_b
+                                                let b = 208
+                                                call emit_b
+                                                # sar rax, hyd_shift (48 C1 F8 <hyd_shift>)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 193
+                                                call emit_b
+                                                let b = 248
+                                                call emit_b
+                                                let b = hyd_shift
+                                                call emit_b
+                                            } else {
+                                                # mov rbx, imm32; cqo; idiv rbx
+                                                let b = 72
+                                                call emit_b
+                                                let b = 199
+                                                call emit_b
+                                                let b = 195
+                                                call emit_b
+                                                let v = u
+                                                call emit_d
+                                                let b = 72
+                                                call emit_b
+                                                let b = 153
+                                                call emit_b
+                                                let b = 72
+                                                call emit_b
+                                                let b = 247
+                                                call emit_b
+                                                let b = 251
+                                                call emit_b
+                                            }
                                         }
                                         if o == 37 {
                                             # mov rbx, imm32; cqo; idiv rbx; mov rax, rdx
@@ -2672,6 +2759,7 @@ while r == 1 {
                             call emit_b
                             let v = d
                             call emit_d
+                            let hyd_rax_var = d
                         }
                     }
                 }
