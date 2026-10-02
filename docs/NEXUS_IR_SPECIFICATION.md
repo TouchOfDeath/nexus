@@ -188,22 +188,32 @@ This guarantees that HYDRON operates deterministically regardless of whether the
 
 ---
 
-## 6. Implementation & 5-Way Differential Verification
+## 6. Implementation, Native ELF64 Codegen & 7-Way Differential Verification
 
-The reference implementation of the NEXUS v8 N-IR engine is implemented in [`tools/nexir.c`](file:///home/lifelonglearner/nexus_project/tools/nexir.c) and compiled to [`bin/nexir`](file:///home/lifelonglearner/nexus_project/bin/nexir).
+The reference implementation of the NEXUS v8 N-IR engine and direct native machine code emitter is implemented in [`tools/nexir.c`](file:///home/lifelonglearner/nexus_project/tools/nexir.c) and compiled to [`bin/nexir`](file:///home/lifelonglearner/nexus_project/bin/nexir).
 
-### 6.1 Toolchain Commands:
+### 6.1 Native x86-64 ELF64 Machine Code Generation
+`tools/nexir.c` includes a standalone native machine code emitter capable of compiling typed N-IR directly into executable Linux ELF64 binaries with 0% libc:
+- **Stack Frame Layout**: Standard System V AMD64 ABI frame allocation (`rbp`/`rsp`), mapping virtual registers to stack slots with 16-byte alignment.
+- **Dynamic Linker & Relocation Engine**: Two-pass label resolution resolving relative branch (`jmp`, `jnz`, `jz`) and call displacements (`rel32`).
+- **Direct Linux Syscalls**: Integrated bare-metal subroutines for integer decimal formatting (`_print_i64`), string output (`_print_str`), dynamic heap allocation (`alloc`), and process termination (`sys_exit`).
+- **Executable ELF Packaging**: Constructs standard `Elf64_Ehdr` and `Elf64_Phdr` headers with entry point at `0x401000` and RWX data/BSS segments.
+
+### 6.2 Toolchain Commands:
 ```bash
-./nexus ir <file.nex> [out.nir]           # Lower source to typed CFG N-IR
-./nexus ir --opt <file.nex> [out.nir]     # Run 4-pass optimizer (Fold, Algebraic, HYDRON, DCE)
-./nexus ir --run <file.nex>               # Execute source directly via 64-bit N-IR VM
-./nexus ir --opt --run <file.nex>         # Execute optimized N-IR directly via VM
+./nexus ir <file.nex> [out.nir]                  # Lower source to typed CFG N-IR
+./nexus ir --opt <file.nex> [out.nir]            # Run 4-pass optimizer (Fold, Algebraic, HYDRON, DCE)
+./nexus ir --run <file.nex>                      # Execute source directly via 64-bit N-IR VM
+./nexus ir --opt --run <file.nex>                # Execute optimized N-IR directly via VM
+./nexus ir --emit-elf <file.nex> [app.elf]       # Compile directly to standalone native Linux ELF64 binary
+./nexus ir --opt --emit-elf <file.nex> [app.elf] # Compile optimized N-IR to native Linux ELF64 binary
 ```
 
-### 6.2 5-Way Differential Fuzzing Oracle:
+### 6.3 7-Way Differential Fuzzing Oracle:
 N-IR is verified continuously by the differential fuzzer ([`tools/nexfuzz.py`](file:///home/lifelonglearner/nexus_project/tools/nexfuzz.py)):
 
-$$\text{Interpreter} \equiv \text{Native AOT (-O0)} \equiv \text{Native AOT (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)}$$
+$$\text{Interpreter} \equiv \text{nexc (-O0)} \equiv \text{nexc (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)} \equiv \text{N-IR ELF (-O0)} \equiv \text{N-IR ELF (--opt)}$$
 
-Every randomized and regression test program confirms 100% bit-for-bit semantic identity across all 5 execution engines.
+Every randomized and regression test program confirms 100% bit-for-bit semantic identity across all 7 execution engines.
+
 

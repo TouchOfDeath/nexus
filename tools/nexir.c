@@ -1,6 +1,7 @@
 /* ==============================================================================
  *                 NEXUS v8 Intermediate Representation (N-IR) Engine
- *       Typed CFG Intermediate Representation, Multi-Pass Optimizer & VM
+ *       Typed CFG Intermediate Representation, Multi-Pass Optimizer,
+ *              Direct Execution VM & Native Linux ELF64 Codegen
  * ============================================================================== */
 
 #include <stdio.h>
@@ -9,6 +10,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <sys/stat.h>
 
 #define MAX_LINE 4096
 #define MAX_BLOCKS 2048
@@ -603,7 +605,6 @@ void ir_pass_dead_code_elimination(IRModule *mod) {
 void ir_pass_hydron_loop_solver(IRModule *mod) {
     for (IRFunction *fn = mod->functions; fn; fn = fn->next) {
         for (IRBlock *bb = fn->entry_bb; bb; bb = bb->next) {
-            /* Check if this is a while condition block: ^while_cond_X */
             if (strncmp(bb->name, "while_cond", 10) == 0) {
                 IRInst *cmp_in = NULL;
                 IRInst *br_in = NULL;
@@ -618,7 +619,6 @@ void ir_pass_hydron_loop_solver(IRModule *mod) {
                 char ind_var[64];
                 safe_strcpy(ind_var, cmp_in->src1.name, sizeof(ind_var));
 
-                /* Find target body block */
                 IRBlock *body_bb = NULL;
                 for (IRBlock *b = fn->entry_bb; b; b = b->next) {
                     if (strcmp(b->name, br_in->target_then) == 0) {
@@ -628,7 +628,6 @@ void ir_pass_hydron_loop_solver(IRModule *mod) {
                 }
                 if (!body_bb) continue;
 
-                /* Collect non-NOP instructions in body */
                 IRInst *insts[16];
                 int n_insts = 0;
                 for (IRInst *in = body_bb->first; in && n_insts < 16; in = in->next) {
@@ -644,11 +643,8 @@ void ir_pass_hydron_loop_solver(IRModule *mod) {
 
                         char acc_var[64];
                         safe_strcpy(acc_var, insts[0]->dst.name, sizeof(acc_var));
-
-                        /* Mathematical proof: for lim >= 64, attractor acc = limit - 2 */
                         int64_t final_acc = limit - 2;
 
-                        /* Transform condition block: set acc = limit - 2, i = limit, br exit */
                         IRBlock *exit_bb = NULL;
                         for (IRBlock *b = fn->entry_bb; b; b = b->next) {
                             if (strcmp(b->name, br_in->target_else) == 0) {
@@ -658,7 +654,6 @@ void ir_pass_hydron_loop_solver(IRModule *mod) {
                         }
 
                         if (exit_bb) {
-                            /* Replace cmp_in and br_in with direct assignments and branch to exit */
                             cmp_in->op = OP_ASSIGN;
                             cmp_in->dst = make_var(acc_var, TYPE_I64);
                             cmp_in->src1 = make_const_i64(final_acc);
@@ -669,7 +664,6 @@ void ir_pass_hydron_loop_solver(IRModule *mod) {
                             br_in->src1 = make_const_i64(limit);
                             memset(&br_in->src2, 0, sizeof(br_in->src2));
 
-                            /* Add unconditional branch to exit */
                             IRInst *br_exit = calloc(1, sizeof(IRInst));
                             br_exit->op = OP_BR;
                             safe_strcpy(br_exit->target_then, exit_bb->name, sizeof(br_exit->target_then));
@@ -1416,7 +1410,6 @@ int run_ir_vm(IRModule *mod) {
                     printf("%lld\n", (long long)s1);
                     break;
                 case OP_PRINT_STR: {
-                    /* Look up in string pool if begins with @ */
                     if (in->src1.name[0] == '@') {
                         for (int i = 0; i < mod->num_strings; i++) {
                             if (strcmp(mod->strings[i].id, in->src1.name) == 0) {
@@ -1490,12 +1483,647 @@ int run_ir_vm(IRModule *mod) {
 }
 
 /* ==============================================================================
+ *                N-IR TO NATIVE x86-64 LINUX ELF64 CODEGEN EMITTER
+ * ============================================================================== */
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  e_ident[16];
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint64_t e_entry;
+    uint64_t e_phoff;
+    uint64_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
+} Elf64_Ehdr;
+
+typedef struct {
+    uint32_t p_type;
+    uint32_t p_flags;
+    uint64_t p_offset;
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
+} Elf64_Phdr;
+#pragma pack(pop)
+
+typedef struct {
+    uint8_t *data;
+    size_t size;
+    size_t capacity;
+} ByteBuffer;
+
+static void buf_init(ByteBuffer *b) {
+    b->capacity = 65536;
+    b->data = malloc(b->capacity);
+    b->size = 0;
+}
+
+static void buf_emit_byte(ByteBuffer *b, uint8_t byte) {
+    if (b->size >= b->capacity) {
+        b->capacity *= 2;
+        b->data = realloc(b->data, b->capacity);
+    }
+    b->data[b->size++] = byte;
+}
+
+static void buf_emit_bytes(ByteBuffer *b, const uint8_t *bytes, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        buf_emit_byte(b, bytes[i]);
+    }
+}
+
+static void buf_emit_i32(ByteBuffer *b, int32_t val) {
+    buf_emit_byte(b, val & 0xFF);
+    buf_emit_byte(b, (val >> 8) & 0xFF);
+    buf_emit_byte(b, (val >> 16) & 0xFF);
+    buf_emit_byte(b, (val >> 24) & 0xFF);
+}
+
+static void buf_emit_i64(ByteBuffer *b, int64_t val) {
+    buf_emit_i32(b, (int32_t)(val & 0xFFFFFFFF));
+    buf_emit_i32(b, (int32_t)((val >> 32) & 0xFFFFFFFF));
+}
+
+typedef struct {
+    char name[128];
+    size_t offset;
+} CodeLabel;
+
+typedef struct {
+    size_t patch_offset;
+    char target_name[128];
+} CodeFixup;
+
+#define MAX_CODE_LABELS 2048
+#define MAX_CODE_FIXUPS 4096
+
+typedef struct {
+    CodeLabel labels[MAX_CODE_LABELS];
+    int num_labels;
+    CodeFixup fixups[MAX_CODE_FIXUPS];
+    int num_fixups;
+} LinkerContext;
+
+static void add_code_label(LinkerContext *ctx, const char *name, size_t offset) {
+    if (ctx->num_labels < MAX_CODE_LABELS) {
+        safe_strcpy(ctx->labels[ctx->num_labels].name, name, 128);
+        ctx->labels[ctx->num_labels].offset = offset;
+        ctx->num_labels++;
+    }
+}
+
+static void add_code_fixup(LinkerContext *ctx, const char *target, size_t patch_offset) {
+    if (ctx->num_fixups < MAX_CODE_FIXUPS) {
+        safe_strcpy(ctx->fixups[ctx->num_fixups].target_name, target, 128);
+        ctx->fixups[ctx->num_fixups].patch_offset = patch_offset;
+        ctx->num_fixups++;
+    }
+}
+
+static void link_code(ByteBuffer *code, LinkerContext *ctx) {
+    for (int i = 0; i < ctx->num_fixups; i++) {
+        CodeFixup *f = &ctx->fixups[i];
+        size_t target_offset = 0;
+        int found = 0;
+        for (int l = 0; l < ctx->num_labels; l++) {
+            if (strcmp(ctx->labels[l].name, f->target_name) == 0) {
+                target_offset = ctx->labels[l].offset;
+                found = 1;
+                break;
+            }
+        }
+        if (found) {
+            int32_t rel = (int32_t)(target_offset - (f->patch_offset + 4));
+            code->data[f->patch_offset] = rel & 0xFF;
+            code->data[f->patch_offset + 1] = (rel >> 8) & 0xFF;
+            code->data[f->patch_offset + 2] = (rel >> 16) & 0xFF;
+            code->data[f->patch_offset + 3] = (rel >> 24) & 0xFF;
+        } else {
+            fprintf(stderr, "[-] Linker warning: unresolved label '%s'\n", f->target_name);
+        }
+    }
+}
+
+typedef struct {
+    char name[64];
+    int slot;
+} VarSlot;
+
+typedef struct {
+    VarSlot vars[512];
+    int num_vars;
+} FunctionFrame;
+
+static int get_var_slot(FunctionFrame *frame, const char *name) {
+    for (int i = 0; i < frame->num_vars; i++) {
+        if (strcmp(frame->vars[i].name, name) == 0) {
+            return frame->vars[i].slot;
+        }
+    }
+    if (frame->num_vars < 512) {
+        int s = frame->num_vars;
+        safe_strcpy(frame->vars[s].name, name, 64);
+        frame->vars[s].slot = s;
+        frame->num_vars++;
+        return s;
+    }
+    return 0;
+}
+
+static void emit_load_operand(ByteBuffer *b, FunctionFrame *frame, const IROperand *op, int reg) {
+    if (op->is_const) {
+        if (reg == 0) {
+            buf_emit_byte(b, 0x48); buf_emit_byte(b, 0xB8); /* movabs rax, imm64 */
+            buf_emit_i64(b, op->ival);
+        } else {
+            buf_emit_byte(b, 0x48); buf_emit_byte(b, 0xB9); /* movabs rcx, imm64 */
+            buf_emit_i64(b, op->ival);
+        }
+    } else {
+        int slot = get_var_slot(frame, op->name);
+        int32_t disp = -8 * (slot + 1);
+        buf_emit_byte(b, 0x48); buf_emit_byte(b, 0x8B);
+        buf_emit_byte(b, (reg == 0) ? 0x85 : 0x8D); /* mov rax/rcx, [rbp + disp32] */
+        buf_emit_i32(b, disp);
+    }
+}
+
+static void emit_store_result(ByteBuffer *b, FunctionFrame *frame, const IROperand *dst, int reg) {
+    if (!dst->name[0]) return;
+    int slot = get_var_slot(frame, dst->name);
+    int32_t disp = -8 * (slot + 1);
+    buf_emit_byte(b, 0x48); buf_emit_byte(b, 0x89);
+    buf_emit_byte(b, (reg == 0) ? 0x85 : 0x95); /* mov [rbp + disp32], rax/rdx */
+    buf_emit_i32(b, disp);
+}
+
+int emit_linux_elf64(IRModule *mod, const char *out_path) {
+    LinkerContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+
+    ByteBuffer code;
+    buf_init(&code);
+
+    const uint64_t ELF_BASE = 0x400000;
+    const uint64_t TEXT_VADDR = 0x401000;
+    const uint64_t DATA_VADDR = 0x408000;
+    const uint64_t HEAP_ARENA = 0x500000;
+
+    /* Build data section: heap pointer slot at 0x408000 + string pool */
+    ByteBuffer data;
+    buf_init(&data);
+    buf_emit_i64(&data, (int64_t)HEAP_ARENA); /* Initial heap pointer slot */
+
+    uint64_t str_vaddrs[MAX_STRINGS];
+    for (int i = 0; i < mod->num_strings; i++) {
+        str_vaddrs[i] = DATA_VADDR + data.size;
+        size_t slen = strlen(mod->strings[i].text);
+        buf_emit_bytes(&data, (const uint8_t *)mod->strings[i].text, slen + 1);
+    }
+
+    /* 1. Emit _start (Entry point at offset 0 -> 0x401000) */
+    add_code_label(&ctx, "_start", code.size);
+    /* Initialize heap pointer: movabs rax, HEAP_ARENA; movabs [DATA_VADDR], rax */
+    buf_emit_byte(&code, 0x48); buf_emit_byte(&code, 0xB8);
+    buf_emit_i64(&code, (int64_t)HEAP_ARENA);
+    buf_emit_byte(&code, 0x48); buf_emit_byte(&code, 0xA3);
+    buf_emit_i64(&code, (int64_t)DATA_VADDR);
+
+    /* call @main */
+    buf_emit_byte(&code, 0xE8);
+    add_code_fixup(&ctx, "@main", code.size);
+    buf_emit_i32(&code, 0);
+
+    /* Exit with rax: mov rdi, rax; mov eax, 60; syscall */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xC7, 0xB8, 0x3C, 0x00, 0x00, 0x00, 0x0F, 0x05}, 10);
+
+    /* 2. Emit _print_i64 subroutine */
+    add_code_label(&ctx, "_print_i64", code.size);
+    buf_emit_byte(&code, 0x55);                                     /* push rbp */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xE5}, 3);  /* mov rbp, rsp */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x83, 0xEC, 0x30}, 4); /* sub rsp, 48 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x8D, 0x7D, 0xFF}, 4); /* lea rdi, [rbp - 1] */
+    buf_emit_bytes(&code, (const uint8_t[]){0xC6, 0x07, 0x0A}, 3);  /* mov byte [rdi], 10 (\n) */
+    buf_emit_bytes(&code, (const uint8_t[]){0x49, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00}, 7); /* mov r8, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x85, 0xC0}, 3);  /* test rax, rax */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x89}, 2);        /* jns .p_i64_pos */
+    add_code_fixup(&ctx, ".p_i64_pos", code.size);
+    buf_emit_i32(&code, 0);
+
+    /* negative */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xF7, 0xD8}, 3);  /* neg rax */
+    buf_emit_bytes(&code, (const uint8_t[]){0x49, 0xC7, 0xC1, 0x01, 0x00, 0x00, 0x00}, 7); /* mov r9, 1 */
+    buf_emit_byte(&code, 0xE9);                                     /* jmp .p_i64_convert */
+    add_code_fixup(&ctx, ".p_i64_convert", code.size);
+    buf_emit_i32(&code, 0);
+
+    /* .p_i64_pos */
+    add_code_label(&ctx, ".p_i64_pos", code.size);
+    buf_emit_bytes(&code, (const uint8_t[]){0x49, 0xC7, 0xC1, 0x00, 0x00, 0x00, 0x00}, 7); /* mov r9, 0 */
+
+    /* .p_i64_convert */
+    add_code_label(&ctx, ".p_i64_convert", code.size);
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00}, 7); /* mov rcx, 10 */
+
+    /* .p_i64_loop */
+    add_code_label(&ctx, ".p_i64_loop", code.size);
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x31, 0xD2}, 3);  /* xor rdx, rdx */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xF7, 0xF1}, 3);  /* div rcx */
+    buf_emit_bytes(&code, (const uint8_t[]){0x80, 0xC2, 0x30}, 3);  /* add dl, '0' */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xFF, 0xCF}, 3);  /* dec rdi */
+    buf_emit_bytes(&code, (const uint8_t[]){0x88, 0x17}, 2);        /* mov [rdi], dl */
+    buf_emit_bytes(&code, (const uint8_t[]){0x49, 0xFF, 0xC0}, 3);  /* inc r8 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x85, 0xC0}, 3);  /* test rax, rax */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x85}, 2);        /* jnz .p_i64_loop */
+    add_code_fixup(&ctx, ".p_i64_loop", code.size);
+    buf_emit_i32(&code, 0);
+
+    /* check sign */
+    buf_emit_bytes(&code, (const uint8_t[]){0x4D, 0x85, 0xC9}, 3);  /* test r9, r9 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x84}, 2);        /* jz .p_i64_write */
+    add_code_fixup(&ctx, ".p_i64_write", code.size);
+    buf_emit_i32(&code, 0);
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xFF, 0xCF}, 3);  /* dec rdi */
+    buf_emit_bytes(&code, (const uint8_t[]){0xC6, 0x07, 0x2D}, 3);  /* mov byte [rdi], '-' */
+    buf_emit_bytes(&code, (const uint8_t[]){0x49, 0xFF, 0xC0}, 3);  /* inc r8 */
+
+    /* .p_i64_write: sys_write(1, rdi, r8) */
+    add_code_label(&ctx, ".p_i64_write", code.size);
+    buf_emit_bytes(&code, (const uint8_t[]){0xB8, 0x01, 0x00, 0x00, 0x00}, 5); /* mov eax, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xFE}, 3);  /* mov rsi, rdi */
+    buf_emit_bytes(&code, (const uint8_t[]){0xBF, 0x01, 0x00, 0x00, 0x00}, 5); /* mov edi, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x4C, 0x89, 0xC2}, 3);  /* mov rdx, r8 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x05}, 2);        /* syscall */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xEC, 0x5D, 0xC3}, 5); /* mov rsp, rbp; pop rbp; ret */
+
+    /* 3. Emit _print_str subroutine */
+    add_code_label(&ctx, "_print_str", code.size);
+    buf_emit_byte(&code, 0x55);                                     /* push rbp */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xE5}, 3);  /* mov rbp, rsp */
+    buf_emit_bytes(&code, (const uint8_t[]){0x56, 0x57, 0x52}, 3);  /* push rsi, push rdi, push rdx */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xC6}, 3);  /* mov rsi, rax */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x31, 0xD2}, 3);  /* xor rdx, rdx */
+
+    /* .p_str_loop */
+    add_code_label(&ctx, ".p_str_loop", code.size);
+    buf_emit_bytes(&code, (const uint8_t[]){0x80, 0x3C, 0x16, 0x00}, 4); /* cmp byte [rsi + rdx], 0 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x84}, 2);        /* jz .p_str_write */
+    add_code_fixup(&ctx, ".p_str_write", code.size);
+    buf_emit_i32(&code, 0);
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xFF, 0xC2}, 3);  /* inc rdx */
+    buf_emit_byte(&code, 0xE9);                                     /* jmp .p_str_loop */
+    add_code_fixup(&ctx, ".p_str_loop", code.size);
+    buf_emit_i32(&code, 0);
+
+    /* .p_str_write: sys_write(1, rsi, rdx) */
+    add_code_label(&ctx, ".p_str_write", code.size);
+    buf_emit_bytes(&code, (const uint8_t[]){0xB8, 0x01, 0x00, 0x00, 0x00}, 5); /* mov eax, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0xBF, 0x01, 0x00, 0x00, 0x00}, 5); /* mov edi, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x05}, 2);        /* syscall */
+
+    /* newline */
+    buf_emit_bytes(&code, (const uint8_t[]){0x6A, 0x0A}, 2);        /* push 10 (\n) */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xE6}, 3);  /* mov rsi, rsp */
+    buf_emit_bytes(&code, (const uint8_t[]){0xB8, 0x01, 0x00, 0x00, 0x00}, 5); /* mov eax, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0xBF, 0x01, 0x00, 0x00, 0x00}, 5); /* mov edi, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0xBA, 0x01, 0x00, 0x00, 0x00}, 5); /* mov edx, 1 */
+    buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x05}, 2);        /* syscall */
+    buf_emit_byte(&code, 0x58);                                     /* pop rax */
+
+    buf_emit_bytes(&code, (const uint8_t[]){0x5A, 0x5F, 0x5E}, 3);  /* pop rdx, pop rdi, pop rsi */
+    buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xEC, 0x5D, 0xC3}, 5); /* mov rsp, rbp; pop rbp; ret */
+
+    /* 4. Emit Functions */
+    for (IRFunction *fn = mod->functions; fn; fn = fn->next) {
+        char fn_label[128];
+        snprintf(fn_label, sizeof(fn_label), "@%s", fn->name);
+        add_code_label(&ctx, fn_label, code.size);
+
+        FunctionFrame frame;
+        memset(&frame, 0, sizeof(frame));
+
+        /* Scan all variables across all blocks of fn */
+        for (int p = 0; p < fn->num_params; p++) {
+            get_var_slot(&frame, fn->params[p]);
+        }
+        for (IRBlock *b = fn->entry_bb; b; b = b->next) {
+            for (IRInst *in = b->first; in; in = in->next) {
+                if (in->dst.name[0] && !in->dst.is_const) get_var_slot(&frame, in->dst.name);
+                if (in->src1.name[0] && !in->src1.is_const) get_var_slot(&frame, in->src1.name);
+                if (in->src2.name[0] && !in->src2.is_const) get_var_slot(&frame, in->src2.name);
+            }
+        }
+
+        int32_t stack_size = (frame.num_vars * 8 + 15) & ~15;
+
+        /* Prologue */
+        buf_emit_byte(&code, 0x55);                                     /* push rbp */
+        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xE5}, 3);  /* mov rbp, rsp */
+        if (stack_size > 0) {
+            buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x81, 0xEC}, 3); /* sub rsp, imm32 */
+            buf_emit_i32(&code, stack_size);
+        }
+
+        /* Store params from ABI registers */
+        const uint8_t reg_modrm[] = {0xBD, 0xB5, 0x95, 0x8D}; /* rdi, rsi, rdx, rcx */
+        for (int p = 0; p < fn->num_params && p < 4; p++) {
+            int slot = get_var_slot(&frame, fn->params[p]);
+            int32_t disp = -8 * (slot + 1);
+            buf_emit_byte(&code, 0x48); buf_emit_byte(&code, 0x89);
+            buf_emit_byte(&code, reg_modrm[p]);
+            buf_emit_i32(&code, disp);
+        }
+
+        /* Emit Basic Blocks */
+        for (IRBlock *b = fn->entry_bb; b; b = b->next) {
+            add_code_label(&ctx, b->name, code.size);
+
+            for (IRInst *in = b->first; in; in = in->next) {
+                if (in->op == OP_NOP) continue;
+
+                switch (in->op) {
+                    case OP_ASSIGN:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_ADD:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x01, 0xC8}, 3); /* add rax, rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_SUB:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x29, 0xC8}, 3); /* sub rax, rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_MUL:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x0F, 0xAF, 0xC1}, 4); /* imul rax, rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_SDIV:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x99, 0x48, 0xF7, 0xF9}, 5); /* cqo; idiv rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_SREM:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x99, 0x48, 0xF7, 0xF9}, 5); /* cqo; idiv rcx */
+                        emit_store_result(&code, &frame, &in->dst, 1); /* store rdx */
+                        break;
+                    case OP_SHL:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xD3, 0xE0}, 3); /* shl rax, cl */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_SAR:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xD3, 0xF8}, 3); /* sar rax, cl */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_AND:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x21, 0xC8}, 3); /* and rax, rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_OR:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x09, 0xC8}, 3); /* or rax, rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_XOR:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x31, 0xC8}, 3); /* xor rax, rcx */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_NEG:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0xF7, 0xD8}, 3); /* neg rax */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_ICMP_EQ: case OP_ICMP_NE: case OP_ICMP_SLT:
+                    case OP_ICMP_SLE: case OP_ICMP_SGT: case OP_ICMP_SGE: {
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x39, 0xC8}, 3); /* cmp rax, rcx */
+                        uint8_t set_op = 0x94;
+                        if (in->op == OP_ICMP_NE) set_op = 0x95;
+                        else if (in->op == OP_ICMP_SLT) set_op = 0x9C;
+                        else if (in->op == OP_ICMP_SLE) set_op = 0x9E;
+                        else if (in->op == OP_ICMP_SGT) set_op = 0x9F;
+                        else if (in->op == OP_ICMP_SGE) set_op = 0x9D;
+                        buf_emit_bytes(&code, (const uint8_t[]){0x0F, set_op, 0xC0}, 3);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x0F, 0xB6, 0xC0}, 4); /* movzx rax, al */
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    }
+                    case OP_ALLOC: {
+                        emit_load_operand(&code, &frame, &in->src1, 0); /* size in rax */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x83, 0xC0, 0x0F}, 4); /* add rax, 15 */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x83, 0xE0, 0xF0}, 4); /* and rax, -16 */
+                        /* movabs rcx, [DATA_VADDR] */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x8B, 0x0C, 0x25}, 4);
+                        buf_emit_i32(&code, (int32_t)DATA_VADDR);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xCA}, 3); /* mov rdx, rcx (res) */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x01, 0xC1}, 3); /* add rcx, rax */
+                        /* movabs [DATA_VADDR], rcx */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0x0C, 0x25}, 4);
+                        buf_emit_i32(&code, (int32_t)DATA_VADDR);
+                        emit_store_result(&code, &frame, &in->dst, 1); /* store rdx to dst */
+                        break;
+                    }
+                    case OP_LOAD64:
+                        emit_load_operand(&code, &frame, &in->src1, 0); /* ptr -> rax */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x8B, 0x80}, 3); /* mov rax, [rax + disp32] */
+                        buf_emit_i32(&code, (int32_t)in->src2.ival);
+                        emit_store_result(&code, &frame, &in->dst, 0);
+                        break;
+                    case OP_STORE64:
+                        emit_load_operand(&code, &frame, &in->src1, 0); /* ptr -> rax */
+                        emit_load_operand(&code, &frame, &in->dst, 1);  /* val -> rcx */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0x88}, 3); /* mov [rax + disp32], rcx */
+                        buf_emit_i32(&code, (int32_t)in->src2.ival);
+                        break;
+                    case OP_PRINT:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        buf_emit_byte(&code, 0xE8); /* call _print_i64 */
+                        add_code_fixup(&ctx, "_print_i64", code.size);
+                        buf_emit_i32(&code, 0);
+                        break;
+                    case OP_PRINT_STR:
+                        if (in->src1.name[0] == '@') {
+                            uint64_t target_addr = DATA_VADDR;
+                            for (int s = 0; s < mod->num_strings; s++) {
+                                if (strcmp(mod->strings[s].id, in->src1.name) == 0) {
+                                    target_addr = str_vaddrs[s];
+                                    break;
+                                }
+                            }
+                            buf_emit_byte(&code, 0x48); buf_emit_byte(&code, 0xB8); /* movabs rax, imm64 */
+                            buf_emit_i64(&code, (int64_t)target_addr);
+                        } else {
+                            emit_load_operand(&code, &frame, &in->src1, 0);
+                        }
+                        buf_emit_byte(&code, 0xE8); /* call _print_str */
+                        add_code_fixup(&ctx, "_print_str", code.size);
+                        buf_emit_i32(&code, 0);
+                        break;
+                    case OP_ASSERT_EQ:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        emit_load_operand(&code, &frame, &in->src2, 1);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x39, 0xC8}, 3); /* cmp rax, rcx */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x74, 0x0C}, 2);        /* je +12 (.pass) */
+                        buf_emit_bytes(&code, (const uint8_t[]){0xB8, 0x3C, 0x00, 0x00, 0x00}, 5); /* mov eax, 60 */
+                        buf_emit_bytes(&code, (const uint8_t[]){0xBF, 0x01, 0x00, 0x00, 0x00}, 5); /* mov edi, 1 */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x05}, 2);        /* syscall */
+                        break;
+                    case OP_BR:
+                        buf_emit_byte(&code, 0xE9); /* jmp rel32 */
+                        add_code_fixup(&ctx, in->target_then, code.size);
+                        buf_emit_i32(&code, 0);
+                        break;
+                    case OP_BR_COND:
+                        emit_load_operand(&code, &frame, &in->src1, 0);
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x85, 0xC0}, 3); /* test rax, rax */
+                        buf_emit_bytes(&code, (const uint8_t[]){0x0F, 0x85}, 2);        /* jnz rel32 (then) */
+                        add_code_fixup(&ctx, in->target_then, code.size);
+                        buf_emit_i32(&code, 0);
+                        buf_emit_byte(&code, 0xE9);                                     /* jmp rel32 (else) */
+                        add_code_fixup(&ctx, in->target_else, code.size);
+                        buf_emit_i32(&code, 0);
+                        break;
+                    case OP_RET:
+                        if (in->src1.name[0] || in->src1.is_const) {
+                            emit_load_operand(&code, &frame, &in->src1, 0);
+                        } else {
+                            buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x31, 0xC0}, 3); /* xor rax, rax */
+                        }
+                        buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, 0xEC, 0x5D, 0xC3}, 5); /* mov rsp, rbp; pop rbp; ret */
+                        break;
+                    case OP_CALL: {
+                        for (int a = 0; a < in->num_args && a < 4; a++) {
+                            emit_load_operand(&code, &frame, &in->args[a], 0);
+                            const uint8_t to_reg[] = {0xC7, 0xC6, 0xC2, 0xC1}; /* rdi, rsi, rdx, rcx */
+                            buf_emit_bytes(&code, (const uint8_t[]){0x48, 0x89, to_reg[a]}, 3);
+                        }
+                        char fn_call_label[128];
+                        snprintf(fn_call_label, sizeof(fn_call_label), "@%s", in->target_then);
+                        buf_emit_byte(&code, 0xE8); /* call rel32 */
+                        add_code_fixup(&ctx, fn_call_label, code.size);
+                        buf_emit_i32(&code, 0);
+                        if (in->dst.name[0]) {
+                            emit_store_result(&code, &frame, &in->dst, 0);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+
+    /* 5. Link relative branches and subroutine calls */
+    link_code(&code, &ctx);
+
+    /* 6. Layout and assemble standalone Linux ELF64 binary */
+    const size_t TEXT_OFF = 0x1000;
+    const size_t DATA_OFF = 0x8000;
+    size_t total_file_size = DATA_OFF + ((data.size + 4095) & ~4095UL);
+    if (total_file_size < 0x9000) total_file_size = 0x9000;
+
+    uint8_t *elf_buf = calloc(1, total_file_size);
+
+    /* ELF64 Header at offset 0x0000 */
+    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf_buf;
+    ehdr->e_ident[0] = 0x7F;
+    ehdr->e_ident[1] = 'E';
+    ehdr->e_ident[2] = 'L';
+    ehdr->e_ident[3] = 'F';
+    ehdr->e_ident[4] = 2;    /* 64-bit architecture */
+    ehdr->e_ident[5] = 1;    /* Little-endian */
+    ehdr->e_ident[6] = 1;    /* ELF Version 1 */
+    ehdr->e_ident[7] = 0;    /* System V ABI */
+    ehdr->e_type = 2;        /* ET_EXEC */
+    ehdr->e_machine = 0x3E;  /* EM_X86_64 */
+    ehdr->e_version = 1;
+    ehdr->e_entry = TEXT_VADDR; /* Entry point: _start at 0x401000 */
+    ehdr->e_phoff = 64;      /* Program header directly follows ELF header */
+    ehdr->e_shoff = 0;
+    ehdr->e_flags = 0;
+    ehdr->e_ehsize = sizeof(Elf64_Ehdr);
+    ehdr->e_phentsize = sizeof(Elf64_Phdr);
+    ehdr->e_phnum = 1;       /* Single unified PT_LOAD segment covering code, data & BSS */
+    ehdr->e_shentsize = 0;
+    ehdr->e_shnum = 0;
+    ehdr->e_shstrndx = 0;
+
+    /* Program Header (PT_LOAD) at offset 0x0040 */
+    Elf64_Phdr *phdr = (Elf64_Phdr *)(elf_buf + 64);
+    phdr->p_type = 1;        /* PT_LOAD */
+    phdr->p_flags = 7;       /* PF_R | PF_W | PF_X */
+    phdr->p_offset = 0;
+    phdr->p_vaddr = ELF_BASE;
+    phdr->p_paddr = ELF_BASE;
+    phdr->p_filesz = total_file_size;
+    phdr->p_memsz = total_file_size + 0x1000000; /* Extra 16MB for BSS heap arena */
+    phdr->p_align = 0x1000;  /* 4KB page alignment */
+
+    /* Copy Code to 0x1000 and Data to 0x8000 */
+    memcpy(elf_buf + TEXT_OFF, code.data, code.size);
+    memcpy(elf_buf + DATA_OFF, data.data, data.size);
+
+    FILE *fout = fopen(out_path, "wb");
+    if (!fout) {
+        fprintf(stderr, "[-] Error: cannot open output binary: %s\n", out_path);
+        free(elf_buf);
+        free(code.data);
+        free(data.data);
+        return 1;
+    }
+
+    fwrite(elf_buf, 1, total_file_size, fout);
+    fclose(fout);
+
+    chmod(out_path, 0755);
+
+    printf("[+] Standalone Native Linux ELF64 generated: %s (%zu bytes, entry 0x%llx)\n",
+           out_path, total_file_size, (unsigned long long)TEXT_VADDR);
+
+    free(elf_buf);
+    free(code.data);
+    free(data.data);
+    return 0;
+}
+
+/* ==============================================================================
  *                     MAIN DRIVER & CLI
  * ============================================================================== */
 
 int main(int argc, char **argv) {
     int run_opt = 0;
     int run_vm = 0;
+    int emit_elf = 0;
     const char *src_file = NULL;
     const char *out_file = NULL;
 
@@ -1504,6 +2132,8 @@ int main(int argc, char **argv) {
             run_opt = 1;
         } else if (strcmp(argv[i], "--run") == 0) {
             run_vm = 1;
+        } else if (strcmp(argv[i], "--emit-elf") == 0 || strcmp(argv[i], "--compile") == 0) {
+            emit_elf = 1;
         } else if (!src_file) {
             src_file = argv[i];
         } else if (!out_file) {
@@ -1513,14 +2143,16 @@ int main(int argc, char **argv) {
 
     if (!src_file) {
         fprintf(stderr, "==================================================================\n");
-        fprintf(stderr, "   NEXUS v8 Intermediate Representation (N-IR) Builder & VM Engine\n");
+        fprintf(stderr, "   NEXUS v8 Intermediate Representation (N-IR) & Native ELF Codegen\n");
         fprintf(stderr, "==================================================================\n");
-        fprintf(stderr, "Usage: %s [--opt|-O2] [--run] <source.nex> [output.nir]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--opt|-O2] [--run|--emit-elf] <source.nex> [output.nir|app.elf]\n", argv[0]);
         fprintf(stderr, "Commands:\n");
-        fprintf(stderr, "  %s <file.nex> [out.nir]           Emit raw lowered N-IR\n", argv[0]);
-        fprintf(stderr, "  %s --opt <file.nex> [out.nir]     Run optimization passes (CFG, Fold, DCE, HYDRON)\n", argv[0]);
-        fprintf(stderr, "  %s --run <file.nex>               Execute source directly via N-IR VM\n", argv[0]);
-        fprintf(stderr, "  %s --opt --run <file.nex>         Execute optimized N-IR directly via VM\n", argv[0]);
+        fprintf(stderr, "  %s <file.nex> [out.nir]                  Emit raw lowered N-IR\n", argv[0]);
+        fprintf(stderr, "  %s --opt <file.nex> [out.nir]            Run 4 optimization passes\n", argv[0]);
+        fprintf(stderr, "  %s --run <file.nex>                      Execute source directly via N-IR VM\n", argv[0]);
+        fprintf(stderr, "  %s --opt --run <file.nex>                Execute optimized N-IR via VM\n", argv[0]);
+        fprintf(stderr, "  %s --emit-elf <file.nex> [app.elf]       Compile to standalone native Linux ELF64 binary\n", argv[0]);
+        fprintf(stderr, "  %s --opt --emit-elf <file.nex> [app.elf] Compile optimized N-IR to native ELF64 binary\n", argv[0]);
         return 1;
     }
 
@@ -1535,6 +2167,15 @@ int main(int argc, char **argv) {
         ir_pass_algebraic_simplification(mod);
         ir_pass_hydron_loop_solver(mod);
         ir_pass_dead_code_elimination(mod);
+    }
+
+    if (emit_elf) {
+        char default_elf[256];
+        if (!out_file) {
+            snprintf(default_elf, sizeof(default_elf), "app.elf");
+            out_file = default_elf;
+        }
+        return emit_linux_elf64(mod, out_file);
     }
 
     if (run_vm) {

@@ -24,17 +24,22 @@
 ---
 
 ## 2. Recent Milestones Completed
-- **NEXUS v8 Compiler Architecture (Milestone 1 — N-IR Pipeline)**:
+- **NEXUS v8 Compiler Architecture (Milestone 1 — N-IR Pipeline & Native ELF64 Codegen)**:
   - **Typed CFG Intermediate Representation**: Implemented 3-address basic-block-structured IR with typed virtual registers, memory slots (`alloc`, `load64`, `store64`), and explicit CFG terminators (`br`, `br_cond`, `ret`, `call`).
   - **4-Pass N-IR Optimizer Pipeline (`tools/nexir.c`)**:
     - *Pass 1*: Constant Folding & Local Propagation within basic blocks.
     - *Pass 2*: Algebraic Simplification & Strength Reduction ($x + 0 \to x$, $x \times 1 \to x$, $x \times 2^k \to x \ll k$, $x \oplus x \to 0$).
     - *Pass 3*: Dead Code Elimination (DCE) on unreachable CFG blocks and unused pure virtual registers.
     - *Pass 4*: HYDRON IR Recurrence & Attractor Solver — lifts HYDRON from textual preprocessor into CFG loop analysis, solving $O(N)$ recurrence loops in $O(1)$ directly in the IR.
+  - **Native x86-64 Machine Codegen & Standalone Linux ELF64 Emitter (`./nexus ir --emit-elf`)**:
+    - Translates typed N-IR directly into executable x86-64 machine code instructions.
+    - Two-pass label resolution and relocation linker for relative jumps and function calls.
+    - Direct Linux kernel syscall dispatch (0% libc, 0% external runtime) for integer printing (`sys_write`), string output, dynamic heap allocation, and clean process exit (`sys_exit`).
+    - Packages output into standalone, self-contained Linux ELF64 executable binaries (`0x401000` entry point).
   - **Direct Execution N-IR VM**: Integrated 64-bit virtual machine in `bin/nexir` executing raw and optimized N-IR directly with 16MB simulated physical memory.
-  - **5-Way Differential Testing Oracle (`tools/nexfuzz.py`)**: Randomized differential fuzzer verifying bit-for-bit semantic identity across:
-    $$\text{Reference Interpreter} \equiv \text{Native AOT (-O0)} \equiv \text{Native AOT (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)}$$
-  - **Toolchain Driver**: Added `./nexus ir [flags] <file.nex>` supporting `--opt`, `--run`, and IR dumping.
+  - **7-Way Differential Testing Oracle (`tools/nexfuzz.py`)**: Randomized differential fuzzer verifying bit-for-bit semantic identity across:
+    $$\text{Reference Interpreter} \equiv \text{nexc (-O0)} \equiv \text{nexc (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)} \equiv \text{N-IR ELF (-O0)} \equiv \text{N-IR ELF (--opt)}$$
+  - **Toolchain Driver**: Added `./nexus ir [flags] <file.nex>` supporting `--opt`, `--run`, `--emit-elf`, and IR dumping.
 - **The HYDRON Acceleration Engine (Phase 4 — v7.3)**:
   - **Recurrence Attractor Solver & Closed-Form Derivation**: Reduces 50,000,000 logical iterations of non-linear recurrence loops to **0.44–0.53 ms**, achieving a ~120x–140x reduction in computation time compared to brute-force CPU loop execution.
   - **Turbine 7: Scalar Evolution (SCEV) Recurrence Attractor Solver**: Solves non-linear division recurrence update loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$). The engine runs an initial 64-iteration preamble to converge error exponential decay ($e_{n+1} = \lfloor e_n / 2 \rfloor$), verifies fixed-point manifold invariance ($acc == i - 2$) via a dynamic runtime guard, and applies closed-form resolution with fallback safety.

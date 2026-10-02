@@ -15,10 +15,16 @@ Initial delivery of the NEXUS v8 Compiler Architecture, addressing the #1 recomm
 - **Pass 3: Dead Code Elimination (DCE)**: Prunes unreachable CFG basic blocks and unused pure temporary registers.
 - **Pass 4: HYDRON IR Recurrence & Attractor Solver**: Evaluates CFG loop headers and recurrence equations, replacing $O(N)$ recurrence loops with $O(1)$ closed-form attractor solutions directly in the IR.
 
-### 3. Direct Execution N-IR VM & 5-Way Differential Oracle
+### 3. Native x86-64 Machine Codegen & Linux ELF64 Emitter
+- **Direct AOT Machine Code Emission (`./nexus ir --emit-elf`, `./nexus ir --opt --emit-elf`)**: Translates typed N-IR directly into executable x86-64 machine instructions.
+- **Two-Pass Relocation Linker**: Resolves relative jumps (`jmp`, `jnz`, `jz`) and function calls (`rel32`).
+- **Direct Linux Syscall Dispatch (0% libc)**: Built-in routines for decimal integer formatting (`_print_i64`), string output (`_print_str`), dynamic heap allocation (`alloc`), and clean process termination (`sys_exit`).
+- **Executable ELF Packaging**: Assembles standalone, self-contained Linux ELF64 binaries with 0% libc and direct kernel execution.
+
+### 4. Direct Execution N-IR VM & 7-Way Differential Oracle
 - **Built-in 64-bit Virtual Machine (`./nexus ir --run`, `./nexus ir --opt --run`)**: Simulates 16MB physical memory and 64-bit registers, verifying N-IR semantics without external linkers.
-- **5-Way Differential Fuzzing Oracle (`./nexus fuzz`, `tools/nexfuzz.py`)**: Verifies 100% bit-for-bit semantic equivalence:
-  $$\text{Reference Interpreter} \equiv \text{Native AOT (-O0)} \equiv \text{Native AOT (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)}$$
+- **7-Way Differential Fuzzing Oracle (`./nexus fuzz`, `tools/nexfuzz.py`)**: Verifies 100% bit-for-bit semantic equivalence:
+  $$\text{Reference Interpreter} \equiv \text{nexc (-O0)} \equiv \text{nexc (HYDRON)} \equiv \text{N-IR VM (-O0)} \equiv \text{N-IR VM (--opt)} \equiv \text{N-IR ELF (-O0)} \equiv \text{N-IR ELF (--opt)}$$
 
 ## v7.3 — The HYDRON Acceleration Engine (Phase 4: Recurrence Attractor Solver & Dual-Benchmark Methodology)
 
