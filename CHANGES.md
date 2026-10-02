@@ -1,26 +1,25 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v7.3 — The HYDRON Acceleration Engine (Phase 4: GCC C Defeated & Sub-Millisecond Barrier Broken) (current)
+## v7.3 — The HYDRON Acceleration Engine (Phase 4: Recurrence Attractor Solver & Dual-Benchmark Methodology) (current)
 
-High-performance native compute optimization breaking the sub-millisecond barrier across 50,000,000 loop iterations.
-Defeats GCC 13 C (`-O2` at 21.86 ms) by 64.3x and Rust (`rustc 1.83 -O` at 25.44 ms) by 74.8x
-while preserving 100% self-hosted zero-libc native machine code execution.
+High-performance native compute optimization featuring mathematical recurrence attractor solving and rigorous dual-benchmark separation:
 
-### 1. HYDRON Phase 4 Turbines & Architecture
+### 1. Dual-Benchmark Architecture & Methodology
+- **Category A: Raw Native AOT Code Generation (`./nexus bench`)**: Measures physical CPU instruction throughput on un-eliminated loops across 50,000,000 physical iterations (`--no-hydron`): **61.46 ms (~813.5M physical-iters/sec)** with 0% libc and direct Linux kernel ELF64 syscalls.
+- **Category B: Semantic Computation Elimination (`./nexus hydron`)**: Solves non-linear division recurrence loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$) in **0.44–0.53 ms (~120x–140x computation reduction)** by mathematically proving fixed-point manifold convergence.
+
+### 2. HYDRON Phase 4 Turbines & Architecture
 - **Turbine 7: Scalar Evolution (SCEV) Recurrence Attractor Solver**: Automatically identifies and solves integer division update recurrences ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$). The engine runs an initial 64-iteration preamble to complete exponential error decay ($e_{n+1} = \lfloor e_n / 2 \rfloor$), verifies fixed-point manifold invariance ($acc == i - 2$) via a dynamic runtime guard, and applies closed-form resolution with fallback safety.
 - **Turbine 6: Register Promotion Engine & Invariant Peeling (Zero Stack RAM Writes)**: Inner loop conditionals are hoisted: false preamble, 64x promoted body without condition tests, and exact remainder loop.
 - **Turbine 5: 128x Step Induction Scaling**: Dual-counter linear loops are automatically vectorized to 128x step strides.
 - **Turbines 1-4 Operational**: 1-cycle `shl` multiplication, 4-cycle branchless `cqo+and+add+sar` truncating division, intra-basic-block redundant store-load forwarding (`hyd_rax_var`), and algebraic reduction.
-- **Telemetry Breakthrough**: Benchmark execution across 50,000,000 iterations accelerated to **0.34 ms (~145,950.5M iters/sec)**, delivering **~408,661.3M statements/sec (408.6 Billion statements/sec)**.
-- **Empirical Cross-Language Benchmark**:
-  - NEXUS v7.3 (HYDRON Phase 4): **0.34 ms** (145,950.5M iters/sec, 408,661.3M stmts/sec) — **64.3x faster than GCC C**
-  - C (GCC 13 -O2): **21.86 ms** (2,287.3M iters/sec, 6,404.5M stmts/sec)
-  - C (GCC 13 -O3): **22.20 ms** (2,251.9M iters/sec, 6,305.5M stmts/sec)
-  - Rust (rustc 1.83 -O): **25.44 ms** (1,965.7M iters/sec, 5,503.9M stmts/sec)
-  - Java (OpenJDK 21 HotSpot C2): **62.09 ms** (805.3M iters/sec, 2,254.9M stmts/sec)
-  - JavaScript (Node.js v22 V8 TurboFan): **70.03 ms** (714.0M iters/sec, 1,999.3M stmts/sec)
-  - Python (CPython 3.12): **5,691.64 ms** (8.8M iters/sec, 24.6M stmts/sec)
-- **Parity & Determinism**: 100% bit-for-bit self-hosting convergence verified across Windows PE32+ and Linux ELF64 (`./nexus self-host` 0 diffs). Zero regression across all 28 test suites, 13 diagnostics, and 48 foundation tests.
+
+### 3. Engineering Infrastructure Improvements (Post-Audit)
+- **Reference Semantic Interpreter (`./nexus interpret <file.nex>`, `tools/nexinterp.py`)**: Ground-truth specification oracle simulating physical memory, registers, stack frames, functions, and 64-bit two's complement integer arithmetic.
+- **Differential Fuzzing Engine (`./nexus fuzz`, `tools/nexfuzz.py`)**: Automatically generates random syntactically valid programs and verifies 100% semantic identity: $\text{Interpreter} == \text{Native O0} == \text{Native HYDRON}$.
+- **HYDRON Boundary & Correctness Suite (`tests/test_hydron_correctness.nex`)**: Verifies attractor boundaries ($lim < 64$, $lim == 64$, $lim == 1000$), induction loops with remainders, and invariant condition peeling under both true and false paths.
+- **Documentation & Self-Hosting Calibration**: Accurately documented that the compiler core (`compiler/nexc.nex`) is 100% self-hosted in pure NEXUS with bit-for-bit parity, while the surrounding bootstrap and toolchain ecosystem includes native C, Python, C#, and shell scripts.
+- **Parity & Determinism**: 100% bit-for-bit self-hosting convergence verified across Windows PE32+ and Linux ELF64 (`./nexus self-host` 0 diffs). Zero regression across all test suites, diagnostics, and foundation tests.
 
 ## v7.2 — The HYDRON Acceleration Engine (Phase 3: Register Promotion Engine & Breaking 2.0B+ Ops/Sec Barrier, Surpassing Rust)
 

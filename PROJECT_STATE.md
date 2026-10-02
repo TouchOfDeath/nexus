@@ -1,8 +1,8 @@
 # NEXUS Project State & Memory Log
 
 > **Last Updated**: 2026-10-02  
-> **Current Version**: v7.3 — The HYDRON Acceleration Engine (Phase 4: GCC C Defeated, Sub-Millisecond Barrier Broken)  
-> **Compiler Architecture**: 100% Self-Hosted Pure NEXUS (`compiler/nexc.nex`), 0% libc, 0% runtime, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64.
+> **Current Version**: v7.3 — The HYDRON Acceleration Engine (Phase 4: Recurrence Attractor Solver & Dual-Benchmark Architecture)  
+> **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
 
@@ -16,16 +16,18 @@
   - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)
   - **Interactive Demos**: 3/3 passing
 - **Determinism**: Gen 2 == Gen 3 == Gen 4 bit-for-bit self-hosting parity verified (`./nexus self-host`).
-- **HYDRON Engine**: Phase 4 active (`./nexus hydron`: **~145.9B stmt-iters/sec, 0.34 ms on 50M iterations, ~408.6 Billion statements/sec**).
-- **Cross-Language Standing**: **DEFEATS GCC C 13 `-O2` (21.86 ms) by 64x**; **DEFEATS Rust (25.44 ms) by 75x**; **182x faster than Java HotSpot C2** (62.09 ms); **206x faster than Node.js V8** (70.03 ms); **16,614x faster than Python 3.12** (5,691.64 ms).
+- **Dual-Benchmark Architecture**:
+  - **Category A: Raw Native AOT Code Generation (`./nexus bench`)**: Measures physical CPU instruction throughput on un-eliminated loops across 50,000,000 physical iterations: **61.46 ms (~813.5M physical-iters/sec)** with 0% libc and direct Linux kernel syscalls.
+  - **Category B: Semantic Computation Elimination (`./nexus hydron`)**: Phase 4 SCEV Recurrence Attractor Solver analyzes non-linear recurrence loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$), executes ~64 convergence steps, verifies fixed-point manifold invariance ($acc == i - 2$) via runtime guard, and derives closed-form result in **0.44–0.53 ms (~120x–140x computation reduction)**.
+- **Scientific Methodology**: Accurately distinguishes raw CPU instruction execution from semantic computation elimination / superoptimization.
 
 ---
 
 ## 2. Recent Milestones Completed
 - **The HYDRON Acceleration Engine (Phase 4 — v7.3)**:
-  - **GCC C Defeated & Sub-Millisecond Barrier Broken**: Total benchmark execution plummeted from 24.03 ms to **0.34 ms**, elevating throughput to **145,950.5M iters/sec (145.9 Billion ops/sec)** and **408,661.3M statements/sec (408.6 Billion stmts/sec)**.
+  - **Recurrence Attractor Solver & Closed-Form Derivation**: Reduces 50,000,000 logical iterations of non-linear recurrence loops to **0.44–0.53 ms**, achieving a ~120x–140x reduction in computation time compared to brute-force CPU loop execution.
   - **Turbine 7: Scalar Evolution (SCEV) Recurrence Attractor Solver**: Solves non-linear division recurrence update loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$). The engine runs an initial 64-iteration preamble to converge error exponential decay ($e_{n+1} = \lfloor e_n / 2 \rfloor$), verifies fixed-point manifold invariance ($acc == i - 2$) via a dynamic runtime guard, and applies closed-form resolution with fallback safety.
-  - **Cross-Language Victory**: Outperforms GCC 13 `-O2` by 64.3x and Rust by 74.8x on identical algorithmic workloads.
+  - **Dual-Category Benchmarking**: Separates un-eliminated native code generation benchmarking (`./nexus bench`, `--no-hydron`) from semantic computation elimination (`./nexus hydron`).
   - **Exact Mathematics**: Benchmark output verified bit-for-bit against reference (`19999998`, `20000000`, `19999798`).
   - **Parity & Determinism**: 100% bit-for-bit self-hosting convergence across Windows PE32+ and Linux ELF64 (`./nexus self-host` 0 diffs). Zero regression across all 28 test suites, 13 diagnostics, and 48 foundation tests.
 - **The HYDRON Acceleration Engine (Phase 3 — v7.2)**:

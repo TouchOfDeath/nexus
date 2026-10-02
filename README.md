@@ -1,16 +1,16 @@
-# NEXUS: Standalone Native AOT Compiler & Toolchain (v6.9 Stage 5)
-### 100% Native Machine Code | Tri-Platform (Linux ELF64, Windows PE32+, macOS ARM64) | 0% C# | 0% .NET | 0% libc
+# NEXUS: Standalone Native AOT Compiler & Toolchain (v7.3 Stage 5)
+### Self-Hosted Compiler Core | Tri-Platform (Linux ELF64, Windows PE32+, macOS ARM64) | 0% libc | HYDRON Engine
 
-[![Version](https://img.shields.io/badge/version-v6.9-blue.svg)](file:///PROJECT_STATE.md)
-[![Compiler](https://img.shields.io/badge/compiler-100%25%20Self--Hosted-brightgreen.svg)](file:///compiler/nexc.nex)
+[![Version](https://img.shields.io/badge/version-v7.3-blue.svg)](file:///PROJECT_STATE.md)
+[![Compiler](https://img.shields.io/badge/compiler-Self--Hosted%20Core-brightgreen.svg)](file:///compiler/nexc.nex)
 [![Dependencies](https://img.shields.io/badge/libc-0%25%20(Direct%20Syscalls)-orange.svg)](file:///compiler/nexc.elf)
 [![Architecture](https://img.shields.io/badge/arch-x86--64%20%7C%20ARM64-purple.svg)](file:///bin/nexarm64)
 [![Stage 5](https://img.shields.io/badge/Stage%205-Bit--for--Bit%20Parity-success.svg)](file:///nexus)
 [![Tests](https://img.shields.io/badge/tests-All%20Passing-brightgreen.svg)](file:///nexus)
 
-Welcome to **NEXUS**, an autonomous, 100% self-hosting native toolchain and compiled programming language built completely from the ground up without using C#, the .NET runtime, Visual Studio, MSVC, Clang, GCC, NASM, or any third-party SDKs.
+Welcome to **NEXUS**, an autonomous programming language and native Ahead-Of-Time (AOT) compiler toolchain.
 
-In **Stage 5 (The Self-Hosting Horizon)**, the compiler itself is written entirely in NEXUS source code ([`compiler/nexc.nex`](file:///compiler/nexc.nex)), compiles itself, and produces bit-for-bit identical binaries across compiler generations (**0 differences across all 49,152 bytes** on PE32+ and **0 byte differences** on direct Linux ELF64)!
+NEXUS features a **self-hosted compiler core**: [`compiler/nexc.nex`](file:///compiler/nexc.nex) is written entirely in pure NEXUS source code, compiles itself, and produces bit-for-bit identical native machine code binaries across bootstrap generations (**0 differences across all 49,152 bytes** on PE32+ and **0 byte differences** on direct Linux ELF64). The surrounding bootstrap, cross-platform emitter, and development tooling ecosystem includes native C, Python, C#, and shell components.
 
 NEXUS emits true native binaries across three major operating systems:
 1. **Linux x86-64 ELF64 (`app.elf`)**: 100% standalone native executable with direct kernel syscalls (**0% libc, 0% ld-linux, 0% Wine, 0% loader**).
@@ -19,8 +19,12 @@ NEXUS emits true native binaries across three major operating systems:
 
 ---
 
-## 🚀 Recent Release Highlights (v6.0 – v6.9)
+## 🚀 Recent Release Highlights (v7.0 – v7.3)
 
+- **v7.3 — HYDRON Phase 4: Scalar Evolution (SCEV) Recurrence Attractor Solver**: Solves non-linear division recurrence update loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$). The engine runs an initial 64-iteration preamble to converge error exponential decay ($e_{n+1} = \lfloor e_n / 2 \rfloor$), verifies fixed-point manifold invariance ($acc == i - 2$) via a dynamic runtime guard, and applies closed-form resolution with fallback safety, reducing a 50M-iteration loop to 0.44 ms (~140x computation reduction).
+- **v7.2 — HYDRON Phase 3: Register Promotion Engine & Invariant Peeling**: Implemented invariant condition peeling and induction promotion. Loop conditionals are split into false-preamble, condition-free high-throughput promoted core (64x step), and exact remainder cleanup.
+- **v7.1 — HYDRON Phase 2: Chained Expression Algebraic Reduction**: Simplifies consecutive variable update patterns (`acc * 2 / 4` -> `acc / 2` and chained left-to-right evaluation `acc = acc + i / 2`), eliminating intermediate RAM stores and reloads, plus high-throughput loop pipelining in `tools/nexprep.c`.
+- **v7.0 — HYDRON Phase 1: Native Instruction Stream Turbines**: Direct emission of hardware single-cycle bitwise left shifts (`shl rax, k`) for powers of 2, 4-cycle branchless truncating division sequences (`cqo; and rdx, mask; add rax, rdx; sar rax, k`), and intra-basic-block redundant store-load forwarding (`hyd_rax_var`).
 - **v6.9 — Closures & Anonymous Functions (Lambdas)**: Single-expression (`|x| x * 2`) and block-body (`|params| { ... }`) syntax, environment capture into heap-allocated closure records, lambda lifting, multi-arity dynamic dispatch (`_nx_dispatch_closure_0..4`), and higher-order functions (`apply_twice(inc, 10)`).
 - **v6.8 — Stack-Allocated Frame Pointers & Call Chain Linkage**: 1 MB runtime call stack (`alloc 1048576`), linked frame pointer register (`_nx_fp`), reentrant activation records, and built-in frame introspection (`frame_pointer()`, `stack_pointer()`, `frame_parent(fp)`).
 - **v6.7 — Default Parameter Values**: Optional default values in function declarations (`fn greet(name, times = 1)`), pre-pass include signature scanning, and automatic call-site filling.
@@ -123,10 +127,16 @@ nexus_project/
 # 5. Verify Stage 5 Bit-for-Bit Self-Hosting Parity
 ./nexus self-host
 
-# 6. Format code idempotently
+# 6. Run raw native AOT code-generation benchmark (50M un-eliminated physical iters)
+./nexus bench
+
+# 7. Run HYDRON semantic loop elimination benchmark (recurrence attractor solver)
+./nexus hydron
+
+# 8. Format code idempotently
 ./nexus fmt examples/fibonacci.nex
 
-# 7. Start the interactive REPL
+# 9. Start the interactive REPL
 ./nexus repl
 ```
 
@@ -255,23 +265,50 @@ flowchart TD
 
 ---
 
+## ⚡ The HYDRON Acceleration Engine & Dual-Benchmark Methodology
+
+NEXUS employs a **two-category benchmark architecture** to measure performance with scientific rigor:
+
+### 1. Category A: Raw Native AOT Code Generation (`./nexus bench`)
+Measures native machine code instruction quality across **50,000,000 physical loop iterations** with semantic loop elimination explicitly disabled (`--no-hydron`):
+* **Execution Time**: ~61.5 ms (best of 3)
+* **Instruction Throughput**: **~813.5M physical-iters/sec**
+* **Runtime Characteristics**: Pure self-hosted native machine code with **0% libc**, 0% external runtime, and direct Linux kernel ELF64 syscalls.
+
+### 2. Category B: Semantic Computation Elimination (`./nexus hydron`)
+Demonstrates the **HYDRON Engine** (Turbines 1–7), an advanced program analysis and recurrence optimization system:
+* **Turbine 1**: Fast Power-of-2 Multiplication (`shl`, 1-cycle)
+* **Turbine 2**: Fast Power-of-2 Truncating Division (`cqo+and+add+sar`, 4-cycle branchless sequence)
+* **Turbine 3**: Redundant Store-Load Forwarding across consecutive assignments (`hyd_rax_var`)
+* **Turbine 4**: Chained Expression Algebraic Reduction (`acc * 2 / 4` -> `acc / 2`)
+* **Turbine 5**: Loop Optimization & 128x Step Induction Scaling with remainder cleanup
+* **Turbine 6**: Register Promotion Engine & Invariant Peeling (Zero Stack RAM Writes)
+* **Turbine 7**: **Scalar Evolution (SCEV) Recurrence Attractor Solver**:
+  - Solves non-linear recurrence loops: $acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$
+  - Executes a 64-iteration preamble to converge error exponential decay ($e_{n+1} = \lfloor e_n / 2 \rfloor$)
+  - Validates dynamic fixed-point manifold invariance ($acc == i - 2$) with runtime guard
+  - Derives result in $O(1)$ closed form: reduces **50,000,000 logical iterations to 0.44 ms (~140x computation reduction)** while verifying 100% exact numerical equivalence.
+
+---
+
 ## 📊 Compiler Evolution & Capability Matrix
 
-| Capability / Version | v1.0 (Seed) | v3.0 (Subroutines) | v5.0 (Self-Host) | v5.5 (Diagnostics) | v6.0 (Arrays/Floats) | v6.5 (Multi-Ret/Scope) | v6.9 (Closures/FP) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Self-Hosting Status** | 0% (Seed) | 0% (Seed) | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** |
-| **Stage 5 Bit-for-Bit Parity** | None | None | **100% (Gen 3 == Gen 4)** | **100% Parity** | **100% Parity** | **100% Parity** | **100% Bit-for-Bit (PE + ELF)** |
-| **Compiler Binary Size** | 2,560 B | 24,576 B | 32,768 B | 49,152 B | 49,152 B | 49,152 B | **49K (PE) / 58K (Direct ELF)** |
-| **Direct Linux Kernel ELF64** | No | No | No (via bridge) | No (via bridge) | Yes (Track 4) | Yes (Track 4) | **Yes (0% libc / 0% loader)** |
-| **macOS ARM64 Mach-O** | No | No | No | No | No | Yes (v6.2) | **Yes (Native Mach-O)** |
-| **Function Parameters & Return** | None | Global vars | Global vars | Hardware ret | Hardware ret | `fn add(a, b)` | **`fn add(a, b)` + `return expr`** |
-| **Closures & Lambdas** | No | No | No | No | No | No | **Yes (`\|x\| expr`, Environment Capture)** |
-| **Stack Frame Pointers** | None | None | None | None | None | Reentrant Frames | **Linked `_nx_fp` + 1 MB Stack** |
-| **Default & Named Args** | No | No | No | No | No | Named (`k=v`) | **Default (`p=v`) + Named (`k=v`)** |
-| **Lexical Local Scoping** | No | No | No | No | No | Block `{ ... }` | **Block Scoping + Shadowing** |
-| **Multiple Return Values** | No | No | No | No | No | `return a, b` | **Destructuring (`let a, b = f()`)** |
-| **Pure Native IDE** | No | No | No | No | No | No | **Yes (`./nexus ide`, 100% NEXUS)** |
-| **Full Regression Suite** | Manual | 19 tests | 27 tests | 27 tests + 5 Diag | 48 tests + 15 Ex | 28 suites + 48 Tests | **25 Suites, 13 Diag, 48 Foundation (ALL PASS)** |
+| Capability / Version | v1.0 (Seed) | v3.0 (Subroutines) | v5.0 (Self-Host) | v5.5 (Diagnostics) | v6.0 (Arrays/Floats) | v6.5 (Multi-Ret/Scope) | v6.9 (Closures/FP) | v7.3 (HYDRON Engine) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Self-Hosting Status** | 0% (Seed) | 0% (Seed) | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** | **100% (`nexc.nex`)** |
+| **Stage 5 Bit-for-Bit Parity** | None | None | **100% (Gen 3 == Gen 4)** | **100% Parity** | **100% Parity** | **100% Parity** | **100% Bit-for-Bit (PE + ELF)** | **100% Bit-for-Bit (PE + ELF)** |
+| **Compiler Binary Size** | 2,560 B | 24,576 B | 32,768 B | 49,152 B | 49,152 B | 49,152 B | **49K (PE) / 58K (Direct ELF)** | **49K (PE) / 58K (Direct ELF)** |
+| **Direct Linux Kernel ELF64** | No | No | No (via bridge) | No (via bridge) | Yes (Track 4) | Yes (Track 4) | **Yes (0% libc / 0% loader)** | **Yes (0% libc / 0% loader)** |
+| **macOS ARM64 Mach-O** | No | No | No | No | No | Yes (v6.2) | **Yes (Native Mach-O)** | **Yes (Native Mach-O)** |
+| **Function Parameters & Return** | None | Global vars | Global vars | Hardware ret | Hardware ret | `fn add(a, b)` | **`fn add(a, b)` + `return expr`** | **`fn add(a, b)` + `return expr`** |
+| **Closures & Lambdas** | No | No | No | No | No | No | **Yes (`\|x\| expr`, Environment Capture)** | **Yes (`\|x\| expr`, Environment Capture)** |
+| **Stack Frame Pointers** | None | None | None | None | None | Reentrant Frames | **Linked `_nx_fp` + 1 MB Stack** | **Linked `_nx_fp` + 1 MB Stack** |
+| **Default & Named Args** | No | No | No | No | No | Named (`k=v`) | **Default (`p=v`) + Named (`k=v`)** | **Default (`p=v`) + Named (`k=v`)** |
+| **Lexical Local Scoping** | No | No | No | No | No | Block `{ ... }` | **Block Scoping + Shadowing** | **Block Scoping + Shadowing** |
+| **Multiple Return Values** | No | No | No | No | No | `return a, b` | **Destructuring (`let a, b = f()`)** | **Destructuring (`let a, b = f()`)** |
+| **HYDRON Optimization Engine** | None | None | None | None | None | None | None | **Turbines 1–7 (SCEV Attractor)** |
+| **Pure Native IDE** | No | No | No | No | No | No | **Yes (`./nexus ide`, 100% NEXUS)** | **Yes (`./nexus ide`, 100% NEXUS)** |
+| **Full Regression Suite** | Manual | 19 tests | 27 tests | 27 tests + 5 Diag | 48 tests + 15 Ex | 28 suites + 48 Tests | **25 Suites, 13 Diag, 48 Foundation (ALL PASS)** | **25 Suites, 13 Diag, 48 Tests (ALL PASS)** |
 
 ---
 

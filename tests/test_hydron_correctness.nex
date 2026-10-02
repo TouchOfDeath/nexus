@@ -1,0 +1,91 @@
+; ==============================================================================
+;   NEXUS HYDRON Engine Correctness & Boundary Verification Suite
+;   Tests mathematical attractor convergence, guards, limits, and fallback paths.
+; ==============================================================================
+
+print "--- TEST: HYDRON Recurrence Boundary (lim < 64) ---"
+let i1 = 0
+let acc1 = 12345
+while i1 < 50 {
+    let acc1 = acc1 + i1
+    let acc1 = acc1 * 2
+    let acc1 = acc1 / 4
+    let i1 = i1 + 1
+}
+; Expected: unoptimized loop at 50 iterations gives 48
+print acc1
+assert_eq acc1, 48
+
+print "--- TEST: HYDRON Recurrence Exact Boundary (lim == 64) ---"
+let i2 = 0
+let acc2 = 12345
+while i2 < 64 {
+    let acc2 = acc2 + i2
+    let acc2 = acc2 * 2
+    let acc2 = acc2 / 4
+    let i2 = i2 + 1
+}
+; Expected: 64 - 2 = 62
+print acc2
+assert_eq acc2, 62
+
+print "--- TEST: HYDRON Recurrence (lim == 1000) ---"
+let i3 = 0
+let acc3 = 500
+while i3 < 1000 {
+    let acc3 = acc3 + i3
+    let acc3 = acc3 * 2
+    let acc3 = acc3 / 4
+    let i3 = i3 + 1
+}
+; Expected: 1000 - 2 = 998
+print acc3
+assert_eq acc3, 998
+
+print "--- TEST: HYDRON Induction Loop with Remainder (lim == 300) ---"
+let j1 = 0
+let sum1 = 0
+while j1 < 300 {
+    let sum1 = sum1 + 1
+    let j1 = j1 + 1
+}
+print sum1
+assert_eq sum1, 300
+
+print "--- TEST: HYDRON Induction Loop Sub-128 (lim == 77) ---"
+let j2 = 0
+let sum2 = 0
+while j2 < 77 {
+    let sum2 = sum2 + 1
+    let j2 = j2 + 1
+}
+print sum2
+assert_eq sum2, 77
+
+print "--- TEST: HYDRON Invariant Peeling (lim == 250, thr == 100) ---"
+let k1 = 0
+let hits1 = 0
+while k1 < 250 {
+    if k1 > 100 {
+        let hits1 = hits1 + 2
+    }
+    let k1 = k1 + 1
+}
+; For k in 101..249: exactly 149 iterations * 2 = 298
+print hits1
+assert_eq hits1, 298
+
+print "--- TEST: HYDRON Invariant Peeling Untriggered (lim == 50, thr == 100) ---"
+let k2 = 0
+let hits2 = 0
+while k2 < 50 {
+    if k2 > 100 {
+        let hits2 = hits2 + 2
+    }
+    let k2 = k2 + 1
+}
+; Never exceeds 100, hits2 remains 0
+print hits2
+assert_eq hits2, 0
+
+print "=== ALL HYDRON CORRECTNESS TESTS PASSED ==="

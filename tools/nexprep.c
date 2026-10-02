@@ -4955,8 +4955,14 @@ static int is_while_header(const char *line, char *var, int64_t *limit) {
     return 1;
 }
 
+static int hydron_opt_enabled = 1;
+
 static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t lim,
                                    char **body, int nbody, FILE *out) {
+    if (!hydron_opt_enabled) return 0;
+    const char *dis = getenv("NEXUS_DISABLE_HYDRON");
+    if (dis && strcmp(dis, "0") != 0) return 0;
+
     char *valid[64];
     int nvalid = 0;
     for (int i = 0; i < nbody; i++) {
@@ -5172,18 +5178,27 @@ static void process_file(const char *path, FILE *out) {
 int main(int argc, char **argv) {
     const char *out_path = NULL;
     int argi = 1;
-    if (argi < argc && !strcmp(argv[argi], "--list-deps")) {
-        list_deps_mode = 1;
-        argi++;
-        if (argi + 1 < argc) {
-            deps_out = fopen(argv[argi + 1], "w");
-            if (!deps_out) die("Cannot write", argv[argi + 1]);
+    while (argi < argc) {
+        if (!strcmp(argv[argi], "--list-deps")) {
+            list_deps_mode = 1;
+            argi++;
+            if (argi < argc && argv[argi][0] != '-') {
+                deps_out = fopen(argv[argi], "w");
+                if (!deps_out) die("Cannot write", argv[argi]);
+                argi++;
+            }
+        } else if (!strcmp(argv[argi], "--no-hydron") || !strcmp(argv[argi], "-O0")) {
+            hydron_opt_enabled = 0;
+            argi++;
+        } else {
+            break;
         }
     }
-    if (argi >= argc || (argc - argi) > (list_deps_mode ? 2 : 2)) {
+    if (argi >= argc || (argc - argi) > 2) {
         fprintf(stderr, "NEXUS Source Preprocessor v3 (string-safe)\n");
-        fprintf(stderr, "Usage: %s [--list-deps] <source.nex> [output.nex]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--list-deps] [--no-hydron|-O0] <source.nex> [output.nex]\n", argv[0]);
         fprintf(stderr, "  --list-deps <src> [outfile]  print canonical dependency paths\n");
+        fprintf(stderr, "  --no-hydron | -O0            disable HYDRON loop optimization passes\n");
         fprintf(stderr, "  Assertion macros: assert_eq <A>, <B> | assert_ne <A>, <B>\n");
         return 1;
     }
