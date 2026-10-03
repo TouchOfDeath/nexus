@@ -1,0 +1,150 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: vec.nex
+#          Dynamic Growable Array (Vec<T>) for 64-bit integers
+# ==============================================================================
+#
+# A Vec is a heap-allocated, dynamically resizable array of 64-bit signed
+# integers. It uses geometric growth (doubling) for amortized O(1) append.
+#
+# Memory Layout (stored in a 24-byte struct on the heap):
+#   offset 0:  data_ptr   - pointer to the element array (qword array)
+#   offset 8:  length     - current number of elements
+#   offset 16: capacity   - allocated slots in data_ptr
+#
+# The element array uses store64/load64 with scaled indexing:
+#   element i is at [data_ptr + i * 8]
+#
+# CALLING CONVENTION:
+#   nx_i0 = vec handle (pointer to the 24-byte Vec struct)
+#   nx_i1 = element value (for push) or index (for get/set)
+#   nx_i2 = element value (for set)
+#   nx_r0 = result (for get, pop, len, cap)
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_new : allocates a new Vec with initial capacity 4
+#   nx_r0 = Vec handle
+# ------------------------------------------------------------------------------
+fn nx_vec_new {
+    let s0 = alloc 24
+    let s1 = alloc 32
+    store64 [s0 + 0] s1
+    store64 [s0 + 8] 0
+    store64 [s0 + 16] 4
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_grow : ensure Vec nx_i0 can hold at least nx_i1 elements
+#   Doubles capacity until >= nx_i1, then reallocates and copies
+# ------------------------------------------------------------------------------
+fn nx_vec_grow {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = load64 [s0 + 16]
+    while s2 < s1 {
+        let s2 = s2 * 2
+    }
+    let s3 = load64 [s0 + 16]
+    if s2 != s3 {
+        let s4 = alloc s2 * 8
+        let s5 = load64 [s0 + 0]
+        let s6 = load64 [s0 + 8]
+        let s7 = 0
+        while s7 < s6 {
+            let s8 = load64 [s5 + s7 * 8]
+            store64 [s4 + s7 * 8] s8
+            let s7 = s7 + 1
+        }
+        store64 [s0 + 0] s4
+        store64 [s0 + 16] s2
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_push : append value nx_i1 to Vec nx_i0 (with auto-growth)
+# ------------------------------------------------------------------------------
+fn nx_vec_push {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = load64 [s0 + 8]
+    let s3 = load64 [s0 + 16]
+    if s2 >= s3 {
+        let nx_i0 = s0
+        let nx_i1 = s3 + 1
+        call nx_vec_grow
+        let s2 = load64 [s0 + 8]
+        let s3 = load64 [s0 + 16]
+    }
+    let s4 = load64 [s0 + 0]
+    store64 [s4 + s2 * 8] s1
+    let s2 = s2 + 1
+    store64 [s0 + 8] s2
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_get : nx_r0 = element at index nx_i1 in Vec nx_i0
+# ------------------------------------------------------------------------------
+fn nx_vec_get {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = load64 [s0 + 8]
+    let nx_r0 = 0
+    if s1 >= 0 {
+        if s1 < s2 {
+            let s3 = load64 [s0 + 0]
+            let nx_r0 = load64 [s3 + s1 * 8]
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_set : set element at index nx_i1 to value nx_i2 in Vec nx_i0
+# ------------------------------------------------------------------------------
+fn nx_vec_set {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = load64 [s0 + 8]
+    if s1 >= 0 {
+        if s1 < s3 {
+            let s4 = load64 [s0 + 0]
+            store64 [s4 + s1 * 8] s2
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_len : nx_r0 = number of elements in Vec nx_i0
+# ------------------------------------------------------------------------------
+fn nx_vec_len {
+    let nx_r0 = load64 [nx_i0 + 8]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_cap : nx_r0 = capacity of Vec nx_i0
+# ------------------------------------------------------------------------------
+fn nx_vec_cap {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_pop : nx_r0 = last element (and remove it), 0 if empty
+# ------------------------------------------------------------------------------
+fn nx_vec_pop {
+    let s0 = nx_i0
+    let s1 = load64 [s0 + 8]
+    let nx_r0 = 0
+    if s1 > 0 {
+        let s1 = s1 - 1
+        let s2 = load64 [s0 + 0]
+        let nx_r0 = load64 [s2 + s1 * 8]
+        store64 [s0 + 8] s1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_vec_clear : set length to 0 (does not free memory)
+# ------------------------------------------------------------------------------
+fn nx_vec_clear {
+    store64 [nx_i0 + 8] 0
+}

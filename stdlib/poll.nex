@@ -1,0 +1,241 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: poll.nex
+#       Non-Blocking Asynchronous Event Polling (sys_epoll / sys_poll)
+# ==============================================================================
+#
+# This module provides thin wrappers around Linux kernel poll(2) and
+# epoll(7) syscalls, allowing NEXUS programs to perform efficient,
+# non-blocking I/O multiplexing on file descriptors.
+#
+# IMPORTANT: Linux syscall numbers are architecture-specific. The values
+# below are for x86-64. When targeting aarch64, use the asm-generic
+# numbers (pipe2=59, epoll_create1=20, etc.) — the user is expected to
+# define nx_PLATFORM_ARCH before include if cross-compiling.
+#
+# x86-64 syscall numbers (from <asm/unistd_64.h>):
+#   sys_poll        = 7
+#   sys_epoll_create = 213  (deprecated, use epoll_create1)
+#   sys_epoll_create1 = 291
+#   sys_epoll_ctl   = 233
+#   sys_epoll_wait  = 232   (legacy 4-arg version)
+#   sys_epoll_pwait = 281   (5-arg with sigmask)
+#   sys_ppoll       = 271   (sigmask-aware poll)
+#   sys_pipe2       = 293
+#   sys_eventfd2    = 290
+#   sys_timerfd_create = 283
+#   sys_timerfd_settime = 286
+#   sys_signalfd4   = 289
+#   sys_close       = 3
+#   sys_read        = 0
+#   sys_write       = 1
+#
+# Structure layouts (from <linux/eventpoll.h> and <poll.h>):
+#
+#   struct pollfd { int fd; short events; short revents; };   // 8 bytes
+#     events/revents bit flags:
+#       POLLIN  = 0x0001  (data available to read)
+#       POLLOUT = 0x0004  (writing won't block)
+#       POLLERR = 0x0008  (error condition)
+#       POLLHUP = 0x0010  (hung up)
+#       POLLNVAL = 0x0020 (invalid fd)
+#
+#   struct epoll_event { uint32 events; epoll_data_t data; }; // 12 bytes used
+#     EPOLLIN  = 0x001
+#     EPOLLOUT = 0x004
+#     EPOLLERR = 0x008
+#     EPOLLHUP = 0x010
+#     EPOLLET  = 1 << 31 (edge-triggered)
+#     EPOLL_CTL_ADD = 1
+#     EPOLL_CTL_DEL = 2
+#     EPOLL_CTL_MOD = 3
+#
+# CALLING CONVENTION:
+#   nx_i0..nx_i2 = arguments
+#   nx_r0 = return value (typically fd, count, or 0/-1 status)
+#   s0..s7 = scratch (clobbered)
+
+# ----------------------------------------------------------------------------
+# Constants (defined as top-level vars for clarity and reuse)
+# ----------------------------------------------------------------------------
+let nx_POLLIN = 1
+let nx_POLLOUT = 4
+let nx_POLLERR = 8
+let nx_POLLHUP = 16
+let nx_POLLNVAL = 32
+
+let nx_EPOLLIN = 1
+let nx_EPOLLOUT = 4
+let nx_EPOLLERR = 8
+let nx_EPOLLHUP = 16
+let nx_EPOLLET = 2147483648
+
+let nx_EPOLL_CTL_ADD = 1
+let nx_EPOLL_CTL_DEL = 2
+let nx_EPOLL_CTL_MOD = 3
+
+# x86-64 syscall numbers
+let nx_SYS_poll = 7
+let nx_SYS_epoll_create1 = 291
+let nx_SYS_epoll_ctl = 233
+let nx_SYS_epoll_wait = 232
+let nx_SYS_epoll_pwait = 281
+let nx_SYS_ppoll = 271
+let nx_SYS_pipe2 = 293
+let nx_SYS_eventfd2 = 290
+let nx_SYS_close = 3
+let nx_SYS_read = 0
+let nx_SYS_write = 1
+
+# Shared scratch buffer for pollfd array (max 16 fds)
+let nx_poll_buf = alloc 128
+
+# ----------------------------------------------------------------------------
+# fn nx_poll : poll on a single fd for events (synchronous, blocking with timeout)
+#   Inputs:  nx_i0 = fd, nx_i1 = events mask, nx_i2 = timeout_ms (-1 = infinite)
+#   Output:  nx_r0 = revents (0 if timeout, bit flags if ready)
+# ----------------------------------------------------------------------------
+fn nx_poll {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    # Build pollfd: int fd (4 bytes), short events (2 bytes), short revents(2)
+    store [nx_poll_buf + 0] s0
+    store [nx_poll_buf + 4] s1
+    store [nx_poll_buf + 6] 0
+    # sys_poll(struct pollfd*, nfds, timeout_ms) — 3 args
+    let nx_r0 = syscall3 nx_SYS_poll, nx_poll_buf, 1, s2
+    # On success, read revents from pollfd[0] (offset 6, 2 bytes low)
+    if nx_r0 > 0 {
+        let nx_r0 = load [nx_poll_buf + 6]
+    }
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_poll_nb : non-blocking poll (timeout = 0)
+#   Inputs:  nx_i0 = fd, nx_i1 = events mask
+#   Output:  nx_r0 = revents (0 if not ready, bit flags if ready)
+# ----------------------------------------------------------------------------
+fn nx_poll_nb {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    store [nx_poll_buf + 0] s0
+    store [nx_poll_buf + 4] s1
+    store [nx_poll_buf + 6] 0
+    let nx_r0 = syscall3 nx_SYS_poll, nx_poll_buf, 1, 0
+    if nx_r0 > 0 {
+        let nx_r0 = load [nx_poll_buf + 6]
+    }
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_epoll_create : create an epoll instance
+#   Output:  nx_r0 = epoll fd (or -1 on error)
+# ----------------------------------------------------------------------------
+fn nx_epoll_create {
+    let nx_r0 = syscall1 nx_SYS_epoll_create1, 0
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_epoll_ctl : add/modify/del fd from epoll interest list
+#   Inputs:  nx_i0 = epoll_fd, nx_i1 = op (ADD=1, DEL=2, MOD=3)
+#            nx_i2 = target fd
+#   Output:  nx_r0 = 0 on success, -1 on error
+# ----------------------------------------------------------------------------
+fn nx_epoll_ctl {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = alloc 16
+    store32 [s3 + 0] nx_EPOLLIN
+    store [s3 + 4] 0
+    store [s3 + 5] 0
+    store [s3 + 6] 0
+    store [s3 + 7] 0
+    store64 [s3 + 8] s2
+    let nx_r0 = syscall4 nx_SYS_epoll_ctl, s0, s1, s2, s3
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_epoll_ctl_full : add/modify/del fd with custom events mask
+#   Inputs:  nx_i0 = epoll_fd, nx_i1 = op, nx_i2 = target fd
+#            nx_ev_mask = events mask (set before call)
+#   Output:  nx_r0 = 0 on success, -1 on error
+# ----------------------------------------------------------------------------
+fn nx_epoll_ctl_full {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let s3 = alloc 16
+    store32 [s3 + 0] nx_ev_mask
+    store [s3 + 4] 0
+    store [s3 + 5] 0
+    store [s3 + 6] 0
+    store [s3 + 7] 0
+    store64 [s3 + 8] s2
+    let nx_r0 = syscall4 nx_SYS_epoll_ctl, s0, s1, s2, s3
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_epoll_wait : wait for events on the epoll instance
+#   Inputs:  nx_i0 = epoll_fd, nx_i1 = max_events, nx_i2 = timeout_ms
+#   Output:  nx_r0 = number of events ready (0 on timeout, -1 on error)
+#            Events are written to nx_epoll_events buffer (caller-allocated)
+# ----------------------------------------------------------------------------
+let nx_epoll_events = alloc 256
+
+fn nx_epoll_wait {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = nx_i2
+    let nx_r0 = syscall4 nx_SYS_epoll_wait, s0, nx_epoll_events, s1, s2
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_epoll_event_fd : nx_r0 = fd from epoll_event at index nx_i1
+# ----------------------------------------------------------------------------
+fn nx_epoll_event_fd {
+    let s0 = nx_i1 * 12
+    let s0 = nx_epoll_events + s0 + 8
+    let nx_r0 = load64 [s0 + 0]
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_epoll_event_events : nx_r0 = events mask from epoll_event at index
+# ----------------------------------------------------------------------------
+fn nx_epoll_event_events {
+    let s0 = nx_i1 * 12
+    let s0 = nx_epoll_events + s0
+    let nx_r0 = load [s0 + 0]
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_eventfd : create an eventfd (for signaling between processes)
+#   Inputs:  nx_i0 = initial count
+#   Output:  nx_r0 = eventfd (or -1 on error)
+# ----------------------------------------------------------------------------
+fn nx_eventfd {
+    let nx_r0 = syscall2 nx_SYS_eventfd2, nx_i0, 0
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_pipe : create a pipe (read_fd + write_fd)
+#   Output:  nx_pipe_read = read end, nx_pipe_write = write end
+# ----------------------------------------------------------------------------
+let nx_pipe_buf = alloc 8
+let nx_pipe_read = 0
+let nx_pipe_write = 0
+
+fn nx_pipe {
+    let nx_r0 = syscall2 nx_SYS_pipe2, nx_pipe_buf, 0
+    let nx_pipe_read = load [nx_pipe_buf + 0]
+    let nx_pipe_write = load [nx_pipe_buf + 4]
+}
+
+# ----------------------------------------------------------------------------
+# fn nx_close : close a file descriptor
+#   Inputs:  nx_i0 = fd
+#   Output:  nx_r0 = 0 on success, -1 on error
+# ----------------------------------------------------------------------------
+fn nx_close {
+    let nx_r0 = syscall1 nx_SYS_close, nx_i0
+}

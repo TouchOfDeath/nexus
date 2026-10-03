@@ -1,0 +1,77 @@
+# ==============================================================================
+#   NEXUS TEST: Hexadecimal & Binary Number Literals
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# 1. Hexadecimal literals (lowercase)
+let nx_i0 = 0xff
+assert_eq nx_i0, 255
+
+let nx_i0 = 0xdead
+assert_eq nx_i0, 57005
+
+let nx_i0 = 0x0
+assert_eq nx_i0, 0
+
+let nx_i0 = 0x10
+assert_eq nx_i0, 16
+
+let nx_i0 = 0xffffffff
+# Note: values > 0x7fffffff are sign-extended as negative 32-bit
+# 0xffffffff = -1 in signed 32-bit, so we compare with -1
+assert_eq nx_i0, 0 - 1
+
+# 2. Hexadecimal literals (uppercase - normalized by preprocessor)
+let nx_i0 = 0xFF
+assert_eq nx_i0, 255
+
+let nx_i0 = 0xDEAD
+assert_eq nx_i0, 57005
+
+let nx_i0 = 0xABCDEF
+assert_eq nx_i0, 11259375
+
+# 3. Mixed case
+let nx_i0 = 0xAbCdEf
+assert_eq nx_i0, 11259375
+
+# 4. Binary literals
+let nx_i0 = 0b0
+assert_eq nx_i0, 0
+
+let nx_i0 = 0b1
+assert_eq nx_i0, 1
+
+let nx_i0 = 0b1010
+assert_eq nx_i0, 10
+
+let nx_i0 = 0b11111111
+assert_eq nx_i0, 255
+
+let nx_i0 = 0b100000000
+assert_eq nx_i0, 256
+
+# 5. Hex in expressions
+let a = 0x10
+let b = 0x20
+let c = a + b
+assert_eq c, 48
+
+# 6. Binary in expressions
+let d = 0b1100
+let e = 0b1010
+let f = d + e
+assert_eq f, 22
+
+# 7. Mixed hex and binary
+let g = 0xff + 0b1
+assert_eq g, 256
+
+# 8. Hex in memory operations
+let buf = alloc 16
+store64 [buf + 0] 0xdeadbeef
+let nx_i0 = load64 [buf + 0]
+# store64 uses mov eax (zero-extend), so 0xdeadbeef = 3735928559
+assert_eq nx_i0, 3735928559
+
+call nx_assert_summary

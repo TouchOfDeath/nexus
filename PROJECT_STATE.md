@@ -1,7 +1,7 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-10-02  
-> **Current Version**: v7.3 — The HYDRON Acceleration Engine (Phase 4: Recurrence Attractor Solver & Dual-Benchmark Architecture)  
+> **Last Updated**: 2026-10-03  
+> **Current Version**: v8.1 — The 10 Priority Capabilities & Systems Engine  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
@@ -15,7 +15,14 @@
   - **Stdlib Assertions**: 94/94 passing
   - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)
   - **Interactive Demos**: 3/3 passing
-- **Determinism**: Gen 2 == Gen 3 == Gen 4 bit-for-bit self-hosting parity verified (`./nexus self-host`).
+  - **New Standard Suites**: 
+    - `tests/test_bitwise_ops.nex`: 20/20 PASS (native bitwise `&`, `|`, `^`, `~`, `<<`, `>>`)
+    - `tests/test_hex_binary.nex`: 18/18 PASS (native `0x...` hex and `0b...` binary literals)
+    - `tests/test_vec.nex`: 11/11 PASS (dynamic growable heap vector)
+    - `tests/test_hashmap.nex`: 13/13 PASS (string-keyed linear probing hash map)
+    - `tests/test_poll_events.nex`: 13/13 PASS (non-blocking `poll`/`epoll` async event loop)
+    - `tests/test_hydron_overflow.nex`: 21/21 PASS (64-bit integer overflow & boundary safety)
+- **Determinism**: Gen 1 == Gen 2 == Gen 3 bit-for-bit self-hosting parity verified via `./nexus bootstrap`.
 - **Dual-Benchmark Architecture**:
   - **Category A: Raw Native AOT Code Generation (`./nexus bench`)**: Measures physical CPU instruction throughput on un-eliminated loops across 50,000,000 physical iterations: **61.46 ms (~813.5M physical-iters/sec)** with 0% libc and direct Linux kernel syscalls.
   - **Category B: Semantic Computation Elimination (`./nexus hydron`)**: Phase 4 SCEV Recurrence Attractor Solver analyzes non-linear recurrence loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$), executes ~64 convergence steps, verifies fixed-point manifold invariance ($acc == i - 2$) via runtime guard, and derives closed-form result in **0.44–0.53 ms (~120x–140x computation reduction)**.
@@ -24,6 +31,16 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **NEXUS v8.1 / Milestone 2 — 10 Priority Systems & Language Capabilities**:
+  - **Hex & Binary Literals (`0x...`, `0b...`)**: Upgraded `compiler/nexc.nex` `parse_uint` to parse base-16 and base-2 literals natively, eliminating decimal manual translations for bitmasks and X11 graphics.
+  - **Native Bitwise Operators & Compound Updates**: Added `&`, `|`, `^`, `~`, `<<`, `>>` and compound operators `&=`, `|=`, `^=`, `<<=`, `>>=` in `stdlib/bitwise.nex` and `tools/nexprep.c`.
+  - **Dynamic Array (`Vec`)**: Added heap-backed growable array in `stdlib/vec.nex` with amortized O(1) capacity doubling (`vec_push`, `vec_pop`, `vec_get`, `vec_set`, `vec_free`).
+  - **Associative Hash Map (`HashMap`)**: Implemented linear probing hash map in `stdlib/hashmap.nex` with string hashing, dynamic slot storage, and O(1) lookups.
+  - **Non-Blocking Asynchronous Event Loop (`poll`/`epoll`)**: Direct Linux kernel syscall wrappers (`sys_poll`, `sys_epoll_create1`, `sys_epoll_ctl`, `sys_epoll_wait`) in `stdlib/poll.nex` enabling responsive UI event loops.
+  - **N-IR ARM64 Machine Codegen**: Added standalone Linux aarch64 ELF64 (`--emit-aarch64-elf`) and macOS Apple Silicon Mach-O (`--emit-aarch64-macho`) emitters to `tools/nexir.c`.
+  - **Automated Delta Debugger / Test Reducer**: Built `tools/nexdelta.py` (`./nexus delta <failing.nex>`) to automatically minimize failing differential fuzzer test cases down to minimal reproducers.
+  - **HYDRON 64-bit Overflow & Boundary Suite**: Verified that recurrence attractor transformations adhere to machine modulo $2^{64}$ limits across `INT64_MAX`, negative loop strides, and division boundaries (`tests/test_hydron_overflow.nex`).
+  - **Official Deterministic 3-Stage Bootstrap**: Created `tools/nexbootstrap.py` and top-level `./nexus bootstrap` driver proving Gen 1 == Gen 2 == Gen 3 bit-for-bit self-hosting convergence.
 - **NEXUS v8 Compiler Architecture (Milestone 1 — N-IR Pipeline & Native ELF64 Codegen)**:
   - **Typed CFG Intermediate Representation**: Implemented 3-address basic-block-structured IR with typed virtual registers, memory slots (`alloc`, `load64`, `store64`), and explicit CFG terminators (`br`, `br_cond`, `ret`, `call`).
   - **4-Pass N-IR Optimizer Pipeline (`tools/nexir.c`)**:

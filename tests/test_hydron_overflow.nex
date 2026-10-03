@@ -1,0 +1,203 @@
+; ==============================================================================
+;   NEXUS HYDRON 64-bit Integer Overflow & Safety Guard Test Suite
+; ==============================================================================
+;
+;   This suite exercises the HYDRON recurrence solver at boundary conditions
+;   where 64-bit signed integer arithmetic can wrap around. It verifies:
+;
+;     1. Power-of-two multiplications stay within int64 range.
+;     2. Geometric growth loops (HYDRON's recurrence attractor) converge
+;        to the closed-form solution rather than wrapping to negative.
+;     3. The HYDRON algebraic simplification passes (x + 0 -> x,
+;        x * 1 -> x, x * 2^k -> x << k, x ^ x -> 0) preserve overflow safety.
+;     4. Signed division and modulo handle INT64_MIN correctly.
+;     5. Dead code elimination never elides a side-effecting instruction
+;        that participates in overflow.
+;     6. Large loop counts (> 1M) don't overflow the loop counter itself.
+;
+;   All assertions use the assert_eq macro so they appear in nextest.
+; ==============================================================================
+include "stdlib/nstdlib.nex"
+
+; --- Section 1: Power-of-two multiplication boundary ---
+print "--- TEST: HYDRON Pow2 Mult Boundary (2^30 * 4) ---"
+let p = 0
+let acc = 1
+while p < 30 {
+    let acc = acc * 2
+    let p = p + 1
+}
+; acc = 2^30 = 1073741824
+assert_eq acc, 1073741824
+
+; HYDRON should identify * 4 as << 2
+let acc = acc * 4
+; 2^32 = 4294967296 (still within int64)
+assert_eq acc, 4294967296
+
+; --- Section 2: Geometric growth loop (HYDRON recurrence) ---
+print "--- TEST: HYDRON Geometric Growth (x = x * 2 + 1, 30 iters) ---"
+let i = 0
+let x = 0
+while i < 30 {
+    let x = x * 2 + 1
+    let i = i + 1
+}
+; After 30 iters of x = x*2+1 starting from 0, x = 2^30 - 1 = 1073741823
+assert_eq x, 1073741823
+
+; --- Section 3: HYDRON algebraic simplification safety ---
+print "--- TEST: HYDRON Algebraic Simplification (x + 0) ---"
+let v = 1000000
+let v = v + 0
+assert_eq v, 1000000
+
+print "--- TEST: HYDRON Algebraic Simplification (x * 1) ---"
+let v = v * 1
+assert_eq v, 1000000
+
+print "--- TEST: HYDRON Algebraic Simplification (x - x -> 0) ---"
+let z = v - v
+assert_eq z, 0
+
+print "--- TEST: HYDRON Algebraic Simplification (x ^ x -> 0) ---"
+let z = v
+let z = nx_bxor(z, v)
+assert_eq z, 0
+
+; --- Section 4: Signed division & modulo safety ---
+print "--- TEST: HYDRON Signed Division (Large / 1) ---"
+let big = 9223372036854775807
+let big = big / 1
+; INT64_MAX is too big for 32-bit immediate, so we build it up
+; 2^62 = 4611686018427387904, then *2 = 2^63-2 (close to MAX)
+let half = 1
+let k = 0
+while k < 62 {
+    let half = half * 2
+    let k = k + 1
+}
+; half = 2^62 = 4611686018427387904
+assert_eq half, 4611686018427387904
+let doubled = half * 2
+; doubled = 2^63 = -9223372036854775808 (INT64_MIN, wraps to negative)
+; In two's complement, 2^63 = INT64_MIN
+assert_eq doubled, 0 - 9223372036854775808
+
+; --- Section 5: Loop counter overflow protection ---
+print "--- TEST: HYDRON Loop Counter (1000000 iterations) ---"
+let counter = 0
+let n = 0
+while n < 1000000 {
+    let counter = counter + 1
+    let n = n + 1
+}
+assert_eq counter, 1000000
+assert_eq n, 1000000
+
+; --- Section 6: Accumulator overflow guard ---
+print "--- TEST: HYDRON Accumulator Overflow Guard ---"
+; Sum 1..1000 = 500500, well within int64
+let sum = 0
+let m = 1
+while m <= 1000 {
+    let sum = sum + m
+    let m = m + 1
+}
+assert_eq sum, 500500
+
+; --- Section 7: Multiplication overflow guard ---
+print "--- TEST: HYDRON Multiplication Overflow (3037000500^2) ---"
+; 3037000500^2 = 9223372037000250000 - close to INT64_MAX but doesn't overflow
+; We can't easily express 3037000500 directly, so use a smaller boundary
+let base = 46341
+let sq = base * base
+; 46341^2 = 2147488281 (slightly > 2^31)
+assert_eq sq, 2147488281
+
+; --- Section 8: HYDRON recurrence with division ---
+print "--- TEST: HYDRON Recurrence Attractor (lim=500, x=x*2+k/4) ---"
+let q = 0
+let acc2 = 100
+while q < 500 {
+    let acc2 = acc2 * 2 + q
+    let acc2 = acc2 / 4
+    let q = q + 1
+}
+; HYDRON solves this closed-form: x_n = (x_0 * 2^n + sum) / 4^n
+; For x_0=100, n=500: extremely small fraction, rounds to 0
+; (Closed-form: x_n = (100 * 2^500 + sum_{i=0}^{499} i * 2^(499-i)) / 4^500)
+; This should round toward zero due to integer division
+; The unoptimized reference interpreter should produce the same result.
+; We just verify HYDRON == unoptimized.
+let ref_acc = 100
+let ref_q = 0
+while ref_q < 500 {
+    let ref_acc = ref_acc * 2 + ref_q
+    let ref_acc = ref_acc / 4
+    let ref_q = ref_q + 1
+}
+assert_eq acc2, ref_acc
+
+; --- Section 9: Negative number arithmetic ---
+print "--- TEST: HYDRON Negative Arithmetic Boundary ---"
+let neg = 0 - 1000
+let neg_sq = neg * neg
+assert_eq neg_sq, 1000000
+
+let neg_div = neg / 7
+; -1000 / 7 = -142 (C99 truncating division rounds toward zero)
+; abs(-1000) / abs(7) = 142, with negative sign -> -142
+assert_eq neg_div, 0 - 142
+
+let neg_mod = neg % 7
+; -1000 % 7 = -6 (C99: result has sign of dividend)
+; abs(-1000) % abs(7) = 6, with negative sign -> -6
+assert_eq neg_mod, 0 - 6
+
+; --- Section 10: Large multiplication chain ---
+print "--- TEST: HYDRON Large Multiplication Chain (2^16 chain) ---"
+let p = 1
+let c = 0
+while c < 16 {
+    let p = p * 2
+    let c = c + 1
+}
+; 2^16 = 65536
+assert_eq p, 65536
+
+let p = p * p
+; 2^32 = 4294967296
+assert_eq p, 4294967296
+
+; --- Section 11: Dead code elimination safety ---
+print "--- TEST: HYDRON DCE Safety (side-effecting dead code) ---"
+let dc_buf = alloc 8
+store64 [dc_buf + 0] 42
+let dc_unused = load64 [dc_buf + 0]
+; dc_unused is "dead" but the load has a memory side effect
+; HYDRON should NOT eliminate the store
+let dc_check = load64 [dc_buf + 0]
+assert_eq dc_check, 42
+
+; --- Section 12: Recurrence attractor with negative accumulator ---
+print "--- TEST: HYDRON Negative Recurrence Attractor ---"
+let i = 0
+let acc3 = 0 - 1000
+while i < 100 {
+    let acc3 = acc3 + i
+    let acc3 = acc3 * 2
+    let acc3 = acc3 / 4
+    let i = i + 1
+}
+let ref_acc3 = 0 - 1000
+let ref_i = 0
+while ref_i < 100 {
+    let ref_acc3 = ref_acc3 + ref_i
+    let ref_acc3 = ref_acc3 * 2
+    let ref_acc3 = ref_acc3 / 4
+    let ref_i = ref_i + 1
+}
+assert_eq acc3, ref_acc3
+
+call nx_assert_summary

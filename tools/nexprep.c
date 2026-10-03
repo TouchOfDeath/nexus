@@ -2772,11 +2772,17 @@ static const char *check_compound_op(const char *s, int *op_len, const char **ba
     if (!strncmp(s, "*=.", 3)) { *op_len = 3; *base_op = "*."; return "*=."; }
     if (!strncmp(s, "/=.", 3)) { *op_len = 3; *base_op = "/."; return "/=."; }
 
+    if (!strncmp(s, "<<=", 3)) { *op_len = 3; *base_op = "<<"; return "<<="; }
+    if (!strncmp(s, ">>=", 3)) { *op_len = 3; *base_op = ">>"; return ">>="; }
+
     if (!strncmp(s, "+=", 2))  { *op_len = 2; *base_op = "+"; return "+="; }
     if (!strncmp(s, "-=", 2))  { *op_len = 2; *base_op = "-"; return "-="; }
     if (!strncmp(s, "*=", 2))  { *op_len = 2; *base_op = "*"; return "*="; }
     if (!strncmp(s, "/=", 2))  { *op_len = 2; *base_op = "/"; return "/="; }
     if (!strncmp(s, "%=", 2))  { *op_len = 2; *base_op = "%"; return "%="; }
+    if (!strncmp(s, "&=", 2))  { *op_len = 2; *base_op = "&"; return "&="; }
+    if (!strncmp(s, "|=", 2))  { *op_len = 2; *base_op = "|"; return "|="; }
+    if (!strncmp(s, "^=", 2))  { *op_len = 2; *base_op = "^"; return "^="; }
 
     return NULL;
 }
@@ -2844,10 +2850,33 @@ static int desugar_compound(const char *in, char *out, size_t cap) {
 
     if (strchr(target, '.')) {
         /* struct member write: p.x = p.x + <rhs> */
-        snprintf(out, cap, "%s%s = %s %s %s\n", indent, target, target, base_op, rhs);
+        /* For bitwise compound ops, desugar to function call */
+        if (strcmp(base_op, "&") == 0)
+            snprintf(out, cap, "%s%s = nx_band(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, "|") == 0)
+            snprintf(out, cap, "%s%s = nx_bor(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, "^") == 0)
+            snprintf(out, cap, "%s%s = nx_bxor(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, "<<") == 0)
+            snprintf(out, cap, "%s%s = nx_shl(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, ">>") == 0)
+            snprintf(out, cap, "%s%s = nx_shr(%s, %s)\n", indent, target, target, rhs);
+        else
+            snprintf(out, cap, "%s%s = %s %s %s\n", indent, target, target, base_op, rhs);
     } else {
         /* standard let assignment */
-        snprintf(out, cap, "%slet %s = %s %s %s\n", indent, target, target, base_op, rhs);
+        if (strcmp(base_op, "&") == 0)
+            snprintf(out, cap, "%slet %s = nx_band(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, "|") == 0)
+            snprintf(out, cap, "%slet %s = nx_bor(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, "^") == 0)
+            snprintf(out, cap, "%slet %s = nx_bxor(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, "<<") == 0)
+            snprintf(out, cap, "%slet %s = nx_shl(%s, %s)\n", indent, target, target, rhs);
+        else if (strcmp(base_op, ">>") == 0)
+            snprintf(out, cap, "%slet %s = nx_shr(%s, %s)\n", indent, target, target, rhs);
+        else
+            snprintf(out, cap, "%slet %s = %s %s %s\n", indent, target, target, base_op, rhs);
     }
     return 1;
 }
@@ -2902,6 +2931,140 @@ static int desugar_for_compound(const char *in, char *out, size_t cap) {
     int prefix_len = (int)(c2 - clean) + 1;
     snprintf(out, cap, "%.*s %s = %s %s %s %s\n",
              prefix_len, clean, var, var, base_op, rhs, brace);
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
+ * uppercase hex literal normalization: 0xABCD -> 0xabcd
+ * The compiler's parse_uint only accepts lowercase a-f after 0x prefix.
+ * -------------------------------------------------------------------------- */
+static void normalize_hex_literals(char *line) {
+    char *p = line;
+    while (*p) {
+        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+            p += 2;
+            while (*p && ((*p >= '0' && *p <= '9') ||
+                          (*p >= 'a' && *p <= 'f') ||
+                          (*p >= 'A' && *p <= 'F'))) {
+                if (*p >= 'A' && *p <= 'F')
+                    *p = *p - 'A' + 'a';
+                p++;
+            }
+        } else {
+            p++;
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * bitwise binary operator desugaring:
+ *   Converts simple "LHS op RHS" patterns to function calls.
+ *   Handles: & -> nx_band, | -> nx_bor, ^ -> nx_bxor, << -> nx_shl, >> -> nx_shr
+ *   Only processes the FIRST occurrence in the RHS of an assignment.
+ *   For complex expressions, users should call nx_band() etc. directly.
+ * -------------------------------------------------------------------------- */
+static int desugar_bitwise_binop(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    /* Find '=' (but not '==', '!=', '<=', '>=', '+=', etc.) */
+    char *eq = NULL;
+    char *q = p;
+    while (*q) {
+        if (*q == '#' || *q == '\n') break;
+        if (*q == '=' && (q == p || (q[-1] != '=' && q[-1] != '!' &&
+                                     q[-1] != '<' && q[-1] != '>' &&
+                                     q[-1] != '+' && q[-1] != '-' &&
+                                     q[-1] != '*' && q[-1] != '/' &&
+                                     q[-1] != '%' && q[-1] != '&' &&
+                                     q[-1] != '|' && q[-1] != '^'))) {
+            eq = q;
+            break;
+        }
+        q++;
+    }
+    if (!eq) return 0;
+
+    /* RHS starts after '=' */
+    char *rhs = eq + 1;
+    while (*rhs == ' ' || *rhs == '\t') rhs++;
+
+    /* Find first bitwise operator in RHS (outside strings) */
+    char *op_pos = NULL;
+    int op_type = 0;  /* 1=&, 2=|, 3=^, 4=<<, 5=>> */
+    int in_string = 0;
+    char *r = rhs;
+    while (*r && *r != '#' && *r != '\n') {
+        if (*r == '"') in_string = !in_string;
+        if (!in_string) {
+            if (r[0] == '<' && r[1] == '<') { op_pos = r; op_type = 4; break; }
+            if (r[0] == '>' && r[1] == '>') { op_pos = r; op_type = 5; break; }
+            if (r[0] == '&' && r[1] != '&') { op_pos = r; op_type = 1; break; }
+            if (r[0] == '|' && r[1] != '|') { op_pos = r; op_type = 2; break; }
+            if (r[0] == '^') { op_pos = r; op_type = 3; break; }
+        }
+        r++;
+    }
+    if (!op_pos) return 0;
+
+    /* Find LHS end (trim trailing spaces before op) */
+    char *lhs_end = op_pos;
+    while (lhs_end > rhs && (lhs_end[-1] == ' ' || lhs_end[-1] == '\t'))
+        lhs_end--;
+
+    /* Find RHS end: next arithmetic operator (+, -, *, /, %) or end of line */
+    int op_len = (op_type >= 4) ? 2 : 1;
+    char *rhs_start = op_pos + op_len;
+    while (*rhs_start == ' ' || *rhs_start == '\t') rhs_start++;
+
+    char *rhs_end = rhs_start;
+    in_string = 0;
+    while (*rhs_end && *rhs_end != '#' && *rhs_end != '\n') {
+        if (*rhs_end == '"') in_string = !in_string;
+        if (!in_string) {
+            if (*rhs_end == '+' || *rhs_end == '-' ||
+                *rhs_end == '*' || *rhs_end == '/' || *rhs_end == '%')
+                break;
+        }
+        rhs_end++;
+    }
+    /* Trim trailing spaces from rhs_end */
+    while (rhs_end > rhs_start && (rhs_end[-1] == ' ' || rhs_end[-1] == '\t' ||
+                                    rhs_end[-1] == '\r'))
+        rhs_end--;
+
+    /* Build the function call */
+    const char *fn_name = NULL;
+    switch (op_type) {
+        case 1: fn_name = "nx_band"; break;
+        case 2: fn_name = "nx_bor"; break;
+        case 3: fn_name = "nx_bxor"; break;
+        case 4: fn_name = "nx_shl"; break;
+        case 5: fn_name = "nx_shr"; break;
+    }
+
+    /* Extract LHS and RHS of the bitwise op */
+    char lhs_expr[MAXLINE];
+    int lhs_len = (int)(lhs_end - rhs);
+    if (lhs_len <= 0) return 0;  /* no LHS */
+    snprintf(lhs_expr, sizeof lhs_expr, "%.*s", lhs_len, rhs);
+
+    char bit_rhs[MAXLINE];
+    int bit_rhs_len = (int)(rhs_end - rhs_start);
+    if (bit_rhs_len <= 0) return 0;  /* no RHS */
+    snprintf(bit_rhs, sizeof bit_rhs, "%.*s", bit_rhs_len, rhs_start);
+
+    /* Remainder after the bitwise RHS */
+    char remainder[MAXLINE];
+    snprintf(remainder, sizeof remainder, "%s", rhs_end);
+
+    /* Reconstruct: prefix + = nx_fn(lhs, rhs) + remainder */
+    int prefix_len = (int)(rhs - clean);
+    snprintf(out, cap, "%.*s= %s(%s, %s)%s\n",
+             prefix_len, clean, fn_name, lhs_expr, bit_rhs, remainder);
     return 1;
 }
 
@@ -4309,6 +4472,7 @@ static void emit_line(const char *raw, FILE *out) {
 
     char u_buf[MAXLINE];
     snprintf(u_buf, sizeof u_buf, "%s", raw);
+    normalize_hex_literals(u_buf);
     fold_unary_builtins(u_buf);
     fold_mem_offsets(u_buf);
 
@@ -4434,6 +4598,12 @@ static void emit_line(const char *raw, FILE *out) {
             if (!next) break;
             p = next + 1;
         }
+        return;
+    }
+
+    char bit_desugared[MAXLINE];
+    if (desugar_bitwise_binop(raw, bit_desugared, sizeof bit_desugared)) {
+        emit_line(bit_desugared, out);
         return;
     }
 

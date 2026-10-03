@@ -53,7 +53,13 @@ Usage:
   ./nexus hydron                  Run HYDRON semantic loop elimination benchmark (recurrence attractor)
   ./nexus interpret <file.nex>    Execute program using reference semantic oracle interpreter
   ./nexus fuzz [--iterations N]   Run 7-way differential fuzzer (Interp == nexc == N-IR VM == N-IR ELF)
-  ./nexus ir [flags] <file.nex>   N-IR v8 engine (--opt, --run, --emit-elf, [out.nir|app.elf])
+  ./nexus delta <failing.nex>     Reduce a failing test case via delta debugging
+                                  (--mode diverge|crash|hang; preserves failure)
+  ./nexus ir [flags] <file.nex>   N-IR v8 engine (--opt, --run, --emit-elf,
+                                  --emit-aarch64-elf, --emit-aarch64-macho, [out])
+  ./nexus bootstrap               Official 3-stage deterministic bootstrap verification
+                                  (Stage1 seed -> Gen1 -> Gen2 -> Gen3 fixed-point)
+                                  (--keep-stages, --from <seed.exe>, --no-promote)
   ./nexus self-host               Verify Stage 5 self-hosting bit-for-bit parity
   ./nexus dump [binary]           Dump binary headers, sections, and import tables
   ./nexus disasm [binary]         Disassemble native x86-64 machine code
@@ -79,6 +85,10 @@ Examples:
   ./nexus prep examples/multi_file_demo.nex
   ./nexus elf compiler/app.exe compiler/app.elf
   ./nexus disasm compiler/app.exe
+  ./nexus bootstrap --keep-stages
+  ./nexus delta failing_test.nex --mode diverge
+  ./nexus ir --emit-aarch64-elf examples/hello_world.nex hello.aarch64.elf
+  ./nexus ir --emit-aarch64-macho examples/hello_world.nex hello.macho
 EOF
     exit 1
 }
@@ -826,6 +836,14 @@ print(f"\033[0;32m[VERIFIED] 100% Fixed-Point Self-Hosting Convergence Verified.
     fuzz)
         shift
         python3 "$SCRIPT_DIR/tools/nexfuzz.py" "$@"
+        ;;
+    delta)
+        shift
+        python3 "$SCRIPT_DIR/tools/nexdelta.py" "$@"
+        ;;
+    bootstrap)
+        shift
+        python3 "$SCRIPT_DIR/tools/nexbootstrap.py" "$@"
         ;;
     ir)
         shift

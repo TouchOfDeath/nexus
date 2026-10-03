@@ -1,0 +1,96 @@
+# ==============================================================================
+#   NEXUS TEST: Dynamic Growable Array (Vec<T>)
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# 1. Create and push
+let nx_i0 = 0
+call nx_vec_new
+let v = nx_r0
+
+let nx_i0 = v
+let nx_i1 = 10
+call nx_vec_push
+
+let nx_i0 = v
+let nx_i1 = 20
+call nx_vec_push
+
+let nx_i0 = v
+let nx_i1 = 30
+call nx_vec_push
+
+# 2. Check length
+let nx_i0 = v
+call nx_vec_len
+assert_eq nx_r0, 3
+
+# 3. Get by index
+let nx_i0 = v
+let nx_i1 = 0
+call nx_vec_get
+assert_eq nx_r0, 10
+
+let nx_i0 = v
+let nx_i1 = 1
+call nx_vec_get
+assert_eq nx_r0, 20
+
+let nx_i0 = v
+let nx_i1 = 2
+call nx_vec_get
+assert_eq nx_r0, 30
+
+# 4. Set by index
+let nx_i0 = v
+let nx_i1 = 1
+let nx_i2 = 99
+call nx_vec_set
+
+let nx_i0 = v
+let nx_i1 = 1
+call nx_vec_get
+assert_eq nx_r0, 99
+
+# 5. Pop
+let nx_i0 = v
+call nx_vec_pop
+assert_eq nx_r0, 30
+
+let nx_i0 = v
+call nx_vec_len
+assert_eq nx_r0, 2
+
+# 6. Push many (test growth)
+let i = 0
+while i < 10 {
+    let nx_i0 = v
+    let nx_i1 = i * 100
+    call nx_vec_push
+    let i = i + 1
+}
+
+let nx_i0 = v
+call nx_vec_len
+assert_eq nx_r0, 12
+
+# 7. Verify values after growth
+let nx_i0 = v
+let nx_i1 = 0
+call nx_vec_get
+assert_eq nx_r0, 10
+
+let nx_i0 = v
+let nx_i1 = 11
+call nx_vec_get
+assert_eq nx_r0, 900
+
+# 8. Clear
+let nx_i0 = v
+call nx_vec_clear
+
+let nx_i0 = v
+call nx_vec_len
+assert_eq nx_r0, 0
+
+call nx_assert_summary

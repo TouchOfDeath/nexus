@@ -1,0 +1,134 @@
+# ==============================================================================
+#   NEXUS Example: Asynchronous Event Loop with epoll
+# ==============================================================================
+#   Demonstrates a complete non-blocking event loop using stdlib/poll.nex.
+#   This is the canonical pattern for async I/O multiplexing:
+#     1. Create pipe(s) or other fds
+#     2. Create epoll instance
+#     3. Register fds with epoll
+#     4. Loop: epoll_wait -> dispatch events -> repeat
+# ==============================================================================
+include "stdlib/poll.nex"
+
+print "=== NEXUS Async Event Loop Demo ==="
+print ""
+
+# --- Setup: two pipes, one epoll instance ---
+call nx_pipe
+let pipe_a_read = nx_pipe_read
+let pipe_a_write = nx_pipe_write
+
+call nx_pipe
+let pipe_b_read = nx_pipe_read
+let pipe_b_write = nx_pipe_write
+
+print "Pipe A: read="
+print pipe_a_read
+print "Pipe A: write="
+print pipe_a_write
+print "Pipe B: read="
+print pipe_b_read
+print "Pipe B: write="
+print pipe_b_write
+
+# Create epoll instance
+let nx_i0 = 0
+call nx_epoll_create
+let epfd = nx_r0
+print "epoll_fd:"
+print epfd
+
+# Register both pipe read ends with epoll
+let nx_i0 = epfd
+let nx_i1 = nx_EPOLL_CTL_ADD
+let nx_i2 = pipe_a_read
+call nx_epoll_ctl
+
+let nx_i0 = epfd
+let nx_i1 = nx_EPOLL_CTL_ADD
+let nx_i2 = pipe_b_read
+call nx_epoll_ctl
+
+# --- Pre-populate one pipe with data (simulating async producer) ---
+let msg_a = "from_pipe_a"
+let wr_a = syscall3 1, pipe_a_write, msg_a, 11
+print "wrote to pipe A:"
+print wr_a
+
+# --- Run the event loop for up to 5 iterations ---
+print ""
+print "--- Entering event loop ---"
+
+let loop_count = 0
+let max_iters = 5
+let events_processed = 0
+
+while loop_count < max_iters {
+    print "epoll_wait iteration:"
+    print loop_count
+
+    let nx_i0 = epfd
+    let nx_i1 = 4
+    let nx_i2 = 100
+    call nx_epoll_wait
+
+    print "  events_ready:"
+    print nx_r0
+
+    if nx_r0 == 0 {
+        print "  (timeout - no events)"
+    }
+
+    if nx_r0 > 0 {
+        let n_events = nx_r0
+        let ev_idx = 0
+        while ev_idx < n_events {
+            let nx_i1 = ev_idx
+            call nx_epoll_event_fd
+            let ready_fd = nx_r0
+
+            print "  event on fd:"
+            print ready_fd
+
+            # Read 16 bytes from the ready fd
+            let rbuf = alloc 32
+            let rd = syscall3 0, ready_fd, rbuf, 16
+            print "  bytes read:"
+            print rd
+
+            let events_processed = events_processed + 1
+            let ev_idx = ev_idx + 1
+        }
+    }
+
+    # On the second iteration, write to pipe_b to trigger another event
+    if loop_count == 1 {
+        let msg_b = "from_pipe_b"
+        let wr_b = syscall3 1, pipe_b_write, msg_b, 11
+        print "wrote to pipe B:"
+        print wr_b
+    }
+
+    let loop_count = loop_count + 1
+}
+
+print ""
+print "--- Event loop complete ---"
+print "Total events processed:"
+print events_processed
+
+# Cleanup
+let nx_i0 = epfd
+call nx_close
+let nx_i0 = pipe_a_read
+call nx_close
+let nx_i0 = pipe_a_write
+call nx_close
+let nx_i0 = pipe_b_read
+call nx_close
+let nx_i0 = pipe_b_write
+call nx_close
+
+print ""
+print "=== Async Event Loop Demo Complete ==="
+print 42

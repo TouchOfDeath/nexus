@@ -1,0 +1,176 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: hashmap.nex
+#       Associative Hash Map (HashMap<K, V>) for integer keys/values
+# ==============================================================================
+#
+# A HashMap is a heap-allocated, open-addressing hash table that maps 64-bit
+# integer keys to 64-bit integer values. It uses linear probing for collision
+# resolution.
+#
+# Memory Layout (stored in a 32-byte struct on the heap):
+#   offset 0:  keys_ptr    - pointer to the key array
+#   offset 8:  vals_ptr    - pointer to the value array
+#   offset 16: count        - number of entries stored
+#   offset 24: capacity     - number of slots in keys/vals arrays
+#
+# Empty slots have key = 0. Key 0 is valid but treated as "empty" sentinel.
+#
+# IMPORTANT: Functions that call other stdlib functions must use non-scratch
+# variables (not s0..s7) for data that must persist across the call.
+# We use _hm_* prefixed variables for this purpose.
+
+# ------------------------------------------------------------------------------
+# fn nx_hash_int : nx_r0 = hash of nx_i0 (always >= 0)
+# ------------------------------------------------------------------------------
+fn nx_hash_int {
+    let s0 = nx_i0
+    let s0 = s0 + 2654435761
+    if s0 < 0 {
+        let s0 = 0 - s0
+    }
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_new : allocates a new HashMap with initial capacity 16
+# ------------------------------------------------------------------------------
+fn nx_hashmap_new {
+    let s0 = alloc 32
+    let s1 = alloc 128
+    let s2 = alloc 128
+    store64 [s0 + 0] s1
+    store64 [s0 + 8] s2
+    store64 [s0 + 16] 0
+    store64 [s0 + 24] 16
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_get : nx_r0 = value for key nx_i1 in map nx_i0
+#   Returns 0 if key not found
+# ------------------------------------------------------------------------------
+fn nx_hashmap_get {
+    let _hm_map = nx_i0
+    let _hm_key = nx_i1
+    let _hm_cap = load64 [_hm_map + 24]
+    let nx_i0 = _hm_key
+    call nx_hash_int
+    let _hm_slot = nx_r0
+    let _hm_slot = _hm_slot % _hm_cap
+    let _hm_probe = 0
+    let nx_r0 = 0
+    let _hm_kp = load64 [_hm_map + 0]
+    let _hm_vp = load64 [_hm_map + 8]
+    while _hm_probe < _hm_cap {
+        let s0 = load64 [_hm_kp + _hm_slot * 8]
+        if s0 == _hm_key {
+            let nx_r0 = load64 [_hm_vp + _hm_slot * 8]
+            let _hm_probe = _hm_cap
+        }
+        if s0 == 0 {
+            let _hm_probe = _hm_cap
+        }
+        let _hm_slot = _hm_slot + 1
+        if _hm_slot >= _hm_cap {
+            let _hm_slot = 0
+        }
+        let _hm_probe = _hm_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_put : set key nx_i1 to value nx_i2 in map nx_i0
+# ------------------------------------------------------------------------------
+fn nx_hashmap_put {
+    let _hm_map = nx_i0
+    let _hm_key = nx_i1
+    let _hm_val = nx_i2
+    let _hm_cap = load64 [_hm_map + 24]
+    let nx_i0 = _hm_key
+    call nx_hash_int
+    let _hm_slot = nx_r0
+    let _hm_slot = _hm_slot % _hm_cap
+    let _hm_probe = 0
+    let _hm_kp = load64 [_hm_map + 0]
+    let _hm_vp = load64 [_hm_map + 8]
+    while _hm_probe < _hm_cap {
+        let s0 = load64 [_hm_kp + _hm_slot * 8]
+        if s0 == _hm_key {
+            store64 [_hm_vp + _hm_slot * 8] _hm_val
+            let _hm_probe = _hm_cap
+        }
+        if s0 == 0 {
+            store64 [_hm_kp + _hm_slot * 8] _hm_key
+            store64 [_hm_vp + _hm_slot * 8] _hm_val
+            let s1 = load64 [_hm_map + 16]
+            let s1 = s1 + 1
+            store64 [_hm_map + 16] s1
+            let _hm_probe = _hm_cap
+        }
+        let _hm_slot = _hm_slot + 1
+        if _hm_slot >= _hm_cap {
+            let _hm_slot = 0
+        }
+        let _hm_probe = _hm_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_contains : nx_r0 = 1 if key exists, else 0
+# ------------------------------------------------------------------------------
+fn nx_hashmap_contains {
+    let _hm_map = nx_i0
+    let _hm_key = nx_i1
+    let _hm_cap = load64 [_hm_map + 24]
+    let nx_i0 = _hm_key
+    call nx_hash_int
+    let _hm_slot = nx_r0
+    let _hm_slot = _hm_slot % _hm_cap
+    let _hm_probe = 0
+    let nx_r0 = 0
+    let _hm_kp = load64 [_hm_map + 0]
+    while _hm_probe < _hm_cap {
+        let s0 = load64 [_hm_kp + _hm_slot * 8]
+        if s0 == _hm_key {
+            let nx_r0 = 1
+            let _hm_probe = _hm_cap
+        }
+        if s0 == 0 {
+            let _hm_probe = _hm_cap
+        }
+        let _hm_slot = _hm_slot + 1
+        if _hm_slot >= _hm_cap {
+            let _hm_slot = 0
+        }
+        let _hm_probe = _hm_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_len : nx_r0 = number of entries
+# ------------------------------------------------------------------------------
+fn nx_hashmap_len {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_cap : nx_r0 = capacity
+# ------------------------------------------------------------------------------
+fn nx_hashmap_cap {
+    let nx_r0 = load64 [nx_i0 + 24]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_clear : remove all entries
+# ------------------------------------------------------------------------------
+fn nx_hashmap_clear {
+    let s0 = nx_i0
+    let s1 = load64 [s0 + 24]
+    let s2 = load64 [s0 + 0]
+    let s3 = 0
+    while s3 < s1 {
+        store64 [s2 + s3 * 8] 0
+        let s3 = s3 + 1
+    }
+    store64 [s0 + 16] 0
+}

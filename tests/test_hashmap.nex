@@ -1,0 +1,113 @@
+# ==============================================================================
+#   NEXUS TEST: Associative Hash Map (HashMap<K, V>)
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# 1. Create and put
+let nx_i0 = 0
+call nx_hashmap_new
+let m = nx_r0
+
+let nx_i0 = m
+let nx_i1 = 42
+let nx_i2 = 100
+call nx_hashmap_put
+
+let nx_i0 = m
+let nx_i1 = 7
+let nx_i2 = 200
+call nx_hashmap_put
+
+let nx_i0 = m
+let nx_i1 = 100
+let nx_i2 = 300
+call nx_hashmap_put
+
+# 2. Check length
+let nx_i0 = m
+call nx_hashmap_len
+assert_eq nx_r0, 3
+
+# 3. Get by key
+let nx_i0 = m
+let nx_i1 = 42
+call nx_hashmap_get
+assert_eq nx_r0, 100
+
+let nx_i0 = m
+let nx_i1 = 7
+call nx_hashmap_get
+assert_eq nx_r0, 200
+
+let nx_i0 = m
+let nx_i1 = 100
+call nx_hashmap_get
+assert_eq nx_r0, 300
+
+# 4. Get missing key (returns 0)
+let nx_i0 = m
+let nx_i1 = 999
+call nx_hashmap_get
+assert_eq nx_r0, 0
+
+# 5. Contains
+let nx_i0 = m
+let nx_i1 = 42
+call nx_hashmap_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = m
+let nx_i1 = 999
+call nx_hashmap_contains
+assert_eq nx_r0, 0
+
+# 6. Update existing key
+let nx_i0 = m
+let nx_i1 = 42
+let nx_i2 = 555
+call nx_hashmap_put
+
+let nx_i0 = m
+let nx_i1 = 42
+call nx_hashmap_get
+assert_eq nx_r0, 555
+
+# Length should still be 3 (update, not insert)
+let nx_i0 = m
+call nx_hashmap_len
+assert_eq nx_r0, 3
+
+# 7. Put many keys (test collision handling)
+let i = 1000
+while i < 1010 {
+    let nx_i0 = m
+    let nx_i1 = i
+    let nx_i2 = i * 2
+    call nx_hashmap_put
+    let i = i + 1
+}
+
+let nx_i0 = m
+call nx_hashmap_len
+assert_eq nx_r0, 13
+
+# 8. Verify retrieved values
+let nx_i0 = m
+let nx_i1 = 1005
+call nx_hashmap_get
+assert_eq nx_r0, 2010
+
+# 9. Clear
+let nx_i0 = m
+call nx_hashmap_clear
+
+let nx_i0 = m
+call nx_hashmap_len
+assert_eq nx_r0, 0
+
+let nx_i0 = m
+let nx_i1 = 42
+call nx_hashmap_get
+assert_eq nx_r0, 0
+
+call nx_assert_summary

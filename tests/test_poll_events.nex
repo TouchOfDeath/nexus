@@ -1,0 +1,135 @@
+# ==============================================================================
+#   NEXUS Standard Library Test: Non-Blocking Event Polling
+# ==============================================================================
+#   Verifies poll(2) and epoll(7) syscall wrappers in stdlib/poll.nex
+# ==============================================================================
+include "stdlib/poll.nex"
+
+# Test 1: Pipe creation
+print "--- TEST 1: nx_pipe creates two fds ---"
+call nx_pipe
+print "  pipe_read_fd:"
+print nx_pipe_read
+print "  pipe_write_fd:"
+print nx_pipe_write
+
+# Test 2: Non-blocking poll on empty pipe returns 0
+print "--- TEST 2: nx_poll_nb on empty pipe returns 0 ---"
+let nx_i0 = nx_pipe_read
+let nx_i1 = nx_POLLIN
+call nx_poll_nb
+print "  revents (expected 0):"
+print nx_r0
+assert_eq nx_r0, 0
+
+# Test 3: Write to pipe, then poll should return POLLIN
+print "--- TEST 3: After write, nx_poll_nb returns POLLIN ---"
+let msg = "hello"
+let wr = syscall3 1, nx_pipe_write, msg, 5
+print "  bytes written:"
+print wr
+assert_eq wr, 5
+
+let nx_i0 = nx_pipe_read
+let nx_i1 = nx_POLLIN
+call nx_poll_nb
+print "  revents (expected 1=POLLIN):"
+print nx_r0
+assert_eq nx_r0, nx_POLLIN
+
+# Test 4: Blocking poll with timeout on ready fd
+print "--- TEST 4: nx_poll with 100ms timeout on ready fd ---"
+let nx_i0 = nx_pipe_read
+let nx_i1 = nx_POLLIN
+let nx_i2 = 100
+call nx_poll
+print "  revents (expected 1):"
+print nx_r0
+assert_eq nx_r0, nx_POLLIN
+
+# Test 5: Read drains the data
+print "--- TEST 5: Read the data ---"
+let buf = alloc 16
+let rd = syscall3 0, nx_pipe_read, buf, 5
+print "  bytes read:"
+print rd
+assert_eq rd, 5
+
+# Test 6: After drain, poll returns 0 again
+print "--- TEST 6: After drain, nx_poll_nb returns 0 ---"
+let nx_i0 = nx_pipe_read
+let nx_i1 = nx_POLLIN
+call nx_poll_nb
+print "  revents (expected 0):"
+print nx_r0
+assert_eq nx_r0, 0
+
+# Test 7: Blocking poll with timeout on empty pipe (returns 0 after timeout)
+print "--- TEST 7: nx_poll with 50ms timeout on empty pipe returns 0 ---"
+let nx_i0 = nx_pipe_read
+let nx_i1 = nx_POLLIN
+let nx_i2 = 50
+call nx_poll
+print "  revents (expected 0):"
+print nx_r0
+assert_eq nx_r0, 0
+
+# Test 8: epoll_create returns a valid fd
+print "--- TEST 8: nx_epoll_create returns fd >= 0 ---"
+let nx_i0 = 0
+call nx_epoll_create
+let epfd = nx_r0
+print "  epoll_fd:"
+print epfd
+if nx_r0 < 0 {
+    print "FAIL: epoll_create returned negative"
+}
+
+# Test 9: epoll_ctl ADD succeeds
+print "--- TEST 9: nx_epoll_ctl ADD returns 0 ---"
+let nx_i0 = epfd
+let nx_i1 = nx_EPOLL_CTL_ADD
+let nx_i2 = nx_pipe_read
+call nx_epoll_ctl
+print "  ret (expected 0):"
+print nx_r0
+assert_eq nx_r0, 0
+
+# Test 10: epoll_wait blocks until data arrives
+print "--- TEST 10: epoll_wait returns 1 event after write ---"
+let s2 = "epoll!"
+let wr2 = syscall3 1, nx_pipe_write, s2, 6
+let nx_i0 = epfd
+let nx_i1 = 1
+let nx_i2 = 200
+call nx_epoll_wait
+print "  events_ready (expected 1):"
+print nx_r0
+assert_eq nx_r0, 1
+
+# Test 11: Read event_fd from epoll_event
+print "--- TEST 11: nx_epoll_event_fd returns pipe_read fd ---"
+let nx_i1 = 0
+call nx_epoll_event_fd
+print "  event_fd:"
+print nx_r0
+assert_eq nx_r0, nx_pipe_read
+
+# Test 12: epoll_wait with 0 timeout returns immediately
+print "--- TEST 12: epoll_wait with 0 timeout returns immediately ---"
+let nx_i0 = epfd
+let nx_i1 = 1
+let nx_i2 = 0
+call nx_epoll_wait
+print "  events_ready:"
+print nx_r0
+
+# Test 13: Close the epoll fd
+print "--- TEST 13: nx_close on epoll fd returns 0 ---"
+let nx_i0 = epfd
+call nx_close
+print "  ret (expected 0):"
+print nx_r0
+assert_eq nx_r0, 0
+
+print "=== ALL POLL/EPOLL TESTS PASSED ==="

@@ -1,0 +1,110 @@
+# ==============================================================================
+#   NEXUS TEST: Bitwise & Shift Operators
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# 1. Bitwise AND
+let nx_i0 = 0xf0
+let nx_i1 = 0x0f
+call nx_band
+assert_eq nx_r0, 0
+
+let nx_i0 = 0xff
+let nx_i1 = 0xff
+call nx_band
+assert_eq nx_r0, 255
+
+let nx_i0 = 0xaa
+let nx_i1 = 0x55
+call nx_band
+assert_eq nx_r0, 0
+
+# 2. Bitwise OR
+let nx_i0 = 0xf0
+let nx_i1 = 0x0f
+call nx_bor
+assert_eq nx_r0, 255
+
+let nx_i0 = 0xa0
+let nx_i1 = 0x0a
+call nx_bor
+assert_eq nx_r0, 170
+
+# 3. Bitwise XOR
+let nx_i0 = 0xff
+let nx_i1 = 0x0f
+call nx_bxor
+assert_eq nx_r0, 240
+
+let nx_i0 = 0xaa
+let nx_i1 = 0xaa
+call nx_bxor
+assert_eq nx_r0, 0
+
+let nx_i0 = 0x55
+let nx_i1 = 0xaa
+call nx_bxor
+assert_eq nx_r0, 255
+
+# 4. Bitwise NOT
+let nx_i0 = 0
+call nx_bnot
+assert_eq nx_r0, 0 - 1
+
+let nx_i0 = 0xff
+call nx_bnot
+assert_eq nx_r0, 0 - 256
+
+let nx_i0 = 0 - 1
+call nx_bnot
+assert_eq nx_r0, 0
+
+# 5. Left shift
+let nx_i0 = 1
+let nx_i1 = 4
+call nx_shl
+assert_eq nx_r0, 16
+
+let nx_i0 = 0xff
+let nx_i1 = 4
+call nx_shl
+assert_eq nx_r0, 4080
+
+let nx_i0 = 0b1
+let nx_i1 = 8
+call nx_shl
+assert_eq nx_r0, 256
+
+# 6. Right shift
+let nx_i0 = 0xff
+let nx_i1 = 4
+call nx_shr
+assert_eq nx_r0, 15
+
+let nx_i0 = 256
+let nx_i1 = 4
+call nx_shr
+assert_eq nx_r0, 16
+
+let nx_i0 = 0b10000000
+let nx_i1 = 4
+call nx_shr
+assert_eq nx_r0, 8
+
+# 7. Bit manipulation
+let nx_i0 = 0xff
+let nx_i1 = 3
+call nx_bit_set
+assert_eq nx_r0, 1
+
+let nx_i0 = 0x08
+let nx_i1 = 3
+call nx_bit_set
+assert_eq nx_r0, 1
+
+let nx_i0 = 0x08
+let nx_i1 = 2
+call nx_bit_set
+assert_eq nx_r0, 0
+
+call nx_assert_summary

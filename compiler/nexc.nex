@@ -341,14 +341,43 @@ fn skip_sp {
 fn parse_uint {
     let u = 0
     let y = 1
+    let base = 10
+    let nx_k = i + 1
+    if nx_k < l {
+        let p0 = load [s + i]
+        if p0 == 48 {
+            let p1 = load [s + nx_k]
+            if p1 == 120 {
+                let base = 16
+                let i = i + 2
+            }
+            if p1 == 98 {
+                let base = 2
+                let i = i + 2
+            }
+        }
+    }
     while y == 1 {
         if i >= l {
             let y = 0
         } else {
             let c = load [s + i]
+            let nx_dig = 0 - 1
             if c >= 48 {
                 if c <= 57 {
-                    let u = u * 10 + c - 48
+                    let nx_dig = c - 48
+                }
+            }
+            if c >= 97 {
+                if c <= 102 {
+                    if base == 16 {
+                        let nx_dig = c - 87
+                    }
+                }
+            }
+            if nx_dig >= 0 {
+                if nx_dig < base {
+                    let u = u * base + nx_dig
                     let i = i + 1
                 } else {
                     let y = 0

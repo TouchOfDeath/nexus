@@ -38,3 +38,5 @@ compiler/app.macho.s
 /app.macho
 /prologue.bin
 /code.nex
+.bootstrap_report.json
+compiler/stage4_master_io.txt
