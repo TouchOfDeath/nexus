@@ -28,7 +28,14 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#define unlink _unlink
+#define strtoll _strtoi64
+#define strtoull _strtoui64
+#else
 #include <unistd.h>
+#endif
 #include <stdarg.h>
 
 #define MAX_VARS       2048

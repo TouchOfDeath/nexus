@@ -88,4 +88,75 @@ while k2 < 50 {
 print hits2
 assert_eq hits2, 0
 
+print "--- TEST: HYDRON Local-Scoped Loop Variables (scoping bug regression) ---"
+local li = 0
+local ls = 0
+while li < 10000 {
+    let ls = ls + 3
+    let li = li + 1
+}
+print ls
+assert_eq ls, 30000
+
+print "--- TEST: HYDRON Variable-Threshold Invariant Peeling ---"
+let vk = 0
+let vh = 0
+let vthr = 250
+while vk < 1000 {
+    if vk > vthr {
+        let vh = vh + 4
+    }
+    let vk = vk + 1
+}
+; vk in 251..999 => 749 iterations * 4
+print vh
+assert_eq vh, 2996
+
+print "--- TEST: HYDRON Multi-Accumulator Induction Scaling ---"
+let ma = 0
+let m1 = 0
+let m2 = 0
+while ma < 900 {
+    let m1 = m1 + 5
+    let m2 = m2 - 3
+    let ma = ma + 1
+}
+print m1
+assert_eq m1, 4500
+print m2
+assert_eq m2, 0 - 2700
+
+print "--- TEST: HYDRON Variable-Limit Induction Scaling ---"
+let vl = 0
+let vs = 0
+let vlim = 777
+while vl < vlim {
+    let vs = vs + 6
+    let vl = vl + 1
+}
+print vs
+assert_eq vs, 4662
+
+print "--- TEST: HYDRON Fused Recurrence Attractor Shape ---"
+let vi = 0
+let vacc = 12345
+while vi < 2000 {
+    let vacc = vacc + vi * 2 / 4
+    let vi = vi + 1
+}
+print vacc
+assert_eq facc, 1998
+
+print "--- TEST: HYDRON >= Threshold Invariant Peeling ---"
+let gk = 0
+let gh = 0
+while gk < 5000 {
+    if gk >= 100 {
+        let gh = gh + 3
+    }
+    let gk = gk + 1
+}
+print gh
+assert_eq gh, 14700
+
 print "=== ALL HYDRON CORRECTNESS TESTS PASSED ==="

@@ -134,16 +134,38 @@ namespace NexusTools
 
                 Stopwatch sw = Stopwatch.StartNew();
 
-                // --- Step 1: Copy .nex to code.nex ---
-                try { File.Copy(nexFile, codeNexPath, true); }
-                catch (Exception ex)
+                // --- Step 1: Preprocess with nexprep (or copy to code.nex) ---
+                string nexprepExe = Path.Combine(compilerDir, "..", "bin", "nexprep.exe");
+                if (!File.Exists(nexprepExe))
+                    nexprepExe = Path.Combine(compilerDir, "..", "tools", "nexprep.exe");
+
+                if (File.Exists(nexprepExe))
                 {
-                    sw.Stop();
-                    PrintFail("Cannot copy source: " + ex.Message);
-                    failures.Add(testName + " : Cannot copy source");
-                    failed++;
-                    if (stopOnFail) break;
-                    continue;
+                    string prepOut;
+                    string prepErr = RunProcess(nexprepExe, "\"" + nexFile + "\" \"" + codeNexPath + "\"", compilerDir, timeoutMs, null, verbose, out prepOut);
+                    if (prepErr != null)
+                    {
+                        sw.Stop();
+                        string reason = "Preprocessor error: " + prepErr;
+                        PrintFail(string.Format("{0} ({1:F0} ms)", reason, sw.Elapsed.TotalMilliseconds));
+                        failures.Add(testName + " : " + reason);
+                        failed++;
+                        if (stopOnFail) break;
+                        continue;
+                    }
+                }
+                else
+                {
+                    try { File.Copy(nexFile, codeNexPath, true); }
+                    catch (Exception ex)
+                    {
+                        sw.Stop();
+                        PrintFail("Cannot copy source: " + ex.Message);
+                        failures.Add(testName + " : Cannot copy source");
+                        failed++;
+                        if (stopOnFail) break;
+                        continue;
+                    }
                 }
 
                 // Delete any stale app.exe

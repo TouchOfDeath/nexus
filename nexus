@@ -731,7 +731,9 @@ src = os.path.join(base_dir, "examples", "bench_arith.nex")
 if not os.path.exists(src):
     print("[FAIL] examples/bench_arith.nex not found"); exit(1)
 
-# Compile with --no-hydron for raw code generation benchmark
+# Raw code generation benchmark: measure the untouched baseline codegen
+# (all HYDRON passes disabled) so the 50M physical iterations reflect
+# pure compiler output quality, unassisted by the optimizer.
 subprocess.run([os.path.join(base_dir, "bin", "nexprep"), "--no-hydron", src,
                 os.path.join(work, "code.nex")], check=True)
 for f in ("app.exe", "app.elf"):

@@ -1,0 +1,60 @@
+; ==============================================================================
+;   NEXUS Real-World Workload Benchmark (integer loop heavy)
+;   1. Series accumulation with runtime bound (scaling + hoisted guard)
+;   2. Conditional event counting with runtime threshold (invariant peel)
+;   3. Multi-accumulator statistics loop (multi-acc scaling)
+;   4. Digital-root style recurrence (attractor family)
+; ==============================================================================
+
+print "=== NEXUS WORKLOAD BENCHMARK ==="
+
+; --- 1. harmonic-ish series sum: sum of 1..N via running total (N from var) ---
+let n = 40000000
+let i = 0
+let total = 0
+while i < n {
+    let total = total + 3
+    let i = i + 1
+}
+print total
+
+; --- 2. event counting above a runtime threshold ---
+let limit = 30000000
+let threshold = 250
+let k = 0
+let events = 0
+while k < limit {
+    if k > threshold {
+        let events = events + 7
+    }
+    let k = k + 1
+}
+print events
+
+; --- 3. multi-accumulator statistics ---
+let m = 0
+let sa = 0
+let sb = 0
+let sc = 0
+while m < 20000000 {
+    let sa = sa + 5
+    let sb = sb - 2
+    let sc = sc + 9
+    let m = m + 1
+}
+print sa
+print sb
+print sc
+
+; --- 4. recurrence attractor (converging division chain) ---
+let r = 0
+let acc = 12345
+while r < 30000000 {
+    let acc = acc + r
+    let acc = acc * 2
+    let acc = acc / 4
+    let r = r + 1
+}
+print acc
+
+print "=== WORKLOAD DONE ==="

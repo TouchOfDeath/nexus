@@ -106,21 +106,21 @@ fn nx_mandelbrot_iter {
 
     let zr = 0
     let zi = 0
-    let iter = 0
+    let cx_iter = 0
     let nx_r0 = m_max
 
     let threshold = 4 * m_scale
     let threshold = threshold * m_scale
 
     let escaped = 0
-    while iter < m_max {
+    while cx_iter < m_max {
         if escaped == 0 {
             # zr2 = zr * zr, zi2 = zi * zi
             let zr2 = zr * zr
             let zi2 = zi * zi
             let mag = zr2 + zi2
             if mag > threshold {
-                let nx_r0 = iter
+                let nx_r0 = cx_iter
                 let escaped = 1
             } else {
                 # next_zr = (zr2 - zi2) / scale + cr
@@ -136,10 +136,10 @@ fn nx_mandelbrot_iter {
 
                 let zr = next_zr
                 let zi = next_zi
-                let iter = iter + 1
+                let cx_iter = cx_iter + 1
             }
         } else {
-            let iter = m_max
+            let cx_iter = m_max
         }
     }
 }

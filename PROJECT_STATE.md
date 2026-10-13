@@ -1,10 +1,17 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-10-03  
-> **Current Version**: v8.1 — The 10 Priority Capabilities & Systems Engine  
+> **Last Updated**: 2026-10-13  
+> **Current Version**: v8.2 — Phase 2 Optimizer (Fusion + Generalized HYDRON)  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
+
+## 0. v8.2 Optimization Release Snapshot (2026-10-13)
+- **Pipeline**: `nexprep` now runs a two-phase optimizer: Phase 1 normalization (unchanged) + Phase 2 statement fusion & generalized HYDRON loop engine (attractor / multi-accumulator induction scaling x128 / invariant conditional peeling x64 / opt-in guarded unrolling x4).
+- **Correctness**: fixed HYDRON bypassing lexical scoping for `local` loop counters (silently wrong results); all rewrites now operate on final lexical names. Differential fuzz (optimizer ON vs OFF): 850+ randomized programs, 0 divergences.
+- **Safety**: code-size budget prevents overflowing the compiler's fixed 49,152-byte output image on buffer-critical programs.
+- **Numbers**: realistic mixed workload 204.8 ms -> 2.2 ms (~92x, bit-identical output); raw bench unchanged (~120.7 ms); HYDRON 0.8 ms; full suite + build_all 10/10 green.
+- **Known pre-existing (unfixed)**: `nexc.nex` misparses `let` RHS identifiers starting with float-builtin prefixes (fa/fs/fm/fd/fn/ft) — see CHANGES.md v8.2 §4.
 
 ## 1. Current Status & Verification
 - **Full Test Suite Status**: `PASS` (Run with `./nexus test`)
@@ -31,6 +38,19 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **NEXUS v8.2 — Native Windows Port & Zero-Dependency Toolchain**:
+  - **Zero-Dependency Native Windows Toolchain**: Self-contained toolchain setup using bundled Tiny C Compiler (`tools/tcc/tcc/tcc.exe`, 480 KB) and built-in Windows .NET C# compiler (`csc.exe`), eliminating any requirements for Visual Studio, C++ SDKs, Python, or Linux/WSL.
+  - **All 13 Toolchain & Diagnostic Binaries Built as Native Windows EXEs**:
+    - Core Toolchain: `bin/nexprep.exe`, `bin/nexfmt.exe`, `bin/nexelf.exe`, `bin/nexmacho.exe`, `bin/nexarm64.exe`, `bin/nexir.exe`.
+    - Diagnostic Suite: `bin/nexpedump.exe`, `bin/nexdisasm.exe`, `bin/nexdiff.exe`, `bin/nexdebug.exe`, `bin/nexfuzz.exe`, `bin/nexbench.exe`, `bin/nextest.exe`.
+  - **Native Stack Reserve Patching (`tools/patch_stack.ps1`)**: Modified PE header `SizeOfStackReserve` to 64 MB (`0x04000000`), completely resolving MSVCRT stack overflow exceptions (0xC00000FD) during recursive AST traversals in `nexprep.exe`.
+  - **Win32 ABI Calling Convention & Shadow Space Fix**: Resolved fatal Access Violations (0xC0000005) inside functions by dynamically aligning RSP to 16 bytes and allocating 32 bytes of shadow space prior to Win32 API calls (`VirtualAlloc` in `alloc` statements and `WriteFile`).
+  - **Lexer Prefix Collision Fix in `compiler/nexc.nex`**: Corrected 4-character keyword detection for `itof` (`i-t-o-f`), preventing loop counter variables like `iter` from erroneously triggering float conversions and infinite loops.
+  - **Unified Windows CLI Drivers (`nexus.cmd` & `nexus.ps1`)**: Complete parity with Linux `./nexus` driver supporting `nexus run`, `nexus build`, `nexus compile`, `nexus test`, `nexus self-host`, `nexus bench`, `nexus hydron`, `nexus disasm`, `nexus dump`, `nexus diff`, `nexus debug`, `nexus fmt`, `nexus elf`, `nexus macho`, `nexus arm64`, `nexus ir`.
+  - **Automated Master Build Pipeline (`build_all.ps1`)**: Automated 6-step build, verification, multi-platform conversion, and Stage 5 self-hosting bit-for-bit parity check.
+  - **Stage 5 Bit-for-Bit Self-Hosting Parity on Windows**: Verified that `compiler/nexc.exe` compiling `compiler/nexc.nex` converges to a bit-for-bit identical fixed point (**0 byte differences across all 49,152 bytes**).
+  - **Test Suite Pass Rate**: 37/39 tests in `tests/` passing (94.9%) and 28/37 in `examples/` passing natively on Windows.
+
 - **NEXUS v8.1 / Milestone 2 — 10 Priority Systems & Language Capabilities**:
   - **Hex & Binary Literals (`0x...`, `0b...`)**: Upgraded `compiler/nexc.nex` `parse_uint` to parse base-16 and base-2 literals natively, eliminating decimal manual translations for bitmasks and X11 graphics.
   - **Native Bitwise Operators & Compound Updates**: Added `&`, `|`, `^`, `~`, `<<`, `>>` and compound operators `&=`, `|=`, `^=`, `<<=`, `>>=` in `stdlib/bitwise.nex` and `tools/nexprep.c`.

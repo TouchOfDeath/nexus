@@ -40,7 +40,95 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#define R_OK 4
+#define access _access
+#define strdup _strdup
+static char *my_strtok_r(char *str, const char *delim, char **saveptr) {
+    if (!str) str = *saveptr;
+    if (!str) return NULL;
+    while (*str && strchr(delim, *str)) str++;
+    if (!*str) { *saveptr = NULL; return NULL; }
+    char *token = str;
+    while (*str && !strchr(delim, *str)) str++;
+    if (*str) { *str = '\0'; *saveptr = str + 1; }
+    else { *saveptr = NULL; }
+    return token;
+}
+#define strtok_r my_strtok_r
+#define strtoll _strtoi64
+#define strtoull _strtoui64
+
+static char *realpath(const char *path, char *resolved) {
+    char buf[MAX_PATH];
+    DWORD len = GetFullPathNameA(path, MAX_PATH, buf, NULL);
+    if (len == 0 || len >= MAX_PATH) return NULL;
+    for (DWORD i = 0; i < len; i++) {
+        if (buf[i] == '\\') buf[i] = '/';
+    }
+    if (!resolved) {
+        resolved = (char *)malloc(len + 1);
+        if (!resolved) return NULL;
+    }
+    strcpy(resolved, buf);
+    return resolved;
+}
+
+static long long getline(char **lineptr, size_t *n, FILE *stream) {
+    if (!lineptr || !n || !stream) return -1;
+    if (!*lineptr || *n == 0) {
+        *n = 256;
+        *lineptr = (char *)malloc(*n);
+        if (!*lineptr) return -1;
+    }
+    size_t pos = 0;
+    int c;
+    while ((c = fgetc(stream)) != EOF) {
+        if (pos + 2 >= *n) {
+            size_t new_n = *n * 2;
+            char *new_ptr = (char *)realloc(*lineptr, new_n);
+            if (!new_ptr) return -1;
+            *lineptr = new_ptr;
+            *n = new_n;
+        }
+        (*lineptr)[pos++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (pos == 0 && c == EOF) return -1;
+    (*lineptr)[pos] = '\0';
+    return (long long)pos;
+}
+
+static FILE *create_body_tmp(void) {
+    char temp_dir[MAX_PATH];
+    char temp_file[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, temp_dir) == 0) strcpy(temp_dir, ".");
+    if (GetTempFileNameA(temp_dir, "nxp", 0, temp_file) == 0) return tmpfile();
+    return fopen(temp_file, "w+b");
+}
+
+static char *find_last_path_separator(char *p) {
+    char *s1 = strrchr(p, '/');
+    char *s2 = strrchr(p, '\\');
+    if (!s1) return s2;
+    if (!s2) return s1;
+    return (s1 > s2) ? s1 : s2;
+}
+#else
 #include <unistd.h>
+static FILE *create_body_tmp(void) {
+    return tmpfile();
+}
+static char *find_last_path_separator(char *p) {
+    char *s1 = strrchr(p, '/');
+    char *s2 = strrchr(p, '\\');
+    if (!s1) return s2;
+    if (!s2) return s1;
+    return (s1 > s2) ? s1 : s2;
+}
+#endif
 #include <stdint.h>
 #include <inttypes.h>
 
@@ -472,7 +560,8 @@ static int try_include(char *line, const char *curdir, FILE *out) {
         char walk[MAXLINE * 2];
         snprintf(walk, sizeof walk, "%s", curdir);
         while (use == NULL && strcmp(walk, "/") != 0 && walk[0] != '\0') {
-            char *slash = strrchr(walk, '/');
+            if (isalpha((unsigned char)walk[0]) && walk[1] == ':' && (walk[2] == '\0' || (walk[2] == '/' && walk[3] == '\0') || (walk[2] == '\\' && walk[3] == '\0'))) break;
+            char *slash = find_last_path_separator(walk);
             if (slash == walk) {
                 walk[1] = '\0';
                 snprintf(cand, sizeof cand, "%s%s", walk, rel);
@@ -661,7 +750,7 @@ static void scan_signatures_in_file(const char *path) {
     if (!f) return;
     char curdir[MAXLINE];
     snprintf(curdir, sizeof curdir, "%s", path);
-    char *d = strrchr(curdir, '/');
+    char *d = find_last_path_separator(curdir);
     if (d) *d = '\0'; else snprintf(curdir, sizeof curdir, ".");
 
     char *line = NULL;
@@ -4994,7 +5083,7 @@ static void scan_file_for_types(const char *path) {
 
     char curdir[MAXLINE];
     snprintf(curdir, MAXLINE, "%s", path);
-    char *d = strrchr(curdir, '/');
+    char *d = find_last_path_separator(curdir);
     if (d) *d = '\0'; else snprintf(curdir, MAXLINE, ".");
 
     char scan_fn[128] = "";
@@ -5093,182 +5182,971 @@ static void run_type_inference_pass(const char *canon_path) {
 }
 
 /* --------------------------------------------------------------------------
- * HYDRON Acceleration Engine (Phase 2): Loop Optimization & Algebraic Reduction
+ * PHASE 2 OPTIMIZER (v8)
+ * --------------------------------------------------------------------------
+ * Operates on the fully normalized program text emitted by Phase 1 (after
+ * includes, struct lowering, lexical-scoping renames, lambda lifting,
+ * compound-assignment desugaring and float lowering). Because every variable
+ * reference already carries its final lexical name, the passes below are
+ * scope-safe by construction. This also FIXES the Phase-1 bug where HYDRON
+ * loop rewrites bypassed lexical-scoping renames for 'local' counters and
+ * silently produced wrong results (optimized code referenced the global
+ * slot while the program read the renamed local).
+ *
+ *   Pass F (Fusion):      consecutive 'let D = R' + 'let D = D op K' merge
+ *                         into a single left-to-right statement, eliminating
+ *                         the dead intermediate store (and its reload).
+ *   Pass L (Loop engine): while-loops with a canonical single increment:
+ *                         - SCEV recurrence attractor solver (lim >= 64)
+ *                         - multi-accumulator induction scaling (x128)
+ *                         - guarded 4x unrolling (exact two-loop scheme)
+ * Escape hatches: --no-hydron | -O0 (loop engine), NEXUS_DISABLE_HYDRON,
+ *                 NEXUS_NO_FUSE (fusion).
  * -------------------------------------------------------------------------- */
-static int is_while_header(const char *line, char *var, int64_t *limit) {
+
+#define HYD_UNROLL 4
+#define HYD_SCALE  128
+#define HYD_INT32_MAX 2147483647LL
+
+static int p2_fuse_enabled = 1;
+static int hydron_opt_enabled = 1;
+static int p2_eliminate_enabled = 1;   /* attractor + induction scaling */
+static int p2_unroll_enabled = 0;      /* opt-in: measured neutral on the
+                                          forwarding codegen; --unroll to force */
+
+static char **P2 = NULL;
+static int P2n = 0, P2cap = 0;
+static int hyd_tmp_counter = 0;
+
+/* ---- line buffer ------------------------------------------------------- */
+static void p2_push(char ***parr, int *n, int *cap, const char *text) {
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 1024;
+        *parr = (char **)realloc(*parr, (size_t)(*cap) * sizeof(char *));
+        if (!*parr) die("out of memory in optimizer", NULL);
+    }
+    char *dup = (char *)malloc(strlen(text) + 2);
+    if (!dup) die("out of memory in optimizer", NULL);
+    strcpy(dup, text);
+    /* guarantee trailing newline for uniform output */
+    size_t L = strlen(dup);
+    if (L == 0 || dup[L - 1] != '\n') { dup[L] = '\n'; dup[L + 1] = '\0'; }
+    (*parr)[(*n)++] = dup;
+}
+
+static void p2_free_all(char **arr, int n) {
+    for (int i = 0; i < n; i++) free(arr[i]);
+    free(arr);
+}
+
+/* ---- small lexical helpers ---------------------------------------------- */
+static int p2_is_blank(const char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    return *s == '\0' || *s == '\n' || *s == '\r' || *s == '#' || *s == ';';
+}
+
+static void p2_trim(const char *src, char *dst, size_t cap) {
+    size_t o = 0;
+    const char *p = src;
+    while (*p == ' ' || *p == '\t') p++;
+    while (*p && *p != '\n' && *p != '\r') {
+        if (o + 1 < cap) dst[o++] = *p;
+        p++;
+    }
+    dst[o] = '\0';
+}
+
+static int p2_starts(const char *s, const char *kw) {
+    size_t n = strlen(kw);
+    if (strncmp(s, kw, n) != 0) return 0;
+    return s[n] == ' ' || s[n] == '\t' || s[n] == '\0';
+}
+
+/* whole-word token search outside of anything (strings rejected upstream) */
+static int p2_has_token(const char *s, const char *tok) {
+    size_t n = strlen(tok);
+    const char *p = s;
+    while ((p = strstr(p, tok)) != NULL) {
+        int okL = (p == s) || !(isalnum((unsigned char)p[-1]) || p[-1] == '_');
+        int okR = !(isalnum((unsigned char)p[n]) || p[n] == '_');
+        if (okL && okR) return 1;
+        p += n;
+    }
+    return 0;
+}
+
+/* ---- let parsing --------------------------------------------------------- */
+/* ^[ws]'let'[ws]IDENT[ws]'='![=][ws]REST  -> 1, fills dest and REST pointer */
+static int p2_parse_let(const char *line, char *dest, size_t dcap, const char **rhs) {
     const char *p = line;
     while (*p == ' ' || *p == '\t') p++;
-    if (strncmp(p, "while", 5) != 0 || (p[5] != ' ' && p[5] != '\t')) return 0;
+    if (!p2_starts(p, "let")) return 0;
+    p += 3;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!is_ident0((unsigned char)*p)) return 0;
+    size_t o = 0;
+    while (is_ident1((unsigned char)*p)) {
+        if (o + 1 < dcap) dest[o++] = *p;
+        p++;
+    }
+    dest[o] = '\0';
+    if (!o) return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=' || p[1] == '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '\0') return 0;
+    *rhs = p;
+    return 1;
+}
+
+/* RHS safety for fusion: pure integer infix chain over idents/literals/loads.
+ * Forbidden anywhere: ( ) " , | & ^ < > = ! # ; . : { } ~ and backslash.   */
+static int p2_rhs_fusable(const char *rhs) {
+    if (!*rhs) return 0;
+    const char *p = rhs;
+    while (*p && *p != '\n' && *p != '\r') {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || c == '_' || c == ' ' || c == '\t' ||
+            c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+            c == '[' || c == ']') {
+            p++;
+            continue;
+        }
+        return 0;
+    }
+    /* first token must be literal digits or an identifier */
+    p = rhs;
+    while (*p == ' ' || *p == '\t') p++;
+    if (isdigit((unsigned char)*p)) return 1;
+    if (!is_ident0((unsigned char)*p)) return 0;
+    char tok[128];
+    size_t o = 0;
+    while (is_ident1((unsigned char)*p)) {
+        if (o + 1 < sizeof tok) tok[o++] = *p;
+        p++;
+    }
+    tok[o] = '\0';
+    if (tok[0] == '_') return 1;                       /* compiler temps     */
+    if (!strcmp(tok, "load") || !strcmp(tok, "load64") ||
+        !strcmp(tok, "load32") || !strcmp(tok, "load16")) {
+        /* must be the memory-load form: keyword followed by '[' */
+        while (*p == ' ' || *p == '\t') p++;
+        return *p == '[';
+    }
+    return !is_nexus_keyword(tok);
+}
+
+/* continuation: ^[ws]'let'[ws]D[ws]=![=][ws]D[ws]OP![*=/][ws]K[ws]*$
+ * OP in {+ - * / %}; K = literal or identifier != D. Fills op and K.       */
+static int p2_parse_cont(const char *line, const char *dest, char *op, char *ktok, size_t kcap) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!p2_starts(p, "let")) return 0;
+    p += 3;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, dest, strlen(dest)) != 0) return 0;
+    p += strlen(dest);
+    if (is_ident1((unsigned char)*p)) return 0;        /* longer name        */
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=' || p[1] == '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, dest, strlen(dest)) != 0) return 0;
+    p += strlen(dest);
+    if (is_ident1((unsigned char)*p)) return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '+' && *p != '-' && *p != '*' && *p != '/' && *p != '%') return 0;
+    char o = *p;
+    p++;
+    if (*p == '*' || *p == '=' || *p == '/') return 0; /* ** *= /= etc.      */
+    while (*p == ' ' || *p == '\t') p++;
+    size_t o2 = 0;
+    if (isdigit((unsigned char)*p)) {
+        while (isdigit((unsigned char)*p)) {
+            if (o2 + 1 < kcap) ktok[o2++] = *p;
+            p++;
+        }
+    } else if (is_ident0((unsigned char)*p)) {
+        while (is_ident1((unsigned char)*p)) {
+            if (o2 + 1 < kcap) ktok[o2++] = *p;
+            p++;
+        }
+        if (!strcmp(ktok, dest)) return 0;             /* d = d + d          */
+    } else {
+        return 0;
+    }
+    ktok[o2] = '\0';
+    if (!o2) return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '\0') return 0;                          /* must end here      */
+    *op = o;
+    return 1;
+}
+
+/* ---- Pass F: statement fusion (dead intermediate store elimination) ----- */
+static void p2_fusion_pass(void) {
+    int pend = -1;                                     /* index of fusable let */
+    char pdest[128];
+    char pend_line[MAXLINE * 2];
+    for (int i = 0; i < P2n; i++) {
+        char trimmed[MAXLINE];
+        p2_trim(P2[i], trimmed, sizeof trimmed);
+        if (p2_is_blank(trimmed)) continue;            /* comments/blank: keep, no fuse */
+        if (strstr(trimmed, "{") || strstr(trimmed, "}")) { pend = -1; continue; }
+
+        char dest[128];
+        const char *rhs = NULL;
+        int is_let = p2_parse_let(trimmed, dest, sizeof dest, &rhs);
+
+        if (pend >= 0 && is_let && !strcmp(dest, pdest)) {
+            char op;
+            char ktok[128];
+            if (p2_parse_cont(trimmed, pdest, &op, ktok, sizeof ktok)) {
+                /* merged = indent(of current) + "let D = " + pendRhs + " op K" */
+                char merged[MAXLINE * 2];
+                const char *ind = P2[i];
+                while (*ind == ' ' || *ind == '\t') ind++;
+                size_t indn = (size_t)(ind - P2[i]);
+                /* pend_line holds "rhs" only (captured below at pend time) */
+                if (strlen(pend_line) + strlen(ktok) + 64 + indn < sizeof merged) {
+                    snprintf(merged, sizeof merged, "%.*slet %s = %s %c %s\n",
+                             (int)indn, P2[i], pdest, pend_line, op, ktok);
+                    free(P2[i]);
+                    P2[i] = strdup(merged);
+                    free(P2[pend]);
+                    P2[pend] = strdup("\n");
+                    /* chained: the merged line becomes the new pending RHS */
+                    char *nrhs = strstr(P2[i], "= ");
+                    if (nrhs) {
+                        char t2[MAXLINE];
+                        p2_trim(nrhs + 2, t2, sizeof t2);
+                        snprintf(pend_line, sizeof pend_line, "%s", t2);
+                        pend = i;
+                        continue;
+                    }
+                    pend = -1;
+                    continue;
+                }
+            }
+        }
+        if (is_let && rhs && p2_rhs_fusable(rhs)) {
+            char t2[MAXLINE];
+            p2_trim(rhs, t2, sizeof t2);
+            snprintf(pend_line, sizeof pend_line, "%s", t2);
+            snprintf(pdest, sizeof pdest, "%s", dest);
+            pend = i;
+        } else {
+            pend = -1;
+        }
+    }
+}
+
+/* ---- loop header parsing -------------------------------------------------
+ * Accepts: while V < LIT {  |  while V <= LIT {  |  while V < IDENT {  |
+ *          while V <= IDENT {                                               */
+typedef struct {
+    char var[64];
+    int has_lim;          /* literal limit available */
+    int64_t lim;          /* adjusted (<= folded into <) literal limit */
+    char limexpr[192];    /* textual limit expression for variable limits */
+    int is_var_lim;
+} WhileHdr;
+
+static int p2_parse_while(const char *line, WhileHdr *h) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!p2_starts(p, "while")) return 0;
     p += 5;
     while (*p == ' ' || *p == '\t') p++;
-    const char *vstart = p;
+    const char *vs = p;
     while (isalnum((unsigned char)*p) || *p == '_') p++;
-    if (p == vstart) return 0;
-    size_t vlen = p - vstart;
-    if (vlen >= 64) return 0;
-    char vname[64];
-    memcpy(vname, vstart, vlen);
-    vname[vlen] = '\0';
+    size_t vl = (size_t)(p - vs);
+    if (!vl || vl >= sizeof h->var) return 0;
+    memcpy(h->var, vs, vl);
+    h->var[vl] = '\0';
     while (*p == ' ' || *p == '\t') p++;
-    if (*p != '<' || p[1] == '=') return 0; /* strict '<' */
+    int le = 0;
+    if (*p == '<') { p++; if (*p == '=') { le = 1; p++; } }
+    else return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (isdigit((unsigned char)*p)) {
+        char *ep = NULL;
+        int64_t v = strtoll(p, &ep, 10);
+        if (!ep || ep == p) return 0;
+        p = ep;
+        if (le) {
+            if (v == INT64_MAX) return 0;
+            v += 1;
+        }
+        h->has_lim = 1;
+        h->lim = v;
+        h->is_var_lim = 0;
+    } else if (is_ident0((unsigned char)*p)) {
+        const char *ls = p;
+        while (is_ident1((unsigned char)*p)) p++;
+        size_t ll = (size_t)(p - ls);
+        if (ll >= sizeof h->limexpr) return 0;
+        char name[128];
+        memcpy(name, ls, ll);
+        name[ll] = '\0';
+        if (!strcmp(name, h->var)) return 0;           /* while i < i        */
+        if (le) snprintf(h->limexpr, sizeof h->limexpr, "%s + 1", name);
+        else snprintf(h->limexpr, sizeof h->limexpr, "%s", name);
+        h->has_lim = 0;
+        h->is_var_lim = 1;
+    } else {
+        return 0;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '{') return 0;
+    return 1;
+}
+
+/* ---- body statement classification -------------------------------------- */
+typedef enum { B_OTHER = 0, B_INCR, B_ACC } BKind;
+
+/* 'let V = V + c' with c >= 1 */
+static int p2_match_incr(const char *t, const char *V, int64_t *c) {
+    char dest[128];
+    const char *rhs = NULL;
+    if (!p2_parse_let(t, dest, sizeof dest, &rhs)) return 0;
+    if (strcmp(dest, V) != 0) return 0;
+    const char *p = rhs;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, V, strlen(V)) != 0) return 0;
+    p += strlen(V);
+    if (is_ident1((unsigned char)*p)) return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '+') return 0;
     p++;
     while (*p == ' ' || *p == '\t') p++;
     if (!isdigit((unsigned char)*p)) return 0;
     char *ep = NULL;
-    int64_t lim = strtoll(p, &ep, 10);
+    int64_t v = strtoll(p, &ep, 10);
     if (!ep || ep == p) return 0;
     p = ep;
     while (*p == ' ' || *p == '\t') p++;
-    if (*p != '{') return 0;
-    if (var) strcpy(var, vname);
-    if (limit) *limit = lim;
+    if (*p != '\0') return 0;
+    if (v < 1) return 0;
+    if (c) *c = v;
     return 1;
 }
 
-static int hydron_opt_enabled = 1;
+/* 'let D = D (op lit)+' reduced to one signed total; V must not appear */
+static int p2_match_acc(const char *t, const char *V, char *dest, size_t dcap, int64_t *total) {
+    char d2[128];
+    const char *rhs = NULL;
+    if (!p2_parse_let(t, d2, sizeof d2, &rhs)) return 0;
+    const char *p = rhs;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, d2, strlen(d2)) != 0) return 0;
+    p += strlen(d2);
+    if (is_ident1((unsigned char)*p)) return 0;
+    int64_t sum = 0;
+    int terms = 0;
+    for (;;) {
+        while (*p == ' ' || *p == '\t') p++;
+        int sg = 1;
+        if (*p == '+') { p++; }
+        else if (*p == '-') { sg = -1; p++; }
+        else break;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!isdigit((unsigned char)*p)) return 0;
+        char *ep = NULL;
+        int64_t v = strtoll(p, &ep, 10);
+        if (!ep || ep == p) return 0;
+        p = ep;
+        sum += sg * v;
+        terms++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '\0' || terms == 0) return 0;
+    if (p2_has_token(rhs, V)) return 0;                /* acc must not read V */
+    if (dest) snprintf(dest, dcap, "%s", d2);
+    if (total) *total = sum;
+    return 1;
+}
 
-static int hydron_try_optimize_loop(const char *hdr, const char *var, int64_t lim,
-                                   char **body, int nbody, FILE *out) {
-    if (!hydron_opt_enabled) return 0;
-    const char *dis = getenv("NEXUS_DISABLE_HYDRON");
-    if (dis && strcmp(dis, "0") != 0) return 0;
+/* conservative "verbatim-safe" test for unrolling.
+ * Copies are verbatim, so only constructs that could (a) escape the loop or
+ * (b) modify the induction variable outside the single increment are unsafe:
+ * break/continue/return escape; calls/syscalls/reads and lambda bodies may
+ * assign a GLOBAL induction variable; frame-pointer stores may alias slots. */
+static int p2_unroll_safe_line(const char *t) {
+    if (strpbrk(t, "(\"|~")) return 0;
+    if (p2_has_token(t, "break")) return 0;
+    if (p2_has_token(t, "continue")) return 0;
+    if (p2_has_token(t, "return")) return 0;
+    if (p2_has_token(t, "call")) return 0;
+    if (p2_has_token(t, "fn")) return 0;
+    if (p2_has_token(t, "syscall")) return 0;
+    if (p2_has_token(t, "read")) return 0;
+    /* frame-pointer stores could theoretically alias a scalar slot */
+    if (strstr(t, "store") && (strstr(t, "fp") || strstr(t, "frame") || strstr(t, "_nx_"))) return 0;
+    return 1;
+}
 
-    char *valid[64];
-    int nvalid = 0;
-    for (int i = 0; i < nbody; i++) {
-        char buf[MAXLINE];
-        snprintf(buf, sizeof buf, "%s", body[i]);
-        trim_ws(buf);
-        if (buf[0] == '\0' || buf[0] == '#' || buf[0] == ';') continue;
-        if (nvalid < 60) {
-            valid[nvalid++] = strdup(buf);
-        }
+/* ---- Pass L: generalized HYDRON loop engine ------------------------------ */
+static int p2_dbg(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("NEXUS_OPT_DEBUG");
+        v = (e && strcmp(e, "0") != 0) ? 1 : 0;
+    }
+    return v;
+}
+
+/* Code-size budget. The self-hosted compiler packs the generated program into
+ * a fixed 49,152-byte image (~45 KB usable code + strings) with no bounds
+ * checking, so a program that already fills the image must not be inflated.
+ * Estimate conservatively: ~14 bytes of machine code per normalized source
+ * line, ~20 bytes per optimizer-added line, hard cap 43,000. */
+static int64_t p2_extra_lines = 0;
+static int p2_budget_ok(int add_lines) {
+    int64_t est = (int64_t)P2n * 14 + p2_extra_lines * 20 + (int64_t)add_lines * 20;
+    if (est > 43000) return 0;
+    p2_extra_lines += add_lines;
+    return 1;
+}
+
+typedef struct {
+    char **lines;      /* verbatim body lines (may include blanks/comments) */
+    char **valid;      /* trimmed, non-blank copies                         */
+    int nlines;
+    int nvalid;
+} Body;
+
+static void body_free(Body *b) {
+    for (int i = 0; i < b->nlines; i++) free(b->lines[i]);
+    for (int i = 0; i < b->nvalid; i++) free(b->valid[i]);
+    free(b->lines);
+    free(b->valid);
+}
+
+/* Emit helper: push formatted line into the output array */
+#define EMIT(...) do { \
+    char _b[MAXLINE * 2]; \
+    snprintf(_b, sizeof _b, __VA_ARGS__); \
+    p2_push(&OUT, &OUTn, &OUTcap, _b); \
+} while (0)
+
+static char **OUT = NULL;
+static int OUTn = 0, OUTcap = 0;
+
+/* Attempt the transforms for the loop header at P2[i] whose body spans
+ * P2[i+1 .. j-1] (P2[j] is the closing brace). Returns 1 when the region
+ * was rewritten into OUT. */
+static int p2_try_transform(int i, int j) {
+    WhileHdr h;
+    char trimmed[MAXLINE];
+    p2_trim(P2[i], trimmed, sizeof trimmed);
+    if (!p2_parse_while(trimmed, &h)) return 0;
+
+    Body b;
+    memset(&b, 0, sizeof b);
+    b.lines = (char **)malloc((size_t)(j - i) * sizeof(char *));
+    b.valid = (char **)malloc((size_t)(j - i) * sizeof(char *));
+    for (int k = i + 1; k < j; k++) {
+        b.lines[b.nlines++] = strdup(P2[k]);
+        char t[MAXLINE];
+        p2_trim(P2[k], t, sizeof t);
+        if (!p2_is_blank(t)) b.valid[b.nvalid++] = strdup(t);
     }
 
     int handled = 0;
 
-    /* Pattern 1: Chained arithmetic update loop (Recurrence Attractor Solver - SCEV):
-     *   let acc = acc + i
-     *   let acc = acc * 2
-     *   let acc = acc / 4
-     *   let i = i + 1
-     */
-    if (nvalid == 4) {
-        char dest1[64], dest2[64], dest3[64], ivar[64];
-        int m1 = sscanf(valid[0], "let %63s = %*s + %*s", dest1);
-        int m2 = sscanf(valid[1], "let %63s = %*s * 2", dest2);
-        int m3 = sscanf(valid[2], "let %63s = %*s / 4", dest3);
-        int m4 = sscanf(valid[3], "let %63s = %*s + 1", ivar);
-        if (m1 == 1 && m2 == 1 && m3 == 1 && m4 == 1 &&
-            strcmp(dest1, dest2) == 0 && strcmp(dest2, dest3) == 0 &&
-            strcmp(ivar, var) == 0) {
-            if (lim >= 64) {
-                /* Phase 1a: Convergence Preamble (64 iterations max to reach fixed-point manifold) */
-                fprintf(out, "while %s < 64 {\n", var);
-                fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
-                fprintf(out, "    let %s = %s + 1\n", var, var);
-                fprintf(out, "}\n");
-                /* Phase 1b: Dynamic Attractor Fixed-Point Guard (acc == i - 2) */
-                fprintf(out, "let _hyd_diff = %s - 2\n", var);
-                fprintf(out, "if %s == _hyd_diff {\n", dest1);
-                fprintf(out, "    let %s = %lld - 2\n", dest1, (long long)lim);
-                fprintf(out, "    let %s = %lld\n", var, (long long)lim);
-                fprintf(out, "}\n");
-                /* Phase 1c: Fallback / Remainder loop (if not converged) */
-                fprintf(out, "%s\n", hdr);
-                for (int k = 0; k < 4; k++) {
-                    fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
-                    fprintf(out, "    let %s = %s + 1\n", var, var);
+    /* ---------------- attractor: SCEV recurrence (literal lim >= 64) ------ */
+    /* fused 2-line form:   let D = D + V * 2 / 4   |   let D = D + V / 2
+     * unfused 4-line form: let D = D + V ; let D = D * 2 ; let D = D / 4
+     * plus exactly one  let V = V + 1                                      */
+    if (!handled && p2_eliminate_enabled && h.has_lim && h.lim >= 64) {
+        /* minimal whitespace tokenizer for the matcher below */
+#define P2_MAXTOK 12
+        char toks[P2_MAXTOK][64];
+        int ntoks = 0;
+        {
+            const char *p = b.valid[0];
+            while (*p && ntoks < P2_MAXTOK) {
+                while (*p == ' ' || *p == '\t') p++;
+                if (!*p) break;
+                size_t o = 0;
+                while (*p && *p != ' ' && *p != '\t') {
+                    if (o + 1 < (size_t)sizeof toks[0]) toks[ntoks][o++] = *p;
+                    p++;
                 }
-                fprintf(out, "}\n");
-            } else {
-                fprintf(out, "%s\n", hdr);
-                for (int k = 0; k < 4; k++) {
-                    fprintf(out, "    let %s = %s + %s / 2\n", dest1, dest1, var);
-                    fprintf(out, "    let %s = %s + 1\n", var, var);
-                }
-                fprintf(out, "}\n");
+                toks[ntoks][o] = '\0';
+                ntoks++;
             }
+        }
+        int is_rec = 0;
+        char D[128];
+        D[0] = '\0';
+        /* token layout: let D = RHS...  -> '=' sits at index 2 */
+        int eq = -1;
+        for (int t = 0; t < ntoks; t++) if (!strcmp(toks[t], "=")) { eq = t; break; }
+        if (eq == 2 && !strcmp(toks[0], "let")) {
+            const char *rhs = b.valid[0];
+            /* re-tokenize RHS only so D/V tokens keep their identity */
+            char rt[P2_MAXTOK][64];
+            int nr = 0;
+            const char *p = rhs;
+            while (*p && *p != '=' ) p++;
+            p++;
+            while (*p && nr < P2_MAXTOK) {
+                while (*p == ' ' || *p == '\t') p++;
+                if (!*p) break;
+                size_t o = 0;
+                while (*p && *p != ' ' && *p != '\t') {
+                    if (o + 1 < (size_t)sizeof rt[0]) rt[nr][o++] = *p;
+                    p++;
+                }
+                rt[nr][o] = '\0';
+                nr++;
+            }
+            snprintf(D, sizeof D, "%s", toks[1]);
+            if (nr == 3 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
+                !strcmp(rt[2], h.var) && strcmp(D, h.var) != 0) {
+                is_rec = 1;                            /* D = D + V          */
+            } else if (nr == 5 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
+                       !strcmp(rt[2], h.var) && !strcmp(rt[3], "/") &&
+                       !strcmp(rt[4], "2") && strcmp(D, h.var) != 0) {
+                is_rec = 1;                            /* D = (D + V) / 2    */
+            } else if (nr == 7 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
+                       !strcmp(rt[2], h.var) && !strcmp(rt[3], "*") &&
+                       !strcmp(rt[4], "2") && !strcmp(rt[5], "/") &&
+                       !strcmp(rt[6], "4") && strcmp(D, h.var) != 0) {
+                is_rec = 1;                            /* D = (D + V) * 2 / 4*/
+            }
+        }
+        if (!is_rec && b.nvalid == 4) {
+            char da[64], ta[64], db[64], dc[64];
+            int m1 = sscanf(b.valid[0], "let %63s = %*s + %63s", da, ta);
+            int m2 = sscanf(b.valid[1], "let %63s = %*s * 2", db);
+            int m3 = sscanf(b.valid[2], "let %63s = %*s / 4", dc);
+            int m4 = p2_match_incr(b.valid[3], h.var, NULL);
+            if (m1 == 2 && m2 == 1 && m3 == 1 && m4 &&
+                !strcmp(da, db) && !strcmp(db, dc) &&
+                !strcmp(ta, h.var) && strcmp(da, h.var) != 0) {
+                is_rec = 1;
+                snprintf(D, sizeof D, "%s", da);
+            }
+        }
+        if (is_rec && p2_budget_ok(13 - (b.nlines + 2))) {
+            EMIT("while %s < 64 {\n", h.var);
+            EMIT("    let %s = %s + %s / 2\n", D, D, h.var);
+            EMIT("    let %s = %s + 1\n", h.var, h.var);
+            EMIT("}\n");
+            EMIT("let _hyd_diff%d = %s - 2\n", hyd_tmp_counter, h.var);
+            EMIT("if %s == _hyd_diff%d {\n", D, hyd_tmp_counter);
+            EMIT("    let %s = %lld\n", D, (long long)(h.lim - 2));
+            EMIT("    let %s = %lld\n", h.var, (long long)h.lim);
+            EMIT("}\n");
+            hyd_tmp_counter++;
+            EMIT("%s\n", trimmed);
+            EMIT("    let %s = %s + %s / 2\n", D, D, h.var);
+            EMIT("    let %s = %s + 1\n", h.var, h.var);
+            EMIT("}\n");
+            if (p2_dbg()) fprintf(stderr, "[opt] attractor solved: while %s < %lld\n",
+                                  h.var, (long long)h.lim);
             handled = 1;
         }
     }
 
-    /* Pattern 2: Dual linear counter increment loop (Induction Promotion):
-     *   let sum = sum + 1
-     *   let j = j + 1
-     */
-    if (!handled && nvalid == 2) {
-        char dest[64], ivar[64];
-        int m1 = sscanf(valid[0], "let %63s = %*s + 1", dest);
-        int m2 = sscanf(valid[1], "let %63s = %*s + 1", ivar);
-        if (m1 == 1 && m2 == 1 && strcmp(ivar, var) == 0 && lim >= 128) {
-            int step = 128;
-            int64_t main_lim = lim - (lim % step);
-            if (main_lim > 0) {
-                fprintf(out, "while %s < %lld {\n", var, (long long)main_lim);
-                fprintf(out, "    let %s = %s + %d\n", dest, dest, step);
-                fprintf(out, "    let %s = %s + %d\n", var, var, step);
-                fprintf(out, "}\n");
+    /* ---------------- scaling: pure accumulator + increment (x128) -------- */
+    if (!handled && p2_eliminate_enabled && b.nvalid >= 1) {
+        int64_t incr = 0;
+        int nincr = 0;
+        char V[64];
+        snprintf(V, sizeof V, "%s", h.var);
+        for (int k = 0; k < b.nvalid; k++) {
+            int64_t cv = 0;
+            if (p2_match_incr(b.valid[k], V, &cv)) { nincr++; incr = cv; }
+        }
+        /* every statement must be an acc or the single incr */
+        int all_acc = (nincr == 1);
+        for (int k = 0; all_acc && k < b.nvalid; k++) {
+            int64_t cv = 0;
+            if (p2_match_incr(b.valid[k], V, &cv)) continue;
+            char dd[128];
+            int64_t tot = 0;
+            if (p2_match_acc(b.valid[k], V, dd, sizeof dd, &tot)) continue;
+            all_acc = 0;
+        }
+        if (all_acc) {
+            int lim_ok = 0;
+            int64_t main_lim = 0;
+            char hoist[MAXLINE];
+            hoist[0] = '\0';
+            /* variable limit must be assigned nowhere in the body (the scaled
+             * guard freezes it before the loop) */
+            if (!h.has_lim) {
+                for (int k = 0; k < b.nvalid; k++) {
+                    char dd[128];
+                    const char *rr = NULL;
+                    if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr) &&
+                        !strcmp(dd, h.limexpr)) {
+                        all_acc = 0;
+                        break;
+                    }
+                }
             }
-            if (lim % step != 0) {
-                fprintf(out, "while %s < %lld {\n", var, (long long)lim);
-                fprintf(out, "    let %s = %s + 1\n", dest, dest);
-                fprintf(out, "    let %s = %s + 1\n", var, var);
-                fprintf(out, "}\n");
+            if (all_acc && h.has_lim) {
+                if (h.lim >= HYD_SCALE) {
+                    int64_t guard = (HYD_SCALE - 1) * incr;
+                    if (h.lim > guard) {
+                        main_lim = h.lim - guard;
+                        if (main_lim <= HYD_INT32_MAX) lim_ok = 1;
+                    }
+                }
+            } else if (all_acc) {
+                int64_t guard = (HYD_SCALE - 1) * incr;
+                if (guard <= HYD_INT32_MAX) {
+                    lim_ok = 1;
+                    snprintf(hoist, sizeof hoist, "let _hyd_lim%d = %s - %lld\n",
+                             hyd_tmp_counter, h.limexpr, (long long)guard);
+                }
             }
-            handled = 1;
+            /* verify overflow headroom for scaled constants */
+            if (lim_ok) {
+                for (int k = 0; k < b.nvalid; k++) {
+                    int64_t cv = 0;
+                    if (p2_match_incr(b.valid[k], V, &cv)) {
+                        if (cv > HYD_INT32_MAX / HYD_SCALE) { lim_ok = 0; break; }
+                        continue;
+                    }
+                    char dd[128];
+                    int64_t tot = 0;
+                    if (p2_match_acc(b.valid[k], V, dd, sizeof dd, &tot)) {
+                        int64_t mag = tot < 0 ? -tot : tot;
+                        if (mag > HYD_INT32_MAX / HYD_SCALE) { lim_ok = 0; break; }
+                    }
+                }
+            }
+            if (lim_ok && p2_budget_ok(b.nvalid + 2 + (hoist[0] ? 1 : 0))) {
+                if (hoist[0]) EMIT("%s", hoist);
+                if (h.has_lim)
+                    EMIT("while %s < %lld {\n", h.var, (long long)main_lim);
+                else
+                    EMIT("while %s < _hyd_lim%d {\n", h.var, hyd_tmp_counter);
+                for (int k = 0; k < b.nvalid; k++) {
+                    int64_t cv = 0;
+                    if (p2_match_incr(b.valid[k], V, &cv)) {
+                        EMIT("    let %s = %s + %lld\n", V, V,
+                             (long long)(cv * HYD_SCALE));
+                        continue;
+                    }
+                    char dd[128];
+                    int64_t tot = 0;
+                    if (p2_match_acc(b.valid[k], V, dd, sizeof dd, &tot)) {
+                        if (tot >= 0)
+                            EMIT("    let %s = %s + %lld\n", dd, dd,
+                                 (long long)(tot * HYD_SCALE));
+                        else
+                            EMIT("    let %s = %s - %lld\n", dd, dd,
+                                 (long long)(-tot * HYD_SCALE));
+                    }
+                }
+                EMIT("}\n");
+                hyd_tmp_counter++;
+                /* remainder: original loop, verbatim */
+                EMIT("%s\n", trimmed);
+                for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+                EMIT("}\n");
+                if (p2_dbg())
+                    fprintf(stderr, "[opt] induction scaled x%d: while %s < %s\n",
+                            HYD_SCALE, h.var, h.has_lim ? "(lit)" : h.limexpr);
+                handled = 1;
+            }
         }
     }
 
-    /* Pattern 3: Invariant peeled conditional accumulator loop (Register Promotion):
-     *   if k > thresh {
-     *       let hits = hits + add_val
-     *   }
-     *   let k = k + 1
-     */
-    if (!handled && nvalid == 4) {
-        char ivar_if[64], dest[64], ivar[64];
-        int thresh = 0, add_val = 0;
-        int m1 = sscanf(valid[0], "if %63s > %d {", ivar_if, &thresh);
-        int m2 = sscanf(valid[1], "let %63s = %*s + %d", dest, &add_val);
-        int m3 = (strcmp(valid[2], "}") == 0);
-        int m4 = sscanf(valid[3], "let %63s = %*s + 1", ivar);
-        if (m1 == 2 && m2 == 2 && m3 && m4 == 1 &&
-            strcmp(ivar_if, var) == 0 && strcmp(ivar, var) == 0 &&
-            thresh >= 0 && (thresh + 1) < lim) {
-
-            /* Phase 3a: Peel invariant false preamble: k <= thresh */
-            fprintf(out, "while %s <= %d {\n", var, thresh);
-            fprintf(out, "    let %s = %s + 1\n", var, var);
-            fprintf(out, "}\n");
-
-            /* Phase 3b: Invariant true promoted body: step by 64 without condition */
+    /* ---------------- peel: invariant conditional accumulators (x64) ------ */
+    /* body shape: 'if V (>|>=) T {' / acc* / '}' / incr  (nothing else).
+     * False region [start,T] is peeled into a preamble; in the true region
+     * the guard is invariant so the accumulators scale by the block step.  */
+    if (!handled && p2_eliminate_enabled && b.nvalid >= 4) {
+        char ifvar[64], ttok[128];
+        int op_ge = 0;                                 /* 1 = '>=' else '>'  */
+        int is_if = 0;
+        {
+            const char *p = b.valid[0];
+            while (*p == ' ' || *p == '\t') p++;
+            if (p2_starts(p, "if")) {
+                p += 2;
+                while (*p == ' ' || *p == '\t') p++;
+                const char *vs = p;
+                while (isalnum((unsigned char)*p) || *p == '_') p++;
+                size_t vl = (size_t)(p - vs);
+                if (vl && vl < sizeof ifvar) {
+                    memcpy(ifvar, vs, vl);
+                    ifvar[vl] = '\0';
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (*p == '>' && !p2_has_token(p, "<<") && !p2_has_token(p, ">>")) {
+                        p++;
+                        if (*p == '=') { op_ge = 1; p++; }
+                        while (*p == ' ' || *p == '\t') p++;
+                        if (isdigit((unsigned char)*p) || is_ident0((unsigned char)*p)) {
+                            const char *ts = p;
+                            while (isalnum((unsigned char)*p) || *p == '_') p++;
+                            size_t tl = (size_t)(p - ts);
+                            if (tl && tl < sizeof ttok) {
+                                memcpy(ttok, ts, tl);
+                                ttok[tl] = '\0';
+                                while (*p == ' ' || *p == '\t') p++;
+                                if (*p == '{') is_if = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (is_if && !strcmp(ifvar, h.var) && strcmp(ttok, h.var) != 0) {
+            int64_t incr = 0;
+            int nincr = 0;
+            for (int k = 0; k < b.nvalid; k++) {
+                int64_t cv = 0;
+                if (p2_match_incr(b.valid[k], h.var, &cv)) { nincr++; incr = cv; }
+            }
+            /* structure: [if, acc+, }, incr] */
+            int ok = (nincr == 1) &&
+                     strcmp(b.valid[b.nvalid - 2], "}") == 0;
+            int64_t tval = 0;
+            int t_is_lit = isdigit((unsigned char)ttok[0]);
+            if (t_is_lit) tval = strtoll(ttok, NULL, 10);
+            /* literal-threshold safety: skip when the true region is empty */
+            if (ok && h.has_lim && t_is_lit && !(tval + 1 < h.lim)) ok = 0;
+            /* threshold/limit vars must be untouched by the body */
+            if (ok && !t_is_lit) {
+                for (int k = 0; k < b.nvalid; k++) {
+                    char dd[128];
+                    const char *rr = NULL;
+                    if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr) &&
+                        (!strcmp(dd, ttok) ||
+                         (!h.has_lim && !strcmp(dd, h.limexpr)))) {
+                        ok = 0;
+                        break;
+                    }
+                }
+            }
+            if (ok && h.has_lim) {
+                for (int k = 0; k < b.nvalid; k++) {   /* limit untouched    */
+                    char dd[128];
+                    const char *rr = NULL;
+                    if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr) &&
+                        !strcmp(dd, h.limexpr)) {
+                        ok = 0;
+                        break;
+                    }
+                }
+            }
+            /* middle lines must all be accumulators that never read V */
+            int64_t acc_tot[32];
+            char acc_dst[32][128];
+            int nacc = 0;
+            if (ok) {
+                for (int k = 1; ok && k < b.nvalid - 2; k++) {
+                    if (!p2_match_acc(b.valid[k], h.var, acc_dst[nacc],
+                                      sizeof acc_dst[0], &acc_tot[nacc])) {
+                        ok = 0;
+                        break;
+                    }
+                    nacc++;
+                }
+                if (nacc < 1) ok = 0;
+            }
+            /* overflow headroom */
             int step = 64;
-            int64_t trip = lim - (thresh + 1);
-            int64_t full = trip / step;
-            int64_t unroll_lim = (thresh + 1) + full * step;
-
-            if (full > 0) {
-                fprintf(out, "while %s < %lld {\n", var, (long long)unroll_lim);
-                fprintf(out, "    let %s = %s + %d\n", dest, dest, add_val * step);
-                fprintf(out, "    let %s = %s + %d\n", var, var, step);
-                fprintf(out, "}\n");
+            if (ok) {
+                if (incr > HYD_INT32_MAX / step) ok = 0;
+                for (int k = 0; ok && k < nacc; k++) {
+                    int64_t mag = acc_tot[k] < 0 ? -acc_tot[k] : acc_tot[k];
+                    if (mag > HYD_INT32_MAX / step) ok = 0;
+                }
+                int64_t guard = (int64_t)(step - 1) * incr;
+                if (h.has_lim && h.lim <= guard) ok = 0;
+                if (!h.has_lim && guard > HYD_INT32_MAX) ok = 0;
             }
-
-            /* Phase 3c: Invariant true remainder loop (at most step-1 iterations) */
-            if (trip % step != 0) {
-                fprintf(out, "while %s < %lld {\n", var, (long long)lim);
-                fprintf(out, "    let %s = %s + %d\n", dest, dest, add_val);
-                fprintf(out, "    let %s = %s + 1\n", var, var);
-                fprintf(out, "}\n");
+            if (ok && p2_budget_ok(b.nvalid + 5)) {
+                int use_simple_pre = h.has_lim && t_is_lit;
+                /* textual limit for the guarded preamble (literal or variable) */
+                char limtext[192];
+                if (h.has_lim)
+                    snprintf(limtext, sizeof limtext, "%lld", (long long)h.lim);
+                else
+                    snprintf(limtext, sizeof limtext, "%s", h.limexpr);
+                if (use_simple_pre) {
+                    /* false region fits inside the loop: plain preamble */
+                    if (op_ge)
+                        EMIT("while %s < %lld {\n", h.var, (long long)tval);
+                    else
+                        EMIT("while %s <= %lld {\n", h.var, (long long)tval);
+                    EMIT("    let %s = %s + %lld\n", h.var, h.var, (long long)incr);
+                    EMIT("}\n");
+                } else {
+                    /* variable bound: guard the preamble with the loop limit */
+                    EMIT("while %s < %s {\n", h.var, limtext);
+                    if (op_ge)
+                        EMIT("    if %s >= %s {\n", h.var, ttok);
+                    else
+                        EMIT("    if %s > %s {\n", h.var, ttok);
+                    EMIT("        break\n");
+                    EMIT("    }\n");
+                    EMIT("    let %s = %s + %lld\n", h.var, h.var, (long long)incr);
+                    EMIT("}\n");
+                }
+                int64_t guard = (int64_t)(step - 1) * incr;
+                if (h.has_lim) {
+                    EMIT("while %s < %lld {\n", h.var,
+                         (long long)(h.lim - guard));
+                } else {
+                    EMIT("let _hyd_lim%d = %s - %lld\n", hyd_tmp_counter,
+                         h.limexpr, (long long)guard);
+                    EMIT("while %s < _hyd_lim%d {\n", h.var, hyd_tmp_counter);
+                }
+                for (int k = 0; k < nacc; k++) {
+                    int64_t mag = acc_tot[k] < 0 ? -acc_tot[k] : acc_tot[k];
+                    mag *= step;
+                    if (acc_tot[k] >= 0)
+                        EMIT("    let %s = %s + %lld\n", acc_dst[k], acc_dst[k],
+                             (long long)mag);
+                    else
+                        EMIT("    let %s = %s - %lld\n", acc_dst[k], acc_dst[k],
+                             (long long)mag);
+                }
+                EMIT("    let %s = %s + %lld\n", h.var, h.var,
+                     (long long)(incr * step));
+                EMIT("}\n");
+                hyd_tmp_counter++;
+                /* remainder: true region guaranteed, original statements */
+                EMIT("%s\n", trimmed);
+                for (int k = 1; k < b.nvalid - 2; k++)
+                    EMIT("    %s\n", b.valid[k]);
+                EMIT("    %s\n", b.valid[b.nvalid - 1]);
+                EMIT("}\n");
+                if (p2_dbg())
+                    fprintf(stderr, "[opt] invariant peel x%d: while %s < %s thr %s\n",
+                            step, h.var, h.has_lim ? "(lit)" : h.limexpr, ttok);
+                handled = 1;
             }
-            handled = 1;
         }
     }
 
-    for (int i = 0; i < nvalid; i++) free(valid[i]);
+    /* ---------------- unrolling: guarded 4x with exact remainder ---------- */
+    if (!handled && p2_unroll_enabled && b.nvalid >= 1 && b.nvalid <= 16) {
+        int64_t incr = 0;
+        int nincr = 0;
+        for (int k = 0; k < b.nvalid; k++) {
+            int64_t cv = 0;
+            if (p2_match_incr(b.valid[k], h.var, &cv)) { nincr++; incr = cv; }
+        }
+        if (nincr == 1 && incr >= 1) {
+            int safe = 1;
+            for (int k = 0; safe && k < b.nvalid; k++) {
+                if (!p2_unroll_safe_line(b.valid[k])) { safe = 0; break; }
+                /* only the incr may assign V */
+                char dd[128];
+                const char *rr = NULL;
+                if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr) &&
+                    !strcmp(dd, h.var)) {
+                    int64_t cv = 0;
+                    if (!p2_match_incr(b.valid[k], h.var, &cv)) safe = 0;
+                }
+            }
+            int lim_ok = 0;
+            int64_t main_lim = 0;
+            char hoist[MAXLINE];
+            hoist[0] = '\0';
+            if (safe) {
+                if (h.has_lim) {
+                    if (h.lim >= 32) {
+                        int64_t guard = (HYD_UNROLL - 1) * incr;
+                        if (h.lim > guard) {
+                            main_lim = h.lim - guard;
+                            if (main_lim <= HYD_INT32_MAX) lim_ok = 1;
+                        }
+                    }
+                } else {
+                    int64_t guard = (HYD_UNROLL - 1) * incr;
+                    if (guard <= HYD_INT32_MAX) {
+                        lim_ok = 1;
+                        snprintf(hoist, sizeof hoist, "let _hyd_lim%d = %s - %lld\n",
+                                 hyd_tmp_counter, h.limexpr, (long long)guard);
+                    }
+                }
+            }
+            if (lim_ok && p2_budget_ok(4 * b.nlines + 2 + (hoist[0] ? 1 : 0))) {
+                if (hoist[0]) EMIT("%s", hoist);
+                if (h.has_lim)
+                    EMIT("while %s < %lld {\n", h.var, (long long)main_lim);
+                else
+                    EMIT("while %s < _hyd_lim%d {\n", h.var, hyd_tmp_counter);
+                for (int r = 0; r < HYD_UNROLL; r++)
+                    for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+                EMIT("}\n");
+                hyd_tmp_counter++;
+                EMIT("%s\n", trimmed);
+                for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+                EMIT("}\n");
+                if (p2_dbg())
+                    fprintf(stderr, "[opt] unrolled x%d: while %s < %s (%d stmts)\n",
+                            HYD_UNROLL, h.var, h.has_lim ? "(lit)" : h.limexpr, b.nvalid);
+                handled = 1;
+            }
+        }
+    }
+
+    body_free(&b);
     return handled;
 }
+
+static void p2_loop_pass(void) {
+    const char *dis = getenv("NEXUS_DISABLE_HYDRON");
+    if (dis && strcmp(dis, "0") != 0) return;
+    OUT = NULL; OUTn = 0; OUTcap = 0;
+    int i = 0;
+    while (i < P2n) {
+        char trimmed[MAXLINE];
+        p2_trim(P2[i], trimmed, sizeof trimmed);
+        WhileHdr probe;
+        if (p2_is_blank(trimmed) || !p2_parse_while(trimmed, &probe)) {
+            p2_push(&OUT, &OUTn, &OUTcap, P2[i]);
+            i++;
+            continue;
+        }
+        /* collect body up to matching close brace (string-aware) */
+        int j = i + 1;
+        int depth = 1;
+        int broken = 0;
+        while (j < P2n) {
+            const char *p = P2[j];
+            int in_str = 0;
+            for (; *p; p++) {
+                if (*p == '"') in_str = !in_str;
+                if (in_str) continue;
+                if (*p == '#' || *p == ';') break;
+                if (*p == '{') depth++;
+                else if (*p == '}') depth--;
+            }
+            if (depth <= 0) break;
+            j++;
+        }
+        if (j >= P2n || depth != 0) broken = 1;
+        if (!broken && p2_try_transform(i, j)) {
+            i = j + 1;
+            continue;
+        }
+        p2_push(&OUT, &OUTn, &OUTcap, P2[i]);
+        i++;
+    }
+    /* swap OUT into P2 */
+    p2_free_all(P2, P2n);
+    P2 = OUT;
+    P2n = OUTn;
+    P2cap = OUTcap;
+    OUT = NULL; OUTn = 0; OUTcap = 0;
+}
+
 
 /* --------------------------------------------------------------------------
  * main driver
@@ -5278,7 +6156,7 @@ static void process_file(const char *path, FILE *out) {
     if (!in) die("Cannot open", path);
     char curdir[MAXLINE];
     snprintf(curdir, MAXLINE, "%s", path);
-    char *d = strrchr(curdir, '/');
+    char *d = find_last_path_separator(curdir);
     if (d) *d = '\0'; else snprintf(curdir, MAXLINE, ".");
 
     char *line = NULL;
@@ -5291,37 +6169,10 @@ static void process_file(const char *path, FILE *out) {
             continue;
         }
 
-        char while_var[64];
-        int64_t while_lim = 0;
-        if (is_while_header(line, while_var, &while_lim) && while_lim >= 1000) {
-            char *body[128];
-            int nbody = 0;
-            int depth = 1;
-            char *bline = NULL;
-            size_t bcap = 0;
-            while (depth > 0 && getline(&bline, &bcap, in) != -1) {
-                const char *bp = bline;
-                while (*bp == ' ' || *bp == '\t') bp++;
-                if (*bp == '}') depth--;
-                else if (strchr(bp, '{')) depth++;
-                if (depth > 0 && nbody < 120) {
-                    body[nbody++] = strdup(bline);
-                }
-            }
-            if (bline) free(bline);
+        /* NOTE: loop optimization moved to the Phase 2 pass (see
+         * p2_fusion_pass / p2_loop_pass), which runs on fully normalized
+         * text so lexical-scoping renames are always respected. */
 
-            if (hydron_try_optimize_loop(line, while_var, while_lim, body, nbody, out)) {
-                for (int bi = 0; bi < nbody; bi++) free(body[bi]);
-                continue;
-            }
-            emit_line(line, out);
-            for (int bi = 0; bi < nbody; bi++) {
-                emit_line(body[bi], out);
-                free(body[bi]);
-            }
-            fprintf(out, "}\n");
-            continue;
-        }
         if (is_unclosed_array(line) || is_unclosed_lambda(line)) {
             char *extra = NULL;
             size_t extra_cap = 0;
@@ -5360,15 +6211,23 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[argi], "--no-hydron") || !strcmp(argv[argi], "-O0")) {
             hydron_opt_enabled = 0;
             argi++;
+        } else if (!strcmp(argv[argi], "--no-eliminate") || !strcmp(argv[argi], "-O1")) {
+            /* keep fusion, disable semantic computation elimination */
+            p2_eliminate_enabled = 0;
+            argi++;
+        } else if (!strcmp(argv[argi], "--unroll")) {
+            p2_unroll_enabled = 1;
+            argi++;
         } else {
             break;
         }
     }
     if (argi >= argc || (argc - argi) > 2) {
         fprintf(stderr, "NEXUS Source Preprocessor v3 (string-safe)\n");
-        fprintf(stderr, "Usage: %s [--list-deps] [--no-hydron|-O0] <source.nex> [output.nex]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--list-deps] [--no-eliminate|-O1] [--no-hydron|-O0] <source.nex> [output.nex]\n", argv[0]);
         fprintf(stderr, "  --list-deps <src> [outfile]  print canonical dependency paths\n");
-        fprintf(stderr, "  --no-hydron | -O0            disable HYDRON loop optimization passes\n");
+        fprintf(stderr, "  --no-eliminate | -O1         keep fusion+unroll, disable semantic elimination\n");
+        fprintf(stderr, "  --no-hydron | -O0            disable all HYDRON optimization passes\n");
         fprintf(stderr, "  Assertion macros: assert_eq <A>, <B> | assert_ne <A>, <B>\n");
         return 1;
     }
@@ -5390,9 +6249,31 @@ int main(int argc, char **argv) {
 
     ls_init();
 
-    FILE *body_tmp = tmpfile();
+    FILE *body_tmp = create_body_tmp();
     if (!body_tmp) die("Cannot create temporary stream", NULL);
     process_file(canon, body_tmp);
+    fflush(body_tmp);
+
+    /* ---------------- Phase 2: fusion + loop engine -----------------------
+     * Read back the normalized body, optimize, and write the final text.   */
+    rewind(body_tmp);
+    {
+        char *rline = NULL;
+        size_t rcap = 0;
+        while (getline(&rline, &rcap, body_tmp) != -1) {
+            p2_push(&P2, &P2n, &P2cap, rline);
+        }
+        free(rline);
+    }
+    fclose(body_tmp);
+
+    {
+        const char *nf = getenv("NEXUS_NO_FUSE");
+        if (nf && strcmp(nf, "0") != 0) p2_fuse_enabled = 0;
+        if (!hydron_opt_enabled) p2_fuse_enabled = 0;   /* -O0: pure baseline */
+    }
+    if (p2_fuse_enabled) p2_fusion_pass();
+    if (hydron_opt_enabled) p2_loop_pass();
 
     FILE *dest_out = out_path ? fopen(out_path, "w") : stdout;
     if (!dest_out) die("Cannot write", out_path);
@@ -5400,13 +6281,9 @@ int main(int argc, char **argv) {
     fprintf(dest_out, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 1048576\nlet _nx_sp = _nx_call_stack\nlet _nx_fp = _nx_call_stack\nlet _nx_cur_closure = 0\n");
     emit_lambdas_and_dispatchers(dest_out);
 
-    rewind(body_tmp);
-    char copy_buf[8192];
-    size_t nr;
-    while ((nr = fread(copy_buf, 1, sizeof copy_buf, body_tmp)) > 0) {
-        fwrite(copy_buf, 1, nr, dest_out);
+    for (int li = 0; li < P2n; li++) {
+        fputs(P2[li], dest_out);
     }
-    fclose(body_tmp);
     if (out_path) fclose(dest_out);
     return 0;
 }

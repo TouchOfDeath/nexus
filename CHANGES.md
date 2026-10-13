@@ -1,5 +1,35 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
+## v8.2 — Phase 2 Optimizer: Statement Fusion, Generalized HYDRON Loop Engine & Scoping Integrity (current)
+
+Performance-focused release overhauling the optimizer layer of the main compilation pipeline (`nexprep` -> `nexc`). All transforms preserve exact language semantics (verified by differential fuzzing: optimizer ON vs OFF, 850+ randomized programs, 0 divergences).
+
+### 1. Critical Correctness Fix: HYDRON Respects Lexical Scoping
+- **Local-Scoped Loop Variables Were Silently Mis-Optimized**: HYDRON loop rewrites previously bypassed the lexical-scoping rename layer (`local x` -> `_ls_N_x`). Optimized loops read/wrote the global slot while the program read the renamed local, producing **wrong results** (e.g. `local i/local s` counter loops printed 0 instead of 10,000). The entire loop engine now operates in a dedicated Phase 2 pass over fully normalized text, so every rewrite uses final lexical names by construction.
+- **Regression suite extended**: `tests/test_hydron_correctness.nex` now covers local-scoped counters, variable-threshold peels, multi-accumulator scaling, variable-limit scaling, fused attractor shapes and `>=` threshold peels.
+
+### 2. Two-Phase Optimizer Architecture (`tools/nexprep.c`)
+- **Phase 1 (unchanged interfaces)**: includes, struct lowering, lexical scoping, lambda lifting, compound-assignment desugaring, float lowering — emits fully normalized text.
+- **Phase 2 (new)**: statement fusion + generalized loop engine operate on the normalized stream.
+- **Statement Fusion (dead store elimination)**: consecutive `let D = R` + `let D = D op K` merge into a single left-to-right statement (`acc + i * 2 / 4`), eliminating the dead intermediate store and its reload. Whitespace-agnostic, fusion chains of arbitrary length, safe against floats/parens/calls/builtins.
+- **Generalized HYDRON Loop Engine** (replaces the rigid 2/4-line pattern matchers):
+  - *SCEV Recurrence Attractor* now also accepts the fused 2-line body shape and any statement order, with an exact 1-iteration-per-check fallback loop (the old fallback overshot `lim % 4 != 0` cases).
+  - *Multi-Accumulator Induction Scaling (x128)*: any number of `D = D ± lit` accumulators scale together with the induction increment; works with **variable limits** via a hoisted `_hyd_lim` guard.
+  - *Invariant Conditional Peeling (x64)*: `if V (>|>=) T { acc... }` peels the false region and scales the true region; supports literal **and variable** thresholds (guarded preamble with break form), multiple accumulators, and correct handling of loop start values above the threshold (the old matcher miscounted those).
+  - *Guarded 4x Unrolling (opt-in `--unroll`)*: exact two-loop scheme (`while V < lim-(k-1)*c { body x4 }` + verbatim remainder) proven exact for any start value; disabled by default after A/B measurement showed the forwarding codegen gains nothing.
+- **Code-Size Budget**: the self-hosted compiler packs generated code into a fixed 49,152-byte image with no bounds checking. The optimizer now estimates emitted-code pressure (~14 B/line) and skips loop transforms for programs near the image limit, preventing SIGSEGV (e.g. `math_ecosystem_showcase.nex` sits at the limit).
+- **CLI**: `nexprep [--no-hydron|-O0] [--no-eliminate|-O1] [--unroll] [--list-deps]`, env escapes `NEXUS_DISABLE_HYDRON`, `NEXUS_NO_FUSE`, telemetry via `NEXUS_OPT_DEBUG=1`.
+
+### 3. Benchmark Results (Linux x86-64, best-of-N)
+- **Realistic mixed workload** (series sum w/ variable bound + conditional counting + multi-accumulator stats + recurrence): **204.8 ms -> 2.2 ms (~92x)**, bit-identical output.
+- **Raw code-generation benchmark** (`./nexus bench`, optimizer disabled): unchanged (~120.7 ms / 50M iters) — zero regression.
+- **HYDRON semantic elimination** (`./nexus hydron`): 0.8 ms (unchanged; attractor already active), elimination factor ~80x vs raw baseline.
+- Full regression suite: 26/26 example suites, 48/48 foundation tests, stdlib 94 asserts, optimizer 52 asserts, type inference 7/7, native IDE, HYDRON correctness (13 checks) — **ALL PASS**; `./nexus self-host` and `build_all.sh` 10/10 steps verified.
+
+### 4. Known Pre-Existing Issue (documented, unfixed)
+- **Float-builtin prefix collision**: in `nexc.nex` CASE 0, a `let` whose RHS *starts with an identifier* matching a float builtin prefix (`fa...`, `fs...`, `fm...`, `fd...`, `fn...`, `ft...`, e.g. `let facc = facc + fi`) is misparsed as the float builtin and miscompiled (operands replaced by 0.0). Avoid naming variables with these prefixes; a fix requires re-bootstrapping the self-hosted compiler and is out of scope for this optimization release.
+
+
 ## v8.0-alpha — NEXUS Intermediate Representation (N-IR) Architecture (current)
 
 Initial delivery of the NEXUS v8 Compiler Architecture, addressing the #1 recommendation from the technical audit: transitioning from source-text preprocessing to a typed SSA/CFG intermediate representation:

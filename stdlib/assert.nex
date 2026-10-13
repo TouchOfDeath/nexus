@@ -26,12 +26,13 @@
 # ------------------------------------------------------------------------------
 # fn nx_assert_summary : prints the ASSERTIONS summary line
 # ------------------------------------------------------------------------------
+let _as_buf = alloc 96
+let _as_buf2 = alloc 96
+let _as_tmp = alloc 24
+
 fn nx_assert_summary {
     let _as_p = nx_assert_passes
     let _as_f = nx_assert_fails
-    let _as_buf = alloc 96
-    let _as_buf2 = alloc 96
-    let _as_tmp = alloc 24
     let nx_i0 = "ASSERTIONS: "
     let nx_i1 = _as_buf
     call nx_str_copy

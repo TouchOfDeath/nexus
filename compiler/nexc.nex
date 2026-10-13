@@ -1440,8 +1440,16 @@ while r == 1 {
                         let k = i + 1
                         let n = load [s + k]
                         if n == 116 {
-                            let g = 17
-                            let is_f_dest = 1
+                            let k = i + 2
+                            let n = load [s + k]
+                            if n == 111 {
+                                let k = i + 3
+                                let n = load [s + k]
+                                if n == 102 {
+                                    let g = 17
+                                    let is_f_dest = 1
+                                }
+                            }
                         }
                     }
                     if c == 97 {
@@ -1702,6 +1710,35 @@ while r == 1 {
                         let v = 4
                         call emit_d
 
+                        # push rbx (53)
+                        let b = 83
+                        call emit_b
+                        # mov rbx, rsp (48 89 E3)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 227
+                        call emit_b
+                        # sub rsp, 32 (48 83 EC 20)
+                        let b = 72
+                        call emit_b
+                        let b = 131
+                        call emit_b
+                        let b = 236
+                        call emit_b
+                        let b = 32
+                        call emit_b
+                        # and rsp, -16 (48 83 E4 F0)
+                        let b = 72
+                        call emit_b
+                        let b = 131
+                        call emit_b
+                        let b = 228
+                        call emit_b
+                        let b = 240
+                        call emit_b
+
                         # call VirtualAlloc (FF 15 <disp32>) -> disp = 45636 - p
                         let b = 255
                         call emit_b
@@ -1709,6 +1746,17 @@ while r == 1 {
                         call emit_b
                         let v = 45636 - p
                         call emit_d
+
+                        # mov rsp, rbx (48 89 DC)
+                        let b = 72
+                        call emit_b
+                        let b = 137
+                        call emit_b
+                        let b = 220
+                        call emit_b
+                        # pop rbx (5B)
+                        let b = 91
+                        call emit_b
                     }
 
                     # --- CASE 2: 'load [<ptr> + <idx>]' ---

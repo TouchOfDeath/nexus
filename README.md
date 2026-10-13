@@ -106,7 +106,7 @@ nexus_project/
 
 ## ⚡ Quick Start
 
-### Build and Run with `./nexus`
+### Build and Run with `./nexus` (Linux & macOS)
 
 ```bash
 # 1. Run any NEXUS program (compiles to ELF64 and executes directly on Linux kernel)
@@ -138,6 +138,37 @@ nexus_project/
 
 # 9. Start the interactive REPL
 ./nexus repl
+```
+
+### Build and Run on Windows (`nexus.cmd` / `nexus.ps1`)
+
+NEXUS includes full first-class native Windows support with **zero external dependencies** (no Visual Studio, C++ SDK, Python, or Linux/WSL required):
+
+```powershell
+# 1. Run any NEXUS program natively on Windows
+nexus run examples\rocket_physics.nex
+nexus run examples\fibonacci.nex
+
+# 2. Compile to a standalone native Windows executable
+nexus build examples\fibonacci.nex -o fib.exe
+.\fib.exe
+
+# 3. Run the automated compiler test harness
+nexus test
+
+# 4. Benchmark native performance and HYDRON optimization
+nexus bench
+nexus hydron
+
+# 5. Inspect and disassemble native Windows binaries
+nexus dump compiler\nexc.exe
+nexus disasm compiler\nexc.exe -n 25
+
+# 6. Verify Stage 5 Bit-for-Bit Self-Hosting Parity (Gen1 == Gen2 bitwise)
+nexus self-host
+
+# 7. Execute the full master build & verification pipeline
+.\build_all.ps1
 ```
 
 ---
