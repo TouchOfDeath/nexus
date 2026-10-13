@@ -1,43 +1,70 @@
 # NEXUS Project State & Memory Log
 
 > **Last Updated**: 2026-10-13  
-> **Current Version**: v8.2 — Phase 2 Optimizer (Fusion + Generalized HYDRON)  
+> **Current Version**: v8.2+ — Phase 1 String Escapes & Phase 2 Optimizer  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
 
-## 0. v8.2 Optimization Release Snapshot (2026-10-13)
-- **Pipeline**: `nexprep` now runs a two-phase optimizer: Phase 1 normalization (unchanged) + Phase 2 statement fusion & generalized HYDRON loop engine (attractor / multi-accumulator induction scaling x128 / invariant conditional peeling x64 / opt-in guarded unrolling x4).
-- **Correctness**: fixed HYDRON bypassing lexical scoping for `local` loop counters (silently wrong results); all rewrites now operate on final lexical names. Differential fuzz (optimizer ON vs OFF): 850+ randomized programs, 0 divergences.
-- **Safety**: code-size budget prevents overflowing the compiler's fixed 49,152-byte output image on buffer-critical programs.
-- **Numbers**: realistic mixed workload 204.8 ms -> 2.2 ms (~92x, bit-identical output); raw bench unchanged (~120.7 ms); HYDRON 0.8 ms; full suite + build_all 10/10 green.
-- **Known pre-existing (unfixed)**: `nexc.nex` misparses `let` RHS identifiers starting with float-builtin prefixes (fa/fs/fm/fd/fn/ft) — see CHANGES.md v8.2 §4.
+## 0. v8.2+ String Escapes & Optimization Release Snapshot (2026-10-13)
+- **Phase 1 String Escapes (COMPLETE)**: Full standard escape sequence decoding (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`, `\e`, `\xHH`) directly emitted into binary `.rdata` by the self-hosted compiler core (`compiler/nexc.nex`).
+  - Preprocessor (`tools/nexprep.c`), ARM64 emitter (`tools/nexarm64.c`), and semantic interpreter (`tools/nexinterp.py`) updated with escape-aware string boundary scanning.
+  - `len "..."` constant folding updated to accurately count decoded byte lengths.
+  - Windows SDK `#undef OUT` compatibility fix applied, enabling seamless cross-compilation with MinGW and MSVC.
+  - Dedicated regression suite created: `tests/test_string_escapes.nex` (PASS).
+- **Phase 2 Loop Optimizer & Scoped Fusion (COMPLETE)**:
+  - Statement fusion: consecutive variable mutations merge into single left-to-right evaluations, eliminating dead intermediate memory stores.
+  - Generalized HYDRON loop engine: multi-accumulator induction scaling (x128), invariant conditional peeling (x64), and SCEV recurrence attractor.
+  - Lexical scoping integrity: all loop transforms operate on resolved lexical scope names (`_ls_`), eliminating variable shadowing bugs.
+  - Code-size budget estimator protects 49,152-byte compiler output image against buffer overflow.
+- **Numbers**:
+  - Raw AOT throughput: **~800.2M physical-iters/sec** (62.48 ms over 50M physical iterations).
+  - HYDRON semantic elimination: **0.40 ms** (~156.7x reduction factor).
+  - Bootstrap: Gen1 == Gen2 == Gen3 bit-for-bit self-hosting convergence (49,152 bytes PE32+, 57,951 bytes ELF64, 0 differences).
 
 ## 1. Current Status & Verification
 - **Full Test Suite Status**: `PASS` (Run with `./nexus test`)
-  - **Suites**: 28 example suites passing (+`recursion_showcase.nex`)
+  - **Suites**: 27 example suites passing (+`recursion_showcase.nex`, `rocket_physics.nex`, etc.)
   - **Compiler Diagnostics**: 13/13 passing
-  - **Foundation Tests**: 48/48 passing (+Unified Float Arithmetic, Float Mixed Promotion, Unified Float Condition, Unified Float While Loop)
+  - **Foundation Tests**: 48/48 passing
   - **Type Inference Suite**: 7/7 categories passing (`tests/test_type_inference.nex`)
   - **Stdlib Assertions**: 94/94 passing
   - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)
   - **Interactive Demos**: 3/3 passing
-  - **New Standard Suites**: 
+  - **Standard Priority Suites**: 
+    - `tests/test_string_escapes.nex`: PASS (Phase 1 escapes: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`, `\e`, `\xHH`)
     - `tests/test_bitwise_ops.nex`: 20/20 PASS (native bitwise `&`, `|`, `^`, `~`, `<<`, `>>`)
     - `tests/test_hex_binary.nex`: 18/18 PASS (native `0x...` hex and `0b...` binary literals)
     - `tests/test_vec.nex`: 11/11 PASS (dynamic growable heap vector)
     - `tests/test_hashmap.nex`: 13/13 PASS (string-keyed linear probing hash map)
     - `tests/test_poll_events.nex`: 13/13 PASS (non-blocking `poll`/`epoll` async event loop)
+    - `tests/test_hydron_correctness.nex`: 13/13 PASS (boundary & scoping verification)
     - `tests/test_hydron_overflow.nex`: 21/21 PASS (64-bit integer overflow & boundary safety)
-- **Determinism**: Gen 1 == Gen 2 == Gen 3 bit-for-bit self-hosting parity verified via `./nexus bootstrap`.
+- **Determinism**: Gen 1 == Gen 2 == Gen 3 bit-for-bit self-hosting parity verified via `./nexus bootstrap` and `./nexus self-host`.
 - **Dual-Benchmark Architecture**:
-  - **Category A: Raw Native AOT Code Generation (`./nexus bench`)**: Measures physical CPU instruction throughput on un-eliminated loops across 50,000,000 physical iterations: **61.46 ms (~813.5M physical-iters/sec)** with 0% libc and direct Linux kernel syscalls.
-  - **Category B: Semantic Computation Elimination (`./nexus hydron`)**: Phase 4 SCEV Recurrence Attractor Solver analyzes non-linear recurrence loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$), executes ~64 convergence steps, verifies fixed-point manifold invariance ($acc == i - 2$) via runtime guard, and derives closed-form result in **0.44–0.53 ms (~120x–140x computation reduction)**.
+  - **Category A: Raw Native AOT Code Generation (`./nexus bench`)**: Measures physical CPU instruction throughput on un-eliminated loops across 50,000,000 physical iterations: **62.48 ms (~800.2M physical-iters/sec)** with 0% libc and direct Linux kernel syscalls.
+  - **Category B: Semantic Computation Elimination (`./nexus hydron`)**: Phase 4 SCEV Recurrence Attractor Solver analyzes non-linear recurrence loops ($acc_{n+1} = \lfloor(acc_n + n) / 2\rfloor$), executes ~64 convergence steps, verifies fixed-point manifold invariance ($acc == i - 2$) via runtime guard, and derives closed-form result in **0.40 ms (~156.7x computation reduction)**.
 - **Scientific Methodology**: Accurately distinguishes raw CPU instruction execution from semantic computation elimination / superoptimization.
 
 ---
 
 ## 2. Recent Milestones Completed
+- **NEXUS v8.2+ — Phase 1 String Escapes (2026-10-13)**:
+  - **Self-Hosted Core Decoding (`compiler/nexc.nex`)**: Implemented `parse_str_lit` subroutine, decoding `\n` (10), `\r` (13), `\t` (9), `\0` (0), `\e` (27), `\"` (34), `\\` (92), and `\xHH` directly into read-only binary `.rdata`.
+  - **Comprehensive Compiler Integration**: Connected `parse_str_lit` across all 5 string parsing sites: `let <dest> = "..."`, `print "..."`, `len "..."`, `file_open`, and `file_create`.
+  - **Lexer Token Collision Guard**: Carefully structured local decoder identifiers to avoid float keyword collisions (`fa`, `fs`, `fm`, `fd`, `fn`, `ft`).
+  - **String Preprocessor & Ecosystem Updates**:
+    - Updated string scanner loops in `tools/nexprep.c` to handle escaped backslashes and quotes without premature boundary toggling.
+    - Updated constant folding in `fold_unary_builtins` for `len "..."` to accurately count decoded byte lengths.
+    - Updated ARM64 instruction emitter (`tools/nexarm64.c`) with `\e` and `\xHH` support in `add_string`.
+    - Updated reference semantic interpreter (`tools/nexinterp.py`) with escape unescaping and block `} else {` execution.
+  - **Tri-Platform Windows & Linux Parity**:
+    - Added `#ifdef OUT / #undef OUT` guard to `tools/nexprep.c` preventing collisions with Windows SDK `<windef.h>`.
+    - Cross-compiled `bin/nexprep.exe` and `bin/nexarm64.exe` using MinGW.
+    - Preserved 100% of Windows toolchain (`tools/tcc`, `nexus.cmd`, `nexus.ps1`, `build_all.ps1`).
+  - **Regression Test Suite**: Created `tests/test_string_escapes.nex` verifying all escapes with `load`, `len`, `print`, and `assert_eq`. Integrated into `./nexus test` (PASS).
+  - **Deterministic Self-Hosting Convergence**: `./nexus bootstrap` and `./nexus self-host` verified bit-for-bit identical across all stages (Gen1 == Gen2 == Gen3, 49,152 bytes PE32+, 57,951 bytes ELF64).
+
 - **NEXUS v8.2 — Native Windows Port & Zero-Dependency Toolchain**:
   - **Zero-Dependency Native Windows Toolchain**: Self-contained toolchain setup using bundled Tiny C Compiler (`tools/tcc/tcc/tcc.exe`, 480 KB) and built-in Windows .NET C# compiler (`csc.exe`), eliminating any requirements for Visual Studio, C++ SDKs, Python, or Linux/WSL.
   - **All 13 Toolchain & Diagnostic Binaries Built as Native Windows EXEs**:

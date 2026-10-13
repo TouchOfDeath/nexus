@@ -20,9 +20,11 @@ NEXUS is a compiled, statically typed systems language with a 100% self-hosted n
 
 ## 2. Variables and Types
 
-### Declarations
+### Declarations and Number Bases
 ```nexus
-let x = 42                 # Standard variable declaration or reassignment
+let x = 42                 # Decimal integer
+let h = 0x2A               # Hexadecimal integer (42)
+let b = 0b101010           # Binary integer (42)
 local y = 100              # Lexical block-scoped local variable (scoped to { ... })
 int count = 0              # Explicit integer alias
 float pi = 3.14159         # Explicit float alias
@@ -33,6 +35,7 @@ x += 1                     # Compound assignment (+=, -=, *=, /=, %=, **=)
 ### Operators
 - **Integer Arithmetic**: `+`, `-`, `*`, `/`, `%`, `**` (power)
 - **Float Arithmetic**: `+.`, `-.`, `*.`, `/.`, `**.`
+- **Bitwise Operations**: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `<<` (SHL), `>>` (SHR) — desugars to `stdlib/bitwise.nex`
 - **Compound**: `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `+=.`, `-=.`
 - **Relational Comparisons**: `==`, `!=`, `<`, `>`, `<=`, `>=`
 
@@ -218,11 +221,19 @@ let dist_sq = p.x * p.x + p.y * p.y
 ---
 
 ## 7. Builtins & I/O
+
+### Printing and String Escapes
+Standard C-style escapes are universally decoded across the compiler, preprocessor, and arm64 emitter:
+- `\n` (newline, 10), `\t` (tab, 9), `\r` (carriage return, 13)
+- `\\` (backslash, 92), `\"` (double quote, 34), `\0` (null, 0)
+- `\e` (escape, 27), `\xHH` (arbitrary hexadecimal byte)
+
 ```nexus
-print "Hello World"             # Print string + newline
+print "Hello World\n"           # Print string + newline
+print "Col1\tCol2\n"            # Formatted tabs
 print 42                        # Print integer + newline
 print_str s                     # Print string pointer without newline
-let s_len = len "NEXUS"         # String length (5)
+let s_len = len "NEXUS\n"       # String length (6 bytes)
 let a = abs -15                 # Absolute value (15)
 
 # Frame pointer introspection
@@ -233,18 +244,77 @@ let parent_fp = frame_parent(fp)
 
 ---
 
-## 8. Assertions & Testing
-```nexus
-include "stdlib/nstdlib.nex"
+## 8. Collections (Standard Library)
 
-let actual = add(20, 22)
-assert_eq actual, 42            # Compares equal
-assert_ne actual, 0             # Compares not equal
+### Dynamic Vectors (`stdlib/vec.nex`)
+```nexus
+include "stdlib/vec.nex"
+
+# Create new vector (capacity 4)
+call nx_vec_new
+let v = nx_r0
+
+# Push elements
+let nx_i0 = v
+let nx_i1 = 42
+call nx_vec_push
+
+# Get element at index
+let nx_i0 = v
+let nx_i1 = 0
+call nx_vec_get
+let item = nx_r0                # 42
+
+# Vector length
+let nx_i0 = v
+call nx_vec_len
+let count = nx_r0               # 1
+```
+
+### Hash Maps (`stdlib/hashmap.nex`)
+```nexus
+include "stdlib/hashmap.nex"
+
+# Create new hashmap (capacity 16)
+call nx_hashmap_new
+let map = nx_r0
+
+# Insert key-value pair
+let nx_i0 = map
+let nx_i1 = 100                 # key
+let nx_i2 = 999                 # value
+call nx_hashmap_put
+
+# Retrieve value by key
+let nx_i0 = map
+let nx_i1 = 100
+call nx_hashmap_get
+let val = nx_r0                 # 999
+
+# Check membership
+let nx_i0 = map
+let nx_i1 = 100
+call nx_hashmap_contains
+let exists = nx_r0              # 1
 ```
 
 ---
 
-## 9. Common Pitfalls & What NOT to Do
+## 9. Assertions & Testing
+```nexus
+include "stdlib/nstdlib.nex"
+include "stdlib/assert.nex"
+
+let actual = add(20, 22)
+assert_eq actual, 42            # Compares equal
+assert_ne actual, 0             # Compares not equal
+assert_gt actual, 40
+assert_le actual, 50
+```
+
+---
+
+## 10. Common Pitfalls & What NOT to Do
 
 | Incorrect / Do Not Write | Correct NEXUS Syntax |
 |--------------------------|----------------------|
@@ -259,7 +329,7 @@ assert_ne actual, 0             # Compares not equal
 
 ---
 
-## 10. Execution Command
+## 11. Execution Command
 To run any NEXUS program:
 ```bash
 ./nexus run <file.nex>

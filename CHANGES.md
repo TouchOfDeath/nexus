@@ -1,6 +1,41 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.2 — Phase 2 Optimizer: Statement Fusion, Generalized HYDRON Loop Engine & Scoping Integrity (current)
+## v8.2+ — Phase 1: String Escapes & Universal Escape Decoding (current)
+
+Major compiler and preprocessor enhancement adding native C-style string escape sequence decoding across all execution engines and platforms (Linux x86-64, Windows PE32+, macOS ARM64).
+
+### 1. Compiler Core Native Escape Decoding (`compiler/nexc.nex`)
+- **`parse_str_lit` Subroutine**: Implemented a standalone string literal parser directly in pure NEXUS source code. Decodes escape sequences directly into read-only data (`.rdata`) without emitting intermediate multi-line text:
+  - `\n` (Line Feed, ASCII 10)
+  - `\r` (Carriage Return, ASCII 13)
+  - `\t` (Horizontal Tab, ASCII 9)
+  - `\0` (Null Character, ASCII 0)
+  - `\e` (Escape Character, ASCII 27)
+  - `\"` (Escaped Double Quote, ASCII 34)
+  - `\\` (Escaped Backslash, ASCII 92)
+  - `\xHH` (Two-digit Hexadecimal Byte, e.g., `\x41` -> 65, `\x0A` -> 10)
+- **Universal Grammar Coverage**: Integrated `call parse_str_lit` into all 5 string parsing sites in `nexc.nex`:
+  - `let <dest> = "..."` (CASE 6 string assignment)
+  - `print "..."` (CASE 0 string printing)
+  - `len "..."` (CASE 7 string length builtin)
+  - `file_open` (file opening system call)
+  - `file_create` (file creation system call)
+- **Identifier Prefix Safety**: Rigorously verified that local decoder loop variables (`esc_ch`, `h1`, `v1`, `h2`, `v2`) avoid parser collisions with float built-in prefix keywords (`fa`, `fs`, `fm`, `fd`, `fn`, `ft`).
+
+### 2. Source Preprocessor String Boundary Safety (`tools/nexprep.c`)
+- **String Scanner Escape Handling**: Updated all string literal boundary scans across the preprocessor to respect `\"` and `\\` without prematurely exiting or toggling string mode:
+  - Desugaring passes: assertion macros (`assert_eq`/`assert_ne`), lambda closures (`transform_lambdas`), float conditions (`desugar_float_cond`), multi-returns (`desugar_multi_return`), power operations (`desugar_pow`), array literals (`desugar_array_literal`), and Phase 2 loop scanner.
+- **Accurate `len "..."` Constant Folding**: Updated `fold_unary_builtins` to decode escape sequences when calculating constant string lengths, guaranteeing 100% agreement between compile-time constant folding and runtime byte loads.
+- **Windows SDK `#undef OUT` Guard**: Added `#ifdef OUT / #undef OUT` guard preventing macro collisions with Windows SDK `<windef.h>`, enabling seamless compilation with MinGW and MSVC.
+
+### 3. Ecosystem & Platform Alignment
+- **ARM64 Emitter (`tools/nexarm64.c`)**: Added `\e` and `\xHH` decoding to `add_string` for Apple Silicon Mach-O and Linux AArch64 backends.
+- **Semantic Oracle Interpreter (`tools/nexinterp.py`)**: Updated `store_str_literal` and `len` evaluation to decode `\e` and unicode escapes, and added proper `} else {` block execution.
+- **Tri-Platform Windows Binaries**: Re-compiled native Windows binaries `bin/nexprep.exe` and `bin/nexarm64.exe` using MinGW; preserved all Windows build scripts and bundled TCC.
+- **Automated Regression Suite (`tests/test_string_escapes.nex`)**: Comprehensive test suite verifying all 8 escape sequences against `load`, `len`, `print`, and `assert_eq`. Integrated into `./nexus test` (PASS).
+- **Deterministic 3-Stage Bootstrap**: Verified Gen1 == Gen2 == Gen3 bit-for-bit convergence across 49,152 bytes PE32+ and 57,951 bytes ELF64 (0 differences).
+
+## v8.2 — Phase 2 Optimizer: Statement Fusion, Generalized HYDRON Loop Engine & Scoping Integrity
 
 Performance-focused release overhauling the optimizer layer of the main compilation pipeline (`nexprep` -> `nexc`). All transforms preserve exact language semantics (verified by differential fuzzing: optimizer ON vs OFF, 850+ randomized programs, 0 divergences).
 

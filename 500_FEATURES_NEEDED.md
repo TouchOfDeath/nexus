@@ -72,13 +72,13 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 25. **First-Class Result Type (`Result<T, E>`)**: Provide standardized error-handling returns `Ok(T)` and `Err(E)` across all I/O and parser functions.
 26. **Error Propagation Operator (`?` operator)**: Implement early-return error chaining `let file = open_file(path)?;` to reduce repetitive error branching.
 27. **Exception / Panic Mechanism**: Provide structured panic handling with call-stack unwinding for unrecoverable runtime violations.
-28. **Hexadecimal Number Literals**: Support `0x11111B`, `0xRRGGBB`, and `0xFF` hex notation so color constants don't require awkward decimal conversions.
-29. **Binary Number Literals**: Support `0b10101010` binary literals for bitmask manipulation in X11 and Wayland wire protocols.
+28. **Hexadecimal Number Literals** *(COMPLETED)*: Support `0x11111B`, `0xRRGGBB`, and `0xFF` hex notation so color constants don't require awkward decimal conversions.
+29. **Binary Number Literals** *(COMPLETED)*: Support `0b10101010` binary literals for bitmask manipulation in X11 and Wayland wire protocols.
 30. **Octal Number Literals**: Support `0o644` and `0o755` octal notation for POSIX file permission masks.
 31. **Scientific Notation Float Literals**: Parse exponential floating-point numbers `1.5e-3` for physics and subpixel layout coordinates.
-32. **Bitwise Shift Operators (`<<`, `>>`)**: Native AST-level bit shift operators with direct emission of `shl`, `shr`, and `sar` x86/ARM64 instructions.
-33. **Bitwise Logic Operators (`&`, `|`, `^`, `~`)**: Direct bitwise AND, OR, XOR, and NOT operators without requiring arithmetic desugaring.
-34. **Compound Assignment Operators**: Support `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` across all lvalues.
+32. **Bitwise Shift Operators (`<<`, `>>`)** *(COMPLETED)*: Native AST-level bit shift operators with direct emission of `shl`, `shr`, and `sar` x86/ARM64 instructions (desugared to `stdlib/bitwise.nex`).
+33. **Bitwise Logic Operators (`&`, `|`, `^`, `~`)** *(COMPLETED)*: Direct bitwise AND, OR, XOR, and NOT operators (desugared to `stdlib/bitwise.nex`).
+34. **Compound Assignment Operators** *(COMPLETED)*: Support `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` across all lvalues.
 35. **Increment / Decrement Operators**: Provide atomic or standard `++` and `--` for concise buffer cursor and loop counter increments.
 36. **Ternary / Conditional Expressions**: Support inline ternary expressions `let col = is_err ? col_err : col_ok;` to avoid verbose `if/else` assignments.
 37. **Constant Definitions (`const`)**: Define compile-time immutable values evaluated at compilation and placed directly in read-only data or immediate operands.
@@ -115,11 +115,11 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 
 ## 2. Standard Collections, Buffers & Text Data Structures
 
-66. **Dynamic Array / Vector (`Vec<T>`)**: Growable heap-backed array with automatic doubling reallocation, amortized O(1) appending, and shrink-to-fit.
+66. **Dynamic Array / Vector (`Vec<T>`)** *(COMPLETED)*: Growable heap-backed array with automatic doubling reallocation, amortized O(1) appending, and shrink-to-fit (`stdlib/vec.nex`).
 67. **Piece Table Text Buffer**: Two-table piece buffer (original file buffer + append buffer with piece descriptors) enabling instantaneous loading of 100MB files.
 68. **Rope Data Structure**: Binary tree of string leaves with balanced B-tree nodes providing O(log N) insertions, deletions, and splits for large documents.
 69. **Gap Buffer**: Classic buffer structure with a sliding contiguous cursor gap, providing O(1) localized character insertions and deletions.
-70. **Associative Hash Map (`HashMap<K, V>`)**: High-performance hash map (e.g. SwissTable or Robin Hood hashing) for keyword lookups, symbol tables, and settings.
+70. **Associative Hash Map (`HashMap<K, V>`)** *(COMPLETED)*: High-performance hash map (e.g. SwissTable or open-addressing linear probing) for keyword lookups, symbol tables, and settings (`stdlib/hashmap.nex`).
 71. **Hash Set (`HashSet<T>`)**: Set collection for fast membership testing, duplicate elimination, and token categorization.
 72. **Ordered Map (`BTreeMap<K, V>`)**: Self-balancing B-Tree mapping keys in sorted order for line index lookups and bookmark positioning.
 73. **Ordered Set (`BTreeSet<T>`)**: Sorted set for tracking active breakpoint line numbers and diagnostic markers.
@@ -200,7 +200,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 143. **Hexadecimal Byte Dump Formatter**: Utility formatting binary buffers into standard hex-editor style rows with ASCII sidebars.
 144. **Base64 Encoder & Decoder**: Encoding binary data to Base64 and vice versa for embedding images in documentation and web protocols.
 145. **URL / Percent-Encoding Utilities**: Encoding and decoding file URIs (`file:///path/to/code.nex`) for LSP interactions.
-146. **Escape Character Unescaping Parser**: Transforming string literal escape codes (`\n`, `\t`, `\r`, `\0`, `\xHH`, `\u{HHHH}`) into binary bytes.
+146. **Escape Character Unescaping Parser** *(COMPLETED)*: Transforming string literal escape codes (`\n`, `\t`, `\r`, `\0`, `\xHH`, `\e`, `\\`, `\"`) into binary bytes.
 147. **Escape Character Escaper**: Escaping arbitrary raw text into valid string literal representations.
 148. **Line Ending Normalizer**: Converting mixed CRLF (`\r\n`), LF (`\n`), and CR (`\r`) line endings to a consistent document format.
 149. **Indentation Detection Engine**: Analyzing buffer lines to automatically detect whether a file uses tabs or spaces, and the tab width.
@@ -235,7 +235,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 173. **Memory Ordering Semantics**: Fine-grained memory barrier controls (`Acquire`, `Release`, `SeqCst`, `Relaxed`) for lock-free data structures.
 174. **Thread-Safe Multi-Producer Single-Consumer (MPSC) Channel**: Lock-free or ring-buffer channel streaming compiler stdout tokens into the UI thread.
 175. **Thread-Safe Single-Producer Single-Consumer (SPSC) Queue**: Wait-free bounded queue passing keyboard/mouse events from OS listener to renderer.
-176. **Linux `epoll` Event Multiplexer**: High-performance I/O event polling monitoring GUI sockets, child process pipes, and timers in a single thread.
+176. **Linux `epoll` Event Multiplexer** *(COMPLETED)*: High-performance I/O event polling monitoring GUI sockets, child process pipes, and timers in a single thread (`stdlib/poll.nex`).
 177. **BSD/macOS `kqueue` Multiplexer**: Event notification facility handling socket, pipe, and file events on macOS.
 178. **Windows I/O Completion Ports (IOCP)**: Scalable asynchronous I/O completion mechanism for the Windows port of NEXUS Studio.
 179. **High-Resolution Monotonic Clock**: Microsecond/nanosecond timer (`clock_gettime(CLOCK_MONOTONIC)`) for frame delta-time calculation and profiling.
@@ -594,7 +594,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 497. **Single-Instance IPC Mutex / Socket**: Detecting already-running IDE instances and opening files in existing windows instead of spawning duplicates.
 498. **Self-Updating Toolchain Mechanism**: Checking remote repository for newer compiler releases and applying binary patches automatically.
 499. **Zero-Dependency Self-Contained Deployment**: Packaging compiler, IDE, standard library, and runtime into a single standalone binary or AppImage.
-500. **Bit-for-Bit Deterministic Reproducible Release Builds**: Compiler pipeline guaranteeing bit-for-bit identical binary hashes for release packages.
+500. **Bit-for-Bit Deterministic Reproducible Release Builds** *(COMPLETED)*: Compiler pipeline guaranteeing bit-for-bit identical binary hashes for release packages (3-stage bootstrap convergence verified).
 
 ---
 

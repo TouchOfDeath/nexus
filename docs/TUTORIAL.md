@@ -40,39 +40,52 @@ The three commands you will use most:
 
 ---
 
-## Step 1: Variables and arithmetic
+## Step 1: Variables, number bases, and arithmetic
 
 Create `scratch/step1.nex`:
 
 ```nex
-let price = 120
+let price = 120         # Decimal integer (also supports 0x78 hex, 0b1111000 binary)
 let quantity = 4
 let total = price * quantity
+total += 20             # Compound assignment: +=, -=, *=, /=, %=
 print total
-print "total computed"
+print "total computed\n"
 ```
 
-Run it: `./nexus run scratch/step1.nex` → prints `480`.
+Run it: `./nexus run scratch/step1.nex` → prints `500`.
 
 Key facts:
-- `let` declares AND assigns. Re-assigning with another `let` overwrites.
+- `let` declares AND assigns. Re-assigning can be done with `let var = val` or `var = val`.
+- Integer literals support Decimal (`120`), Hexadecimal (`0x78`, `0xFF00`), and Binary (`0b1010`).
 - Arithmetic chains run left to right: `2 + 3 * 4` is 20, not 14.
 - There are no parentheses — split complex math into intermediate `let`s.
 
 ---
 
-## Step 2: Text output and input
+## Step 2: Text output, string escapes, and input
 
 ```nex
-print "What is your age?"
+print "What is your age?\n> "
 read age
+print "You entered: "
 print age
-print_str "age stored, bye"
+print "\nDone!\tExiting...\n"
+print_str "Status: \"OK\"\\processed\n"
 ```
 
-- `print` handles integers and string *literals*.
-- `print_str` prints the *contents* of a string variable.
-- `read` reads one integer typed by the user.
+- `print` handles integers, string *literals*, and string variables.
+- Standard C-style escape sequences are fully supported in all string literals:
+  - `\n` (newline, ASCII 10)
+  - `\t` (horizontal tab, ASCII 9)
+  - `\r` (carriage return, ASCII 13)
+  - `\\` (literal backslash, ASCII 92)
+  - `\"` (literal double quote, ASCII 34)
+  - `\0` (null byte, ASCII 0)
+  - `\e` (terminal escape, ASCII 27)
+  - `\xHH` (arbitrary hexadecimal byte)
+- `print_str` prints the null-terminated *contents* of a string pointer/variable without an extra newline.
+- `read` reads one integer typed by the user from standard input.
 
 ---
 
@@ -155,42 +168,95 @@ print i
 
 ---
 
-## Step 5: Functions — the globals convention
+## Step 5: Functions — Parameters and Return Values
 
-NEXUS functions have no parameters and no return values. Data flows through
-variables:
+NEXUS supports modern parameterized functions with `return` statements and expressions, as well as fast subroutines:
+
+### Parameterized Functions (Modern)
 
 ```nex
-fn power_of_two {
-    # input: exp   output: result
+fn add(a, b) {
+    return a + b
+}
+
+fn power_of_two(exp) {
     let result = 1
     let k = 0
     while k < exp {
         let result = result * 2
         let k = k + 1
     }
+    return result
 }
 
-let exp = 8
-call power_of_two
-print result
+let sum = call add(15, 27)
+print sum                       # 42
+
+let p = call power_of_two(8)
+print p                         # 256
 ```
 
-This is the same convention the standard library formalizes:
-set `nx_i0..nx_i2`, `call`, read `nx_r0`.
+Functions can return values, expressions, or exit early from conditional branches:
+
+```nex
+fn clamp_val(val, min_v, max_v) {
+    if val < min_v {
+        return min_v
+    }
+    if val > max_v {
+        return max_v
+    }
+    return val
+}
+```
+
+### The Standard Library Calling Convention
+
+The low-level standard library and self-hosted compiler internals often use a zero-overhead globals convention to avoid stack frame allocation:
+- Inputs: set `nx_i0`, `nx_i1`, `nx_i2`
+- Invocation: `call <function_name>`
+- Output: read `nx_r0`
+- Scratch: `s0..s7` (or `nx_s0..nx_s7`) are clobbered across calls
+
+```nex
+let nx_i0 = 1071
+let nx_i1 = 462
+call nx_gcd
+print nx_r0                     # 21
+```
 
 ---
 
-## Step 6: Memory and strings
+## Step 6: Arrays and Low-Level Memory
 
-Strings are pointers to null-terminated bytes; `alloc` gives zeroed memory:
+### Array Literals & Bracket Indexing
+
+NEXUS provides ergonomic array literals and bracket-based index access:
+
+```nex
+let arr = [10, 20, 30]
+let v0 = arr[0]             # Read element 0 (10)
+arr[1] = 99                 # Modify element 1 in-place
+arr[0] += 5                 # Compound operation on array element
+
+# Iterate through array
+let sum = 0
+for i = 0, i < 3, i = i + 1 {
+    sum += arr[i]
+}
+print sum                   # 15 + 99 + 30 = 144
+```
+
+### Raw Heap Buffers: `alloc`, `load`, and `store`
+
+For systems programming and raw buffers, NEXUS provides direct bare-metal pointer operations:
 
 ```nex
 let word = "NEXUS"
 let first = load [word + 0]
-print first                # 78 = 'N'
+print first                 # 78 = 'N'
 
-let buffer = alloc 32
+let buffer = alloc 32       # Zero-initialized heap buffer
 let idx = 0
 let ch = load [word + 0]
 while ch != 0 {
@@ -202,7 +268,11 @@ store [buffer + idx] 0
 print_str buffer
 ```
 
-Memory from `alloc` is always zero-initialized. `load`/`store` move one byte.
+Memory from `alloc` is always zero-initialized. Multi-width memory builtins provide complete control:
+- `load` / `store`: 1-byte (8-bit) access
+- `load16` / `store16`: 2-byte (16-bit) access
+- `load32` / `store32`: 4-byte (32-bit) access
+- `load64` / `store64`: 8-byte (64-bit) access
 
 ---
 
@@ -250,6 +320,10 @@ Highlights:
 | powers, roots | `nx_pow`, `nx_isqrt` |
 | gcd, lcm | `nx_gcd`, `nx_lcm` |
 | primality, fibonacci | `nx_is_prime`, `nx_fib` |
+| dynamic vectors | `stdlib/vec.nex`: `nx_vec_new`, `nx_vec_push`, `nx_vec_get`, `nx_vec_pop` |
+| hash maps | `stdlib/hashmap.nex`: `nx_hashmap_new`, `nx_hashmap_put`, `nx_hashmap_get` |
+| bitwise ops | `stdlib/bitwise.nex`: `&`, `\|`, `^`, `~`, `<<`, `>>` |
+| async I/O / epoll | `stdlib/poll.nex`: `nx_poll`, `nx_epoll_create`, `nx_epoll_wait` |
 | byte arrays | `nx_arr_fill`, `nx_arr_sum`, `nx_arr_max`, `nx_arr_reverse`... |
 | strings | `nx_str_len`, `nx_str_copy`, `nx_str_cmp`, `nx_str_concat`, `nx_str_chr` |
 | conversions | `nx_str_to_int`, `nx_int_to_str` |
@@ -276,7 +350,24 @@ See `examples/multi_file_demo.nex` and `examples/modules/` for the pattern.
 
 ---
 
-## Step 10: Daily workflow
+## Step 10: Writing tests & daily workflow
+
+Write tests using the built-in assertion macros:
+
+```nex
+# tests/my_test.nex
+include "stdlib/assert.nex"
+
+let val = 10 + 32
+assert_eq val, 42
+assert_ne val, 0
+assert_gt val, 40
+assert_le val, 50
+
+print "All assertions passed!\n"
+```
+
+Workflow commands:
 
 ```bash
 ./nexus repl                    # try ideas with instant feedback
@@ -285,7 +376,7 @@ See `examples/multi_file_demo.nex` and `examples/modules/` for the pattern.
 ./nexus fmt idea.nex            # normalize formatting (idempotent)
 ./nexus new myproject           # scaffold a project with vendored stdlib
 ./nexus test --file tests/x.nex # run one test file (assert_eq macros)
-./nexus test                    # examples + diagnostics + stdlib suite
+./nexus test                    # runs all 41 regression test suites
 ./nexus build                   # the full 10-stage self-hosting pipeline
 ```
 
@@ -293,8 +384,8 @@ See `examples/multi_file_demo.nex` and `examples/modules/` for the pattern.
 
 ## Where to go next
 
-- `docs/LANGUAGE_REFERENCE.md` — the complete grammar and every gotcha
-- `docs/BUILTINS.md` — compiler built-ins and the full stdlib API
+- `docs/LANGUAGE_REFERENCE.md` — the complete grammar, operator rules, and string escapes
+- `docs/BUILTINS.md` — compiler built-ins, multi-width memory ops, and stdlib API reference
 - `examples/` — 15 runnable programs, from fibonacci to prime sieves
 - `compiler/nexc.nex` — the compiler source, written in NEXUS itself
-- `tests/stdlib_test.nex` — 94 executable assertions on the stdlib
+- `tests/` — 41 comprehensive test suites validating every language feature

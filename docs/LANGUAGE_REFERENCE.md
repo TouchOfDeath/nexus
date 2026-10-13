@@ -39,17 +39,37 @@ Multi-file programs use `include` (see section 9). Structs are declared with
 |-------------|------|
 | Comments    | `#` to end of line. `;` also starts a comment (legacy). |
 | Identifiers | Letters, digits and underscores. Multi-letter and uppercase names are supported. |
-| Integers    | Decimal only. Literals are 32-bit immediates: usable range is about -2,147,483,647 .. 2,147,483,647. Negative literals appear via `0 - n` or as the right side of comparisons and in `print`/`abs`. |
-| Strings     | Double-quoted `"..."`, stored in the binary's read-only data section, null-terminated. No escape sequences. |
+| Integers    | **Decimal**, **Hexadecimal** (`0x...` / `0X...`), and **Binary** (`0b...` / `0B...`). Literals are 64-bit compatible signed integers. Negative numbers appear via `-n` (in comparisons, `print`, `abs`) or `0 - n`. |
+| Strings     | Double-quoted `"..."`, stored in the binary's read-only data section (`.rdata`), null-terminated. Supports standard C-style escape sequences (see 2.3). |
 | Whitespace  | Spaces and tabs separate tokens; newlines end statements. |
 
 ### 2.1 Case sensitivity
 Identifiers are case-sensitive: `Total` and `total` are different variables.
 
 ### 2.2 Reserved words
-`let print print_str read if else while fn call return struct include import`
-plus the built-in operators `alloc load store load64 store64 len abs file_open file_create
-file_read file_write file_close`.
+`let local int float var print print_str print_float read if else while for fn call return break continue struct include import alloc load store load64 store64 load32 store32 load16 store16 fload fstore len abs itof ftoi fadd fsub fmul fdiv fsqrt fneg frame_pointer stack_pointer frame_parent file_open file_create file_read file_write file_close assert_eq assert_ne os_argc os_argv syscall`.
+
+### 2.3 String Escape Sequences (Phase 1)
+NEXUS natively decodes standard escape sequences directly into binary bytes:
+
+| Escape Sequence | Description | Byte Value |
+|:---:|---|:---:|
+| `\n` | Line Feed (newline) | `10` (`0x0A`) |
+| `\r` | Carriage Return | `13` (`0x0D`) |
+| `\t` | Horizontal Tab | `9` (`0x09`) |
+| `\0` | Null character | `0` (`0x00`) |
+| `\e` | Escape (ANSI / VT100 prefix) | `27` (`0x1B`) |
+| `\"` | Double quotation mark | `34` (`0x22`) |
+| `\\` | Literal backslash | `92` (`0x5C`) |
+| `\xHH` | Arbitrary byte in 2-digit hex | `0x00` .. `0xFF` |
+
+Examples:
+```nex
+let greeting = "Hello,\tWorld!\nWelcome to \"NEXUS\"\\x86-64\n"
+let red_text = "\e[31mError occurred\e[0m\n"
+let signature = "\x7fELF\x02\x01\x01\x00"
+let length = len "col1\tcol2"    # 9 bytes (tab counts as 1 decoded byte)
+```
 
 ---
 
@@ -256,6 +276,40 @@ let s  = fadd w0 weights[1]  # use float ops to compute with elements
 > **Limits (current release):** max 128 elements per literal; element
 > expressions may be integer sub-expressions or float literals.
 > Nested brackets in the same statement are not supported.
+
+### 3.7 Number Bases & Bitwise Operations (v8.1)
+
+#### Number Bases
+Integer literals can be expressed in decimal, hexadecimal, or binary:
+```nex
+let dec = 255
+let hex = 0xFF             # hexadecimal: 255
+let hex_upper = 0xDEAD     # 57005
+let bin = 0b11111111       # binary: 255
+let flags = 0b1010         # binary: 10
+```
+
+#### Bitwise Operators (`stdlib/bitwise.nex`)
+Include `stdlib/nstdlib.nex` to access the full 64-bit bitwise suite:
+
+| Function | Operation | Inputs | Result |
+|:---|:---|:---|:---|
+| `nx_band` | Bitwise AND (`a & b`) | `nx_i0`, `nx_i1` | `nx_r0` |
+| `nx_bor` | Bitwise OR (`a \| b`) | `nx_i0`, `nx_i1` | `nx_r0` |
+| `nx_bxor` | Bitwise XOR (`a ^ b`) | `nx_i0`, `nx_i1` | `nx_r0` |
+| `nx_bnot` | Bitwise NOT (`~a`) | `nx_i0` | `nx_r0` |
+| `nx_shl` | Shift Left (`a << b`) | `nx_i0`, `nx_i1` | `nx_r0` |
+| `nx_shr` | Logical Shift Right (`a >> b`) | `nx_i0`, `nx_i1` | `nx_r0` |
+| `nx_sar` | Arithmetic Shift Right | `nx_i0`, `nx_i1` | `nx_r0` |
+
+```nex
+include "stdlib/nstdlib.nex"
+
+let nx_i0 = 0xF0
+let nx_i1 = 0x0F
+call nx_bor
+assert_eq nx_r0, 255
+```
 
 ---
 
