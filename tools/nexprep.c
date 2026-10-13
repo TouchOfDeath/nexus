@@ -279,7 +279,12 @@ static int transform_seg(char *out, const char *in, int mode) {
     while (i < len) {
         if (in[i] == '"') {                      /* copy string literal */
             out[o++] = in[i++];
-            while (i < len && in[i] != '"') out[o++] = in[i++];
+            while (i < len && in[i] != '"') {
+                if (in[i] == '\\' && i + 1 < len) {
+                    out[o++] = in[i++];
+                }
+                out[o++] = in[i++];
+            }
             if (i < len) out[o++] = in[i++];
             continue;
         }
@@ -413,6 +418,11 @@ static int assert_line(const char *raw, FILE *out) {
     char a[MAXLINE], b[MAXLINE];
     int na = 0, in_str = 0;
     while (*p && *p != '\n' && *p != '\r') {
+        if (in_str && *p == '\\' && *(p + 1)) {
+            a[na++] = *p++;
+            a[na++] = *p++;
+            continue;
+        }
         if (*p == '"') in_str = !in_str;
         if (*p == ',' && !in_str) break;
         a[na++] = *p++;
@@ -982,6 +992,13 @@ static int ls_substitute(const char *src, char *dst, size_t cap) {
     for (int i = 0; i < len; ) {
         char c = src[i];
 
+        if (in_str && c == '\\' && i + 1 < len) {
+            if (out_pos < cap - 1) dst[out_pos++] = c;
+            i++;
+            if (out_pos < cap - 1) dst[out_pos++] = src[i];
+            i++;
+            continue;
+        }
         if (c == '"') {
             in_str = !in_str;
             if (out_pos < cap - 1) dst[out_pos++] = c;
@@ -1093,6 +1110,7 @@ static int ls_apply(const char *raw, char *dst, size_t cap) {
     /* 1. Track any '}' that appears before any '{' */
     int in_str = 0;
     for (int i = 0; body[i]; i++) {
+        if (in_str && body[i] == '\\' && body[i + 1]) { i++; continue; }
         if (body[i] == '"') in_str = !in_str;
         if (in_str) continue;
         if (body[i] == '#' || body[i] == ';') break;
@@ -1222,6 +1240,7 @@ static int ls_apply(const char *raw, char *dst, size_t cap) {
 
     in_str = 0;
     for (int i = 0; body[i]; i++) {
+        if (in_str && body[i] == '\\' && body[i + 1]) { i++; continue; }
         if (body[i] == '"') in_str = !in_str;
         if (in_str) continue;
         if (body[i] == '#' || body[i] == ';') break;
@@ -1764,7 +1783,8 @@ static int desugar_float(const char *in, char *out, size_t cap) {
         int in_quote = 0;
         /* First check dotted float operators: ==., <., etc. */
         for (char *c = p; *c; c++) {
-            if (*c == '"') in_quote = !in_quote;
+            if (in_quote && *c == '\\' && *(c + 1)) { c++; continue; }
+            if (*c == '"') { in_quote = !in_quote; continue; }
             if (in_quote) continue;
             int rlen = 0;
             const char *clean_op = NULL;
@@ -1784,7 +1804,8 @@ static int desugar_float(const char *in, char *out, size_t cap) {
         /* Check standard operators: ==, !=, <, >, <=, >= */
         in_quote = 0;
         for (char *c = p; *c; c++) {
-            if (*c == '"') in_quote = !in_quote;
+            if (in_quote && *c == '\\' && *(c + 1)) { c++; continue; }
+            if (*c == '"') { in_quote = !in_quote; continue; }
             if (in_quote) continue;
             int rlen = 0;
             const char *std_op = NULL;
@@ -1792,8 +1813,14 @@ static int desugar_float(const char *in, char *out, size_t cap) {
                 char left[128], right[128];
                 trim_bounds(p, c, left, sizeof left);
 
-                /* find '{' */
-                char *brace = strchr(c + rlen, '{');
+                /* find '{' string-aware */
+                char *brace = NULL;
+                int b_in_str = 0;
+                for (char *bc = c + rlen; *bc; bc++) {
+                    if (b_in_str && *bc == '\\' && *(bc + 1)) { bc++; continue; }
+                    if (*bc == '"') { b_in_str = !b_in_str; continue; }
+                    if (!b_in_str && *bc == '{') { brace = bc; break; }
+                }
                 char rest[256] = "";
                 if (brace) {
                     trim_bounds(c + rlen, brace, right, sizeof right);
@@ -1960,6 +1987,7 @@ static void fn_add_local(const char *var) {
 static void update_fn_depth(const char *line) {
     int in_str = 0;
     for (int i = 0; line[i]; i++) {
+        if (in_str && line[i] == '\\' && line[i + 1]) { i++; continue; }
         if (line[i] == '"') in_str = !in_str;
         if (in_str) continue;
         if (line[i] == '#' || line[i] == ';') break;
@@ -1988,6 +2016,7 @@ static int split_args(const char *arg_str, char args[][512], int max_args) {
 
     for (int i = 0; i <= len; i++) {
         char c = arg_str[i];
+        if (in_str && c == '\\' && arg_str[i + 1]) { i++; continue; }
         if (c == '"') in_str = !in_str;
         if (!in_str) {
             if (c == '(') paren_depth++;
@@ -2016,6 +2045,7 @@ static int find_matching_paren(const char *s, int open_idx) {
     int in_str = 0;
     int len = (int)strlen(s);
     for (int i = open_idx; i < len; i++) {
+        if (in_str && s[i] == '\\' && s[i + 1]) { i++; continue; }
         if (s[i] == '"') in_str = !in_str;
         if (in_str) continue;
         if (s[i] == '(') depth++;
@@ -2031,6 +2061,7 @@ static int contains_fn_call(const char *s) {
     int len = (int)strlen(s);
     int in_str = 0;
     for (int i = 0; i < len; i++) {
+        if (in_str && s[i] == '\\' && s[i + 1]) { i++; continue; }
         if (s[i] == '"') { in_str = !in_str; continue; }
         if (in_str) continue;
         if (s[i] == '#' || s[i] == ';') break;
@@ -2209,9 +2240,12 @@ static int desugar_print_parens(const char *in, char *out, size_t cap) {
             if (!comment) comment = strchr(close_p + 1, ';');
 
             int has_op = 0;
+            int in_str = 0;
             for (int i = 0; i_start[i]; i++) {
-                if (i_start[i] == '+' || i_start[i] == '-' || i_start[i] == '*' ||
-                    i_start[i] == '/' || i_start[i] == '%') {
+                if (in_str && i_start[i] == '\\' && i_start[i + 1]) { i++; continue; }
+                if (i_start[i] == '"') in_str = !in_str;
+                if (!in_str && (i_start[i] == '+' || i_start[i] == '-' || i_start[i] == '*' ||
+                    i_start[i] == '/' || i_start[i] == '%')) {
                     has_op = 1; break;
                 }
             }
@@ -2317,6 +2351,7 @@ static int hoist_embedded_calls(const char *in, char *out, size_t cap) {
     int len = (int)strlen(p);
     int in_str = 0;
     for (int i = 0; i < len; i++) {
+        if (in_str && p[i] == '\\' && p[i + 1]) { i++; continue; }
         if (p[i] == '"') { in_str = !in_str; continue; }
         if (in_str) continue;
         if (p[i] == '#' || p[i] == ';') break;
@@ -2341,6 +2376,7 @@ static int hoist_embedded_calls(const char *in, char *out, size_t cap) {
                 int k = open_paren + 1;
                 int k_in_str = 0;
                 while (k < len) {
+                    if (k_in_str && p[k] == '\\' && p[k + 1]) { k += 2; continue; }
                     if (p[k] == '"') { k_in_str = !k_in_str; k++; continue; }
                     if (k_in_str) { k++; continue; }
                     if (p[k] == '(') { has_nested = 1; break; }
@@ -2479,7 +2515,8 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                 {
                     int in_s = 0, paren_d = 0;
                     for (int ci = 0; ret_expr[ci]; ci++) {
-                        if (ret_expr[ci] == '"') in_s = !in_s;
+                        if (in_s && ret_expr[ci] == '\\' && ret_expr[ci + 1]) { ci++; continue; }
+                        if (ret_expr[ci] == '"') { in_s = !in_s; continue; }
                         if (in_s) continue;
                         if (ret_expr[ci] == '(') paren_d++;
                         else if (ret_expr[ci] == ')') paren_d--;
@@ -2530,6 +2567,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
         {
             int in_s = 0;
             for (char *scan = p + 4; *scan; scan++) {
+                if (in_s && *scan == '\\' && *(scan + 1)) { scan++; continue; }
                 if (*scan == '"') { in_s = !in_s; continue; }
                 if (in_s) continue;
                 if (*scan == '=' && *(scan+1) != '=') { eq = scan; break; }
@@ -3087,6 +3125,7 @@ static int desugar_bitwise_binop(const char *in, char *out, size_t cap) {
     int in_string = 0;
     char *r = rhs;
     while (*r && *r != '#' && *r != '\n') {
+        if (in_string && *r == '\\' && *(r + 1)) { r += 2; continue; }
         if (*r == '"') in_string = !in_string;
         if (!in_string) {
             if (r[0] == '<' && r[1] == '<') { op_pos = r; op_type = 4; break; }
@@ -3112,6 +3151,7 @@ static int desugar_bitwise_binop(const char *in, char *out, size_t cap) {
     char *rhs_end = rhs_start;
     in_string = 0;
     while (*rhs_end && *rhs_end != '#' && *rhs_end != '\n') {
+        if (in_string && *rhs_end == '\\' && *(rhs_end + 1)) { rhs_end += 2; continue; }
         if (*rhs_end == '"') in_string = !in_string;
         if (!in_string) {
             if (*rhs_end == '+' || *rhs_end == '-' ||
@@ -3186,6 +3226,7 @@ static int is_unclosed_array(const char *s) {
     int depth = 0;
     int in_str = 0;
     for (const char *c = p; *c; c++) {
+        if (in_str && *c == '\\' && *(c + 1)) { c++; continue; }
         if (*c == '"') in_str = !in_str;
         else if (!in_str) {
             if (*c == '#' || *c == ';') {
@@ -3246,6 +3287,13 @@ static int desugar_array_literal(const char *in, char *out, size_t cap) {
     int in_str = 0;
 
     while (*p) {
+        if (in_str && *p == '\\' && *(p + 1)) {
+            if (cur_len < 510) {
+                cur_elem[cur_len++] = *p++;
+                cur_elem[cur_len++] = *p++;
+            } else p += 2;
+            continue;
+        }
         if (*p == '"') {
             in_str = !in_str;
             if (cur_len < 511) cur_elem[cur_len++] = *p;
@@ -3590,7 +3638,10 @@ static int desugar_power(const char *in, char *out, size_t cap) {
     while (*r) {
         if (*r == '"') {
             r++;
-            while (*r && *r != '"') r++;
+            while (*r && *r != '"') {
+                if (*r == '\\' && *(r + 1)) r++;
+                r++;
+            }
             if (*r) r++;
             continue;
         }
@@ -3766,6 +3817,9 @@ static void fold_unary_builtins(char *line) {
             size_t blen = strlen(buf);
             if (blen < MAXLINE - 1) buf[blen++] = *p++;
             while (*p && *p != '"' && blen < MAXLINE - 1) {
+                if (*p == '\\' && *(p + 1) && blen < MAXLINE - 2) {
+                    buf[blen++] = *p++;
+                }
                 buf[blen++] = *p++;
             }
             if (*p == '"' && blen < MAXLINE - 1) buf[blen++] = *p++;
@@ -3818,6 +3872,16 @@ static void fold_unary_builtins(char *line) {
                 const char *s = arg + 1;
                 size_t slen = 0;
                 while (*s && *s != '"') {
+                    if (*s == '\\' && *(s + 1)) {
+                        slen++;
+                        if (*(s + 1) == 'x' && *(s + 2) && *(s + 3) &&
+                            isxdigit((unsigned char)*(s + 2)) && isxdigit((unsigned char)*(s + 3))) {
+                            s += 4;
+                        } else {
+                            s += 2;
+                        }
+                        continue;
+                    }
                     slen++;
                     s++;
                 }
@@ -3859,7 +3923,12 @@ static void fold_mem_offsets(char *line) {
         if (*p == '"') {
             size_t blen = strlen(buf);
             if (blen < MAXLINE - 1) buf[blen++] = *p++;
-            while (*p && *p != '"' && blen < MAXLINE - 1) buf[blen++] = *p++;
+            while (*p && *p != '"' && blen < MAXLINE - 1) {
+                if (*p == '\\' && *(p + 1) && blen < MAXLINE - 2) {
+                    buf[blen++] = *p++;
+                }
+                buf[blen++] = *p++;
+            }
             if (*p == '"' && blen < MAXLINE - 1) buf[blen++] = *p++;
             buf[blen] = '\0';
             continue;
@@ -3931,7 +4000,15 @@ static void transform_cond_str(const char *in_cond, char *out_cond, size_t cap) 
     char *p = cond;
     int in_str = 0;
     while (*p) {
-        if (*p == '"') in_str = !in_str;
+        if (in_str && *p == '\\' && *(p + 1)) {
+            p += 2;
+            continue;
+        }
+        if (*p == '"') {
+            in_str = !in_str;
+            p++;
+            continue;
+        }
         if (!in_str) {
             if (!strncmp(p, "==", 2) || !strncmp(p, "!=", 2) ||
                 !strncmp(p, "<=", 2) || !strncmp(p, ">=", 2)) {
@@ -4217,6 +4294,7 @@ static int is_unclosed_lambda(const char *line) {
     int depth = 0;
     int in_str = 0;
     for (const char *p = brace; *p; p++) {
+        if (in_str && *p == '\\' && *(p + 1)) { p++; continue; }
         if (*p == '"') in_str = !in_str;
         if (in_str) continue;
         if (*p == '#' || *p == ';') break;
@@ -5154,6 +5232,7 @@ static void scan_file_for_types(const char *path) {
 
         int in_str = 0;
         for (int i = 0; line[i]; i++) {
+            if (in_str && line[i] == '\\' && line[i + 1]) { i++; continue; }
             if (line[i] == '"') in_str = !in_str;
             if (in_str) continue;
             if (line[i] == '#' || line[i] == ';') break;
@@ -5631,6 +5710,9 @@ static void body_free(Body *b) {
     p2_push(&OUT, &OUTn, &OUTcap, _b); \
 } while (0)
 
+#ifdef OUT
+#undef OUT
+#endif
 static char **OUT = NULL;
 static int OUTn = 0, OUTcap = 0;
 
@@ -6122,6 +6204,7 @@ static void p2_loop_pass(void) {
             const char *p = P2[j];
             int in_str = 0;
             for (; *p; p++) {
+                if (in_str && *p == '\\' && *(p + 1)) { p++; continue; }
                 if (*p == '"') in_str = !in_str;
                 if (in_str) continue;
                 if (*p == '#' || *p == ';') break;

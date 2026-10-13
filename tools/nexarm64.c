@@ -114,8 +114,19 @@ static int add_string(const char* str, int len) {
                 case 'r': buf[ulen++] = '\r'; break;
                 case 't': buf[ulen++] = '\t'; break;
                 case '0': buf[ulen++] = '\0'; break;
+                case 'e': buf[ulen++] = 27; break;
                 case '\\': buf[ulen++] = '\\'; break;
                 case '\"': buf[ulen++] = '\"'; break;
+                case 'x':
+                    if (i + 2 < len && isxdigit((unsigned char)str[i+1]) && isxdigit((unsigned char)str[i+2])) {
+                        char hex[3] = { str[i+1], str[i+2], '\0' };
+                        buf[ulen++] = (char)strtol(hex, NULL, 16);
+                        i += 2;
+                    } else {
+                        buf[ulen++] = '\\';
+                        buf[ulen++] = 'x';
+                    }
+                    break;
                 default:
                     buf[ulen++] = '\\';
                     buf[ulen++] = str[i];

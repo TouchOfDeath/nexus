@@ -628,15 +628,35 @@ if os.path.exists(hyd_src):
         else:
             print("[-] HYDRON correctness suite: FAIL (assertion mismatch)")
 
+# String Escapes (Phase 1) regression suite
+str_escapes_ok = False
+esc_src = os.path.join(base_dir, "tests", "test_string_escapes.nex")
+if os.path.exists(esc_src):
+    subprocess.run([nexprep, esc_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_esc = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "STRING_ESCAPES_TEST_PASS" in out_esc:
+            log_pass("[+] String escapes suite: Phase 1 (\\n,\\t,\\r,\\\\,\\\",\\0,\\e,\\x) PASS")
+            str_escapes_ok = True
+        else:
+            print("[-] String escapes suite: FAIL")
+
 s_ok = "PASS" if stdlib_ok else "FAIL"
 o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
 i_ok = "PASS" if ide_ok else "FAIL"
 h_ok = "PASS" if hydron_correct_ok else "FAIL"
+e_ok = "PASS" if str_escapes_ok else "FAIL"
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}")
 '
         ;;
     self-host)

@@ -389,6 +389,97 @@ fn parse_uint {
     }
 }
 
+# parse_str_lit: reads double-quoted string literal at [s + i], decoding escape sequences into [t + q]
+fn parse_str_lit {
+    let x = q
+    let y = 1
+    while y == 1 {
+        if i >= l {
+            let y = 0
+        } else {
+            let c = load [s + i]
+            let i = i + 1
+            if c == 34 {
+                let y = 0
+            } else {
+                if c == 92 {
+                    if i < l {
+                        let esc_ch = load [s + i]
+                        let i = i + 1
+                        let c = esc_ch
+                        if esc_ch == 110 {
+                            let c = 10
+                        }
+                        if esc_ch == 114 {
+                            let c = 13
+                        }
+                        if esc_ch == 116 {
+                            let c = 9
+                        }
+                        if esc_ch == 48 {
+                            let c = 0
+                        }
+                        if esc_ch == 101 {
+                            let c = 27
+                        }
+                        if esc_ch == 34 {
+                            let c = 34
+                        }
+                        if esc_ch == 92 {
+                            let c = 92
+                        }
+                        if esc_ch == 120 {
+                            if i < l {
+                                let h1 = load [s + i]
+                                let i = i + 1
+                                let v1 = 0
+                                if h1 >= 48 {
+                                    if h1 <= 57 {
+                                        let v1 = h1 - 48
+                                    }
+                                }
+                                if h1 >= 97 {
+                                    if h1 <= 102 {
+                                        let v1 = h1 - 87
+                                    }
+                                }
+                                if h1 >= 65 {
+                                    if h1 <= 70 {
+                                        let v1 = h1 - 55
+                                    }
+                                }
+                                let v2 = 0
+                                if i < l {
+                                    let h2 = load [s + i]
+                                    let i = i + 1
+                                    if h2 >= 48 {
+                                        if h2 <= 57 {
+                                            let v2 = h2 - 48
+                                        }
+                                    }
+                                    if h2 >= 97 {
+                                        if h2 <= 102 {
+                                            let v2 = h2 - 87
+                                        }
+                                    }
+                                    if h2 >= 65 {
+                                        if h2 <= 70 {
+                                            let v2 = h2 - 55
+                                        }
+                                    }
+                                }
+                                let c = v1 * 16 + v2
+                            }
+                        }
+                    }
+                }
+                store [t + q] c
+                let q = q + 1
+            }
+        }
+    }
+}
+
 # parse_ident: parses alphanumeric identifier at [s + i] into hash 'h'
 fn parse_ident {
     let h = 0
@@ -1813,22 +1904,7 @@ while r == 1 {
                         if c == 34 {
                             let i = i + 1
                         }
-                        let x = q
-                        let y = 1
-                        while y == 1 {
-                            if i >= l {
-                                let y = 0
-                            } else {
-                                let c = load [s + i]
-                                let i = i + 1
-                                if c == 34 {
-                                    let y = 0
-                                } else {
-                                    store [t + q] c
-                                    let q = q + 1
-                                }
-                            }
-                        }
+                        call parse_str_lit
                         store [t + q] 0
                         let q = q + 1
 
@@ -1929,22 +2005,7 @@ while r == 1 {
                         if c == 34 {
                             let i = i + 1
                         }
-                        let x = q
-                        let y = 1
-                        while y == 1 {
-                            if i >= l {
-                                let y = 0
-                            } else {
-                                let c = load [s + i]
-                                let i = i + 1
-                                if c == 34 {
-                                    let y = 0
-                                } else {
-                                    store [t + q] c
-                                    let q = q + 1
-                                }
-                            }
-                        }
+                        call parse_str_lit
                         store [t + q] 0
                         let q = q + 1
 
@@ -2130,22 +2191,7 @@ while r == 1 {
                     # --- CASE 6: String Literal Assignment: let <dest> = "..." ---
                     if g == 6 {
                         let i = i + 1
-                        let x = q
-                        let y = 1
-                        while y == 1 {
-                            if i >= l {
-                                let y = 0
-                            } else {
-                                let c = load [s + i]
-                                let i = i + 1
-                                if c == 34 {
-                                    let y = 0
-                                } else {
-                                    store [t + q] c
-                                    let q = q + 1
-                                }
-                            }
-                        }
+                        call parse_str_lit
                         # Null-terminate string in .rdata: 0
                         store [t + q] 0
                         let q = q + 1
@@ -2173,22 +2219,7 @@ while r == 1 {
                         }
                         if c == 34 {
                             let i = i + 1
-                            let x = q
-                            let y = 1
-                            while y == 1 {
-                                if i >= l {
-                                    let y = 0
-                                } else {
-                                    let c = load [s + i]
-                                    let i = i + 1
-                                    if c == 34 {
-                                        let y = 0
-                                    } else {
-                                        store [t + q] c
-                                        let q = q + 1
-                                    }
-                                }
-                            }
+                            call parse_str_lit
                             store [t + q] 0
                             let q = q + 1
                             # lea rdx, [rip + disp32] (48 8D 15 <disp32>)
@@ -3168,22 +3199,7 @@ while r == 1 {
                             # 1. Print String Literal: starts with '"' (34)
                             if c == 34 {
                                 let i = i + 1
-                                let x = q
-                                let y = 1
-                                while y == 1 {
-                                    if i >= l {
-                                        let y = 0
-                                    } else {
-                                        let c = load [s + i]
-                                        let i = i + 1
-                                        if c == 34 {
-                                            let y = 0
-                                        } else {
-                                            store [t + q] c
-                                            let q = q + 1
-                                        }
-                                    }
-                                }
+                                call parse_str_lit
                                 # Append CRLF and null terminator: 13, 10, 0
                                 store [t + q] 13
                                 let q = q + 1

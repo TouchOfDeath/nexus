@@ -63,7 +63,8 @@ class NexusInterpreter:
         struct.pack_into("<q", self.memory, addr, val)
 
     def store_str_literal(self, s):
-        # Unescape common escape sequences
+        # Unescape common escape sequences including \e
+        s = s.replace(r'\e', '\x1b')
         s = s.encode('utf-8').decode('unicode_escape')
         b = s.encode('latin1', errors='replace') + b'\x00'
         ptr = self.alloc(len(b))
@@ -121,7 +122,7 @@ class NexusInterpreter:
         if expr.startswith("len "):
             arg = expr[4:].strip()
             if arg.startswith('"') and arg.endswith('"'):
-                return len(arg[1:-1])
+                return len(arg[1:-1].encode('utf-8').decode('unicode_escape'))
             ptr = self.eval_atom(arg)
             s = self.read_str_from_mem(ptr)
             return len(s)
@@ -136,10 +137,10 @@ class NexusInterpreter:
         if m:
             op, mem_expr = m.groups()
             addr = self.eval_addr(mem_expr)
-            if op == "load8": return self.load8(addr)
+            if op in ("load", "load8"): return self.load8(addr)
             elif op == "load16": return self.load16(addr)
             elif op == "load32": return self.load32(addr)
-            else: return self.load64(addr)
+            elif op == "load64": return self.load64(addr)
 
         # Exponentiation
         if " ** " in expr:
@@ -269,16 +270,26 @@ class NexusInterpreter:
 
             if line.startswith('if ') and line.endswith('{'):
                 cond = line[3:-1].strip()
-                body = []
+                then_body = []
+                else_body = []
                 depth = 1
+                in_else = False
                 while i < len(lines) and depth > 0:
                     l = lines[i]
                     i += 1
+                    trimmed = l.strip()
+                    if trimmed == '} else {' and depth == 1:
+                        in_else = True
+                        continue
                     for ch in l:
                         if ch == '{': depth += 1
                         elif ch == '}': depth -= 1
-                    if depth > 0: body.append(l)
-                stmts.append(('if', cond, self.parse_blocks(body)))
+                    if depth > 0:
+                        if in_else:
+                            else_body.append(l)
+                        else:
+                            then_body.append(l)
+                stmts.append(('if', cond, self.parse_blocks(then_body), self.parse_blocks(else_body)))
                 continue
 
             # Simple statement
@@ -295,9 +306,13 @@ class NexusInterpreter:
                     if ret == 'break': break
                     if ret == 'return': return 'return'
             elif kind == 'if':
-                cond, body = stmt[1], stmt[2]
+                cond, then_body = stmt[1], stmt[2]
+                else_body = stmt[3] if len(stmt) > 3 else []
                 if self.eval_cond(cond):
-                    ret = self.exec_block(body)
+                    ret = self.exec_block(then_body)
+                    if ret in ('break', 'continue', 'return'): return ret
+                elif else_body:
+                    ret = self.exec_block(else_body)
                     if ret in ('break', 'continue', 'return'): return ret
             elif kind == 'stmt':
                 line = stmt[1]
@@ -313,7 +328,7 @@ class NexusInterpreter:
                 if line.startswith('print '):
                     expr = line[6:].strip()
                     if expr.startswith('"') and expr.endswith('"'):
-                        val = expr[1:-1]
+                        val = expr[1:-1].encode('utf-8').decode('unicode_escape')
                     else:
                         v = self.eval_expr(expr)
                         if isinstance(v, float):
@@ -327,7 +342,7 @@ class NexusInterpreter:
                 if line.startswith('print_str '):
                     arg = line[10:].strip()
                     if arg.startswith('"') and arg.endswith('"'):
-                        val = arg[1:-1]
+                        val = arg[1:-1].encode('utf-8').decode('unicode_escape')
                     else:
                         ptr = self.eval_atom(arg)
                         val = self.read_str_from_mem(int(ptr))
@@ -341,10 +356,10 @@ class NexusInterpreter:
                     op, mem_expr, val_expr = m.groups()
                     addr = self.eval_addr(mem_expr)
                     val = self.eval_expr(val_expr)
-                    if op == 'store8': self.store8(addr, int(val))
+                    if op in ('store', 'store8'): self.store8(addr, int(val))
                     elif op == 'store16': self.store16(addr, int(val))
                     elif op == 'store32': self.store32(addr, int(val))
-                    else: self.store64(addr, val)
+                    elif op == 'store64': self.store64(addr, val)
                     continue
 
                 # Call subroutine
