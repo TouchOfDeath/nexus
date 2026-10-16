@@ -2,7 +2,9 @@
 
 ## v8.5 — Modern Loop & Range Ergonomics Bundle & Standard Library Additions (current)
 
-### 0. Standard Library String Utilities: Features #132, #138, #147, #148
+### 0. Standard Library Additions: Features #71, #78, #132, #138, #147, #148
+- **Feature #78: Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset packing 8 flags per byte. Supports O(1) bit testing, setting, clearing, toggling, popcount/cardinality, first/next set/clear bit scanning, deep cloning, equality comparison, and in-place set logic (`AND`, `OR`, `XOR`, `NOT`). Verified with dedicated regression suite in `tests/test_bitset.nex`.
+- **Feature #71: HashSet (`stdlib/hashset.nex`)**: Open-addressing hash set storing unique integer and string elements with linear probing, tombstones, and dynamic capacity doubling. Verified with 117 assertions in `tests/test_hashset.nex`.
 - Added `nx_str_starts_with` and `nx_str_ends_with` to `stdlib/strings.nex`, including correct empty and too-long prefix/suffix behavior.
 - Added `nx_str_trim` to copy a string without leading/trailing ASCII whitespace (space and bytes 9–13); Unicode whitespace is not currently supported.
 - Added `nx_str_normalize_newlines` to normalize CRLF and CR to LF while preserving LF, with support for mutable in-place buffers.

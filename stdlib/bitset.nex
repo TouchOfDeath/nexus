@@ -1,0 +1,832 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: bitset.nex
+#           Dense BitSet / BitVector (Feature #78)
+# ==============================================================================
+#
+# A BitSet is a heap-allocated, dense bit vector that stores boolean flags
+# packed 8 bits per byte. It is designed for tracking dirty line flags in
+# buffers, boolean selection masks, and large boolean arrays with minimal
+# memory footprint (1 byte per 8 flags).
+#
+# Memory Layout (stored in a 32-byte struct on the heap):
+#   offset 0:  buf_ptr   - pointer to the raw byte buffer
+#   offset 8:  num_bits  - total number of bits (capacity)
+#   offset 16: num_bytes - total number of allocated bytes ((num_bits + 7) / 8)
+#   offset 24: count     - number of live set bits (popcount / cardinality)
+#
+# Bit Indexing:
+#   Bit i (0-indexed) is located in byte (i / 8) at bit position (i % 8).
+#   Bit 0 is the least significant bit (value 1), bit 7 is value 128.
+#
+# CALLING CONVENTION (all functions):
+#   1. Set inputs in nx_i0, nx_i1, nx_i2 (per-function signature)
+#   2. call <fn>
+#   3. Read the result from nx_r0
+#
+# All variables internal to this module use the `_bs_` prefix to guarantee
+# zero collisions with user code or other modules.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_new : nx_r0 = new BitSet pointer with nx_i0 bits
+# ------------------------------------------------------------------------------
+fn nx_bitset_new {
+    let _bs_nbits = nx_i0
+    if _bs_nbits < 0 {
+        let _bs_nbits = 0
+    }
+    let _bs_nbytes = _bs_nbits + 7
+    let _bs_nbytes = _bs_nbytes / 8
+
+    # Allocate byte buffer (minimum 1 byte allocated)
+    let _bs_alloc_bytes = _bs_nbytes
+    if _bs_alloc_bytes == 0 {
+        let _bs_alloc_bytes = 1
+    }
+    let _bs_buf = alloc _bs_alloc_bytes
+    let _bs_i = 0
+    while _bs_i < _bs_alloc_bytes {
+        store [_bs_buf + _bs_i] 0
+        let _bs_i = _bs_i + 1
+    }
+
+    # Allocate 32-byte BitSet descriptor
+    let _bs_desc = alloc 32
+    store64 [_bs_desc + 0] _bs_buf
+    store64 [_bs_desc + 8] _bs_nbits
+    store64 [_bs_desc + 16] _bs_nbytes
+    store64 [_bs_desc + 24] 0
+
+    let nx_r0 = _bs_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_len : nx_r0 = total bit capacity of BitSet nx_i0
+# ------------------------------------------------------------------------------
+fn nx_bitset_len {
+    let nx_r0 = load64 [nx_i0 + 8]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_bytes : nx_r0 = byte buffer size of BitSet nx_i0
+# ------------------------------------------------------------------------------
+fn nx_bitset_bytes {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_count : nx_r0 = number of set bits (popcount / cardinality)
+# ------------------------------------------------------------------------------
+fn nx_bitset_count {
+    let nx_r0 = load64 [nx_i0 + 24]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_is_empty : nx_r0 = 1 if no bits are set (count == 0), else 0
+# ------------------------------------------------------------------------------
+fn nx_bitset_is_empty {
+    let _bs_ie_cnt = load64 [nx_i0 + 24]
+    let nx_r0 = 0
+    if _bs_ie_cnt == 0 {
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_is_all_set : nx_r0 = 1 if all bits are set, else 0
+# ------------------------------------------------------------------------------
+fn nx_bitset_is_all_set {
+    let _bs_ias_cnt = load64 [nx_i0 + 24]
+    let _bs_ias_nb = load64 [nx_i0 + 8]
+    let nx_r0 = 0
+    if _bs_ias_nb > 0 {
+        if _bs_ias_cnt == _bs_ias_nb {
+            let nx_r0 = 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_test : nx_r0 = value of bit at index nx_i1 in BitSet nx_i0 (0 or 1)
+# ------------------------------------------------------------------------------
+fn nx_bitset_test {
+    let _bs_t_idx = nx_i1
+    let nx_r0 = 0
+    if _bs_t_idx >= 0 {
+        let _bs_t_nbits = load64 [nx_i0 + 8]
+        if _bs_t_idx < _bs_t_nbits {
+            let _bs_t_buf = load64 [nx_i0 + 0]
+            let _bs_t_bidx = _bs_t_idx / 8
+            let _bs_t_pos = _bs_t_idx % 8
+            let _bs_t_p2 = 1
+            if _bs_t_pos == 1 {
+                let _bs_t_p2 = 2
+            }
+            if _bs_t_pos == 2 {
+                let _bs_t_p2 = 4
+            }
+            if _bs_t_pos == 3 {
+                let _bs_t_p2 = 8
+            }
+            if _bs_t_pos == 4 {
+                let _bs_t_p2 = 16
+            }
+            if _bs_t_pos == 5 {
+                let _bs_t_p2 = 32
+            }
+            if _bs_t_pos == 6 {
+                let _bs_t_p2 = 64
+            }
+            if _bs_t_pos == 7 {
+                let _bs_t_p2 = 128
+            }
+            let _bs_t_val = load [_bs_t_buf + _bs_t_bidx]
+            let _bs_t_div = _bs_t_val / _bs_t_p2
+            let nx_r0 = _bs_t_div % 2
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_set : sets bit at index nx_i1 in BitSet nx_i0 to 1
+# nx_r0 = 1 if bit was changed (was 0), 0 if already 1 or out-of-bounds
+# ------------------------------------------------------------------------------
+fn nx_bitset_set {
+    let _bs_s_idx = nx_i1
+    let nx_r0 = 0
+    if _bs_s_idx >= 0 {
+        let _bs_s_nbits = load64 [nx_i0 + 8]
+        if _bs_s_idx < _bs_s_nbits {
+            let _bs_s_buf = load64 [nx_i0 + 0]
+            let _bs_s_bidx = _bs_s_idx / 8
+            let _bs_s_pos = _bs_s_idx % 8
+            let _bs_s_p2 = 1
+            if _bs_s_pos == 1 {
+                let _bs_s_p2 = 2
+            }
+            if _bs_s_pos == 2 {
+                let _bs_s_p2 = 4
+            }
+            if _bs_s_pos == 3 {
+                let _bs_s_p2 = 8
+            }
+            if _bs_s_pos == 4 {
+                let _bs_s_p2 = 16
+            }
+            if _bs_s_pos == 5 {
+                let _bs_s_p2 = 32
+            }
+            if _bs_s_pos == 6 {
+                let _bs_s_p2 = 64
+            }
+            if _bs_s_pos == 7 {
+                let _bs_s_p2 = 128
+            }
+            let _bs_s_val = load [_bs_s_buf + _bs_s_bidx]
+            let _bs_s_div = _bs_s_val / _bs_s_p2
+            let _bs_s_cur = _bs_s_div % 2
+            if _bs_s_cur == 0 {
+                let _bs_s_val = _bs_s_val + _bs_s_p2
+                store [_bs_s_buf + _bs_s_bidx] _bs_s_val
+                let _bs_s_cnt = load64 [nx_i0 + 24]
+                let _bs_s_cnt = _bs_s_cnt + 1
+                store64 [nx_i0 + 24] _bs_s_cnt
+                let nx_r0 = 1
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_clear : clears bit at index nx_i1 in BitSet nx_i0 to 0
+# nx_r0 = 1 if bit was changed (was 1), 0 if already 0 or out-of-bounds
+# ------------------------------------------------------------------------------
+fn nx_bitset_clear {
+    let _bs_c_idx = nx_i1
+    let nx_r0 = 0
+    if _bs_c_idx >= 0 {
+        let _bs_c_nbits = load64 [nx_i0 + 8]
+        if _bs_c_idx < _bs_c_nbits {
+            let _bs_c_buf = load64 [nx_i0 + 0]
+            let _bs_c_bidx = _bs_c_idx / 8
+            let _bs_c_pos = _bs_c_idx % 8
+            let _bs_c_p2 = 1
+            if _bs_c_pos == 1 {
+                let _bs_c_p2 = 2
+            }
+            if _bs_c_pos == 2 {
+                let _bs_c_p2 = 4
+            }
+            if _bs_c_pos == 3 {
+                let _bs_c_p2 = 8
+            }
+            if _bs_c_pos == 4 {
+                let _bs_c_p2 = 16
+            }
+            if _bs_c_pos == 5 {
+                let _bs_c_p2 = 32
+            }
+            if _bs_c_pos == 6 {
+                let _bs_c_p2 = 64
+            }
+            if _bs_c_pos == 7 {
+                let _bs_c_p2 = 128
+            }
+            let _bs_c_val = load [_bs_c_buf + _bs_c_bidx]
+            let _bs_c_div = _bs_c_val / _bs_c_p2
+            let _bs_c_cur = _bs_c_div % 2
+            if _bs_c_cur == 1 {
+                let _bs_c_val = _bs_c_val - _bs_c_p2
+                store [_bs_c_buf + _bs_c_bidx] _bs_c_val
+                let _bs_c_cnt = load64 [nx_i0 + 24]
+                let _bs_c_cnt = _bs_c_cnt - 1
+                store64 [nx_i0 + 24] _bs_c_cnt
+                let nx_r0 = 1
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_toggle : flips bit at index nx_i1 in BitSet nx_i0
+# nx_r0 = new value of bit (1 or 0), or -1 if out-of-bounds
+# ------------------------------------------------------------------------------
+fn nx_bitset_toggle {
+    let _bs_g_idx = nx_i1
+    let nx_r0 = 0 - 1
+    if _bs_g_idx >= 0 {
+        let _bs_g_nbits = load64 [nx_i0 + 8]
+        if _bs_g_idx < _bs_g_nbits {
+            let _bs_g_buf = load64 [nx_i0 + 0]
+            let _bs_g_bidx = _bs_g_idx / 8
+            let _bs_g_pos = _bs_g_idx % 8
+            let _bs_g_p2 = 1
+            if _bs_g_pos == 1 {
+                let _bs_g_p2 = 2
+            }
+            if _bs_g_pos == 2 {
+                let _bs_g_p2 = 4
+            }
+            if _bs_g_pos == 3 {
+                let _bs_g_p2 = 8
+            }
+            if _bs_g_pos == 4 {
+                let _bs_g_p2 = 16
+            }
+            if _bs_g_pos == 5 {
+                let _bs_g_p2 = 32
+            }
+            if _bs_g_pos == 6 {
+                let _bs_g_p2 = 64
+            }
+            if _bs_g_pos == 7 {
+                let _bs_g_p2 = 128
+            }
+            let _bs_g_val = load [_bs_g_buf + _bs_g_bidx]
+            let _bs_g_div = _bs_g_val / _bs_g_p2
+            let _bs_g_cur = _bs_g_div % 2
+            let _bs_g_cnt = load64 [nx_i0 + 24]
+            if _bs_g_cur == 0 {
+                let _bs_g_val = _bs_g_val + _bs_g_p2
+                store [_bs_g_buf + _bs_g_bidx] _bs_g_val
+                let _bs_g_cnt = _bs_g_cnt + 1
+                store64 [nx_i0 + 24] _bs_g_cnt
+                let nx_r0 = 1
+            } else {
+                let _bs_g_val = _bs_g_val - _bs_g_p2
+                store [_bs_g_buf + _bs_g_bidx] _bs_g_val
+                let _bs_g_cnt = _bs_g_cnt - 1
+                store64 [nx_i0 + 24] _bs_g_cnt
+                let nx_r0 = 0
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_clear_all : clears all bits in BitSet nx_i0 to 0
+# ------------------------------------------------------------------------------
+fn nx_bitset_clear_all {
+    let _bs_ca_buf = load64 [nx_i0 + 0]
+    let _bs_ca_nb = load64 [nx_i0 + 16]
+    let _bs_ca_i = 0
+    while _bs_ca_i < _bs_ca_nb {
+        store [_bs_ca_buf + _bs_ca_i] 0
+        let _bs_ca_i = _bs_ca_i + 1
+    }
+    store64 [nx_i0 + 24] 0
+    let nx_r0 = nx_i0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_set_all : sets all bits in BitSet nx_i0 to 1
+# ------------------------------------------------------------------------------
+fn nx_bitset_set_all {
+    let _bs_sa_buf = load64 [nx_i0 + 0]
+    let _bs_sa_bits = load64 [nx_i0 + 8]
+    let _bs_sa_nbytes = load64 [nx_i0 + 16]
+    let _bs_sa_full = _bs_sa_bits / 8
+    let _bs_sa_rem = _bs_sa_bits % 8
+
+    let _bs_sa_i = 0
+    while _bs_sa_i < _bs_sa_full {
+        store [_bs_sa_buf + _bs_sa_i] 255
+        let _bs_sa_i = _bs_sa_i + 1
+    }
+
+    if _bs_sa_rem > 0 {
+        let _bs_sa_mask = 1
+        if _bs_sa_rem == 2 {
+            let _bs_sa_mask = 3
+        }
+        if _bs_sa_rem == 3 {
+            let _bs_sa_mask = 7
+        }
+        if _bs_sa_rem == 4 {
+            let _bs_sa_mask = 15
+        }
+        if _bs_sa_rem == 5 {
+            let _bs_sa_mask = 31
+        }
+        if _bs_sa_rem == 6 {
+            let _bs_sa_mask = 63
+        }
+        if _bs_sa_rem == 7 {
+            let _bs_sa_mask = 127
+        }
+        store [_bs_sa_buf + _bs_sa_full] _bs_sa_mask
+    }
+
+    store64 [nx_i0 + 24] _bs_sa_bits
+    let nx_r0 = nx_i0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_find_first_set : returns index of first set bit, or -1 if none
+# ------------------------------------------------------------------------------
+fn nx_bitset_find_first_set {
+    let _bs_ff_buf = load64 [nx_i0 + 0]
+    let _bs_ff_bits = load64 [nx_i0 + 8]
+    let _bs_ff_bytes = load64 [nx_i0 + 16]
+    let nx_r0 = 0 - 1
+
+    let _bs_ff_i = 0
+    while _bs_ff_i < _bs_ff_bytes {
+        let _bs_ff_val = load [_bs_ff_buf + _bs_ff_i]
+        if _bs_ff_val > 0 {
+            let _bs_ff_p = 0
+            while _bs_ff_p < 8 {
+                let _bs_ff_idx = _bs_ff_i * 8
+                let _bs_ff_idx = _bs_ff_idx + _bs_ff_p
+                if _bs_ff_idx >= _bs_ff_bits {
+                    let _bs_ff_p = 8
+                } else {
+                    let _bs_ff_p2 = 1
+                    if _bs_ff_p == 1 {
+                        let _bs_ff_p2 = 2
+                    }
+                    if _bs_ff_p == 2 {
+                        let _bs_ff_p2 = 4
+                    }
+                    if _bs_ff_p == 3 {
+                        let _bs_ff_p2 = 8
+                    }
+                    if _bs_ff_p == 4 {
+                        let _bs_ff_p2 = 16
+                    }
+                    if _bs_ff_p == 5 {
+                        let _bs_ff_p2 = 32
+                    }
+                    if _bs_ff_p == 6 {
+                        let _bs_ff_p2 = 64
+                    }
+                    if _bs_ff_p == 7 {
+                        let _bs_ff_p2 = 128
+                    }
+                    let _bs_ff_d = _bs_ff_val / _bs_ff_p2
+                    let _bs_ff_b = _bs_ff_d % 2
+                    if _bs_ff_b == 1 {
+                        let nx_r0 = _bs_ff_idx
+                        let _bs_ff_p = 8
+                        let _bs_ff_i = _bs_ff_bytes
+                    } else {
+                        let _bs_ff_p = _bs_ff_p + 1
+                    }
+                }
+            }
+        }
+        let _bs_ff_i = _bs_ff_i + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_find_first_clear : returns index of first 0 bit, or -1 if all set
+# ------------------------------------------------------------------------------
+fn nx_bitset_find_first_clear {
+    let _bs_fc_buf = load64 [nx_i0 + 0]
+    let _bs_fc_bits = load64 [nx_i0 + 8]
+    let _bs_fc_bytes = load64 [nx_i0 + 16]
+    let nx_r0 = 0 - 1
+
+    let _bs_fc_i = 0
+    while _bs_fc_i < _bs_fc_bytes {
+        let _bs_fc_val = load [_bs_fc_buf + _bs_fc_i]
+        if _bs_fc_val < 255 {
+            let _bs_fc_p = 0
+            while _bs_fc_p < 8 {
+                let _bs_fc_idx = _bs_fc_i * 8
+                let _bs_fc_idx = _bs_fc_idx + _bs_fc_p
+                if _bs_fc_idx >= _bs_fc_bits {
+                    let _bs_fc_p = 8
+                } else {
+                    let _bs_fc_p2 = 1
+                    if _bs_fc_p == 1 {
+                        let _bs_fc_p2 = 2
+                    }
+                    if _bs_fc_p == 2 {
+                        let _bs_fc_p2 = 4
+                    }
+                    if _bs_fc_p == 3 {
+                        let _bs_fc_p2 = 8
+                    }
+                    if _bs_fc_p == 4 {
+                        let _bs_fc_p2 = 16
+                    }
+                    if _bs_fc_p == 5 {
+                        let _bs_fc_p2 = 32
+                    }
+                    if _bs_fc_p == 6 {
+                        let _bs_fc_p2 = 64
+                    }
+                    if _bs_fc_p == 7 {
+                        let _bs_fc_p2 = 128
+                    }
+                    let _bs_fc_d = _bs_fc_val / _bs_fc_p2
+                    let _bs_fc_b = _bs_fc_d % 2
+                    if _bs_fc_b == 0 {
+                        let nx_r0 = _bs_fc_idx
+                        let _bs_fc_p = 8
+                        let _bs_fc_i = _bs_fc_bytes
+                    } else {
+                        let _bs_fc_p = _bs_fc_p + 1
+                    }
+                }
+            }
+        }
+        let _bs_fc_i = _bs_fc_i + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_find_next_set : returns index of next set bit >= nx_i1, or -1
+# ------------------------------------------------------------------------------
+fn nx_bitset_find_next_set {
+    let _bs_fn_bits = load64 [nx_i0 + 8]
+    let _bs_fn_start = nx_i1
+    if _bs_fn_start < 0 {
+        let _bs_fn_start = 0
+    }
+    let _bs_fn_buf = load64 [nx_i0 + 0]
+    let nx_r0 = 0 - 1
+
+    let _bs_fn_cur = _bs_fn_start
+    while _bs_fn_cur < _bs_fn_bits {
+        let _bs_fn_bidx = _bs_fn_cur / 8
+        let _bs_fn_pos = _bs_fn_cur % 8
+        let _bs_fn_val = load [_bs_fn_buf + _bs_fn_bidx]
+
+        let _bs_fn_p2 = 1
+        if _bs_fn_pos == 1 {
+            let _bs_fn_p2 = 2
+        }
+        if _bs_fn_pos == 2 {
+            let _bs_fn_p2 = 4
+        }
+        if _bs_fn_pos == 3 {
+            let _bs_fn_p2 = 8
+        }
+        if _bs_fn_pos == 4 {
+            let _bs_fn_p2 = 16
+        }
+        if _bs_fn_pos == 5 {
+            let _bs_fn_p2 = 32
+        }
+        if _bs_fn_pos == 6 {
+            let _bs_fn_p2 = 64
+        }
+        if _bs_fn_pos == 7 {
+            let _bs_fn_p2 = 128
+        }
+        let _bs_fn_d = _bs_fn_val / _bs_fn_p2
+        let _bs_fn_m = _bs_fn_d % 2
+        if _bs_fn_m == 1 {
+            let nx_r0 = _bs_fn_cur
+            let _bs_fn_cur = _bs_fn_bits
+        } else {
+            let _bs_fn_cur = _bs_fn_cur + 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_recount : recalculates and stores the popcount
+# nx_r0 = total set bits
+# ------------------------------------------------------------------------------
+fn nx_bitset_recount {
+    let _bs_rc_buf = load64 [nx_i0 + 0]
+    let _bs_rc_bytes = load64 [nx_i0 + 16]
+    let _bs_rc_tot = 0
+    let _bs_rc_i = 0
+    while _bs_rc_i < _bs_rc_bytes {
+        let _bs_rc_val = load [_bs_rc_buf + _bs_rc_i]
+        while _bs_rc_val > 0 {
+            let _bs_rc_m = _bs_rc_val % 2
+            if _bs_rc_m == 1 {
+                let _bs_rc_tot = _bs_rc_tot + 1
+            }
+            let _bs_rc_val = _bs_rc_val / 2
+        }
+        let _bs_rc_i = _bs_rc_i + 1
+    }
+    store64 [nx_i0 + 24] _bs_rc_tot
+    let nx_r0 = _bs_rc_tot
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_clone : nx_r0 = new independent copy of BitSet nx_i0
+# ------------------------------------------------------------------------------
+fn nx_bitset_clone {
+    let _bs_cl_src = nx_i0
+    let _bs_cl_bits = load64 [_bs_cl_src + 8]
+    let _bs_cl_bytes = load64 [_bs_cl_src + 16]
+    let _bs_cl_cnt = load64 [_bs_cl_src + 24]
+    let _bs_cl_sbuf = load64 [_bs_cl_src + 0]
+
+    let _bs_cl_dbuf = alloc _bs_cl_bytes
+    let _bs_cl_i = 0
+    while _bs_cl_i < _bs_cl_bytes {
+        let _bs_cl_byte = load [_bs_cl_sbuf + _bs_cl_i]
+        store [_bs_cl_dbuf + _bs_cl_i] _bs_cl_byte
+        let _bs_cl_i = _bs_cl_i + 1
+    }
+
+    let _bs_cl_new = alloc 32
+    store64 [_bs_cl_new + 0] _bs_cl_dbuf
+    store64 [_bs_cl_new + 8] _bs_cl_bits
+    store64 [_bs_cl_new + 16] _bs_cl_bytes
+    store64 [_bs_cl_new + 24] _bs_cl_cnt
+    let nx_r0 = _bs_cl_new
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_equals : nx_r0 = 1 if BitSet nx_i0 equals BitSet nx_i1, else 0
+# ------------------------------------------------------------------------------
+fn nx_bitset_equals {
+    let _bs_eq_a = nx_i0
+    let _bs_eq_b = nx_i1
+    let nx_r0 = 0
+    if _bs_eq_a == _bs_eq_b {
+        let nx_r0 = 1
+    } else {
+        let _bs_eq_b1 = load64 [_bs_eq_a + 8]
+        let _bs_eq_b2 = load64 [_bs_eq_b + 8]
+        if _bs_eq_b1 == _bs_eq_b2 {
+            let _bs_eq_c1 = load64 [_bs_eq_a + 24]
+            let _bs_eq_c2 = load64 [_bs_eq_b + 24]
+            if _bs_eq_c1 == _bs_eq_c2 {
+                let _bs_eq_buf1 = load64 [_bs_eq_a + 0]
+                let _bs_eq_buf2 = load64 [_bs_eq_b + 0]
+                let _bs_eq_bytes = load64 [_bs_eq_a + 16]
+                let _bs_eq_match = 1
+                let _bs_eq_i = 0
+                while _bs_eq_i < _bs_eq_bytes {
+                    let _bs_eq_v1 = load [_bs_eq_buf1 + _bs_eq_i]
+                    let _bs_eq_v2 = load [_bs_eq_buf2 + _bs_eq_i]
+                    if _bs_eq_v1 != _bs_eq_v2 {
+                        let _bs_eq_match = 0
+                        let _bs_eq_i = _bs_eq_bytes
+                    } else {
+                        let _bs_eq_i = _bs_eq_i + 1
+                    }
+                }
+                let nx_r0 = _bs_eq_match
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_and : dst (nx_i0) = dst AND src (nx_i1)
+# nx_r0 = dst
+# ------------------------------------------------------------------------------
+fn nx_bitset_and {
+    let _bs_and_dst = nx_i0
+    let _bs_and_src = nx_i1
+    let _bs_and_dbuf = load64 [_bs_and_dst + 0]
+    let _bs_and_sbuf = load64 [_bs_and_src + 0]
+    let _bs_and_bytes = load64 [_bs_and_dst + 16]
+    let _bs_and_sbytes = load64 [_bs_and_src + 16]
+    if _bs_and_sbytes < _bs_and_bytes {
+        let _bs_and_bytes = _bs_and_sbytes
+    }
+
+    let _bs_and_i = 0
+    while _bs_and_i < _bs_and_bytes {
+        let _bs_and_v1 = load [_bs_and_dbuf + _bs_and_i]
+        let _bs_and_v2 = load [_bs_and_sbuf + _bs_and_i]
+        let _bs_and_res = 0
+        let _bs_and_p2 = 1
+        while _bs_and_v1 > 0 {
+            if _bs_and_v2 > 0 {
+                let _bs_and_r1 = _bs_and_v1 % 2
+                let _bs_and_r2 = _bs_and_v2 % 2
+                if _bs_and_r1 == 1 {
+                    if _bs_and_r2 == 1 {
+                        let _bs_and_res = _bs_and_res + _bs_and_p2
+                    }
+                }
+                let _bs_and_v1 = _bs_and_v1 / 2
+                let _bs_and_v2 = _bs_and_v2 / 2
+                let _bs_and_p2 = _bs_and_p2 * 2
+            } else {
+                let _bs_and_v1 = 0
+            }
+        }
+        store [_bs_and_dbuf + _bs_and_i] _bs_and_res
+        let _bs_and_i = _bs_and_i + 1
+    }
+
+    let nx_i0 = _bs_and_dst
+    call nx_bitset_recount
+    let nx_r0 = _bs_and_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_or : dst (nx_i0) = dst OR src (nx_i1)
+# nx_r0 = dst
+# ------------------------------------------------------------------------------
+fn nx_bitset_or {
+    let _bs_or_dst = nx_i0
+    let _bs_or_src = nx_i1
+    let _bs_or_dbuf = load64 [_bs_or_dst + 0]
+    let _bs_or_sbuf = load64 [_bs_or_src + 0]
+    let _bs_or_bytes = load64 [_bs_or_dst + 16]
+    let _bs_or_sbytes = load64 [_bs_or_src + 16]
+    if _bs_or_sbytes < _bs_or_bytes {
+        let _bs_or_bytes = _bs_or_sbytes
+    }
+
+    let _bs_or_i = 0
+    while _bs_or_i < _bs_or_bytes {
+        let _bs_or_v1 = load [_bs_or_dbuf + _bs_or_i]
+        let _bs_or_v2 = load [_bs_or_sbuf + _bs_or_i]
+        let _bs_or_res = 0
+        let _bs_or_p2 = 1
+        while _bs_or_v1 > 0 {
+            let _bs_or_r1 = _bs_or_v1 % 2
+            let _bs_or_r2 = _bs_or_v2 % 2
+            if _bs_or_r1 == 1 {
+                let _bs_or_res = _bs_or_res + _bs_or_p2
+            } else {
+                if _bs_or_r2 == 1 {
+                    let _bs_or_res = _bs_or_res + _bs_or_p2
+                }
+            }
+            let _bs_or_v1 = _bs_or_v1 / 2
+            let _bs_or_v2 = _bs_or_v2 / 2
+            let _bs_or_p2 = _bs_or_p2 * 2
+        }
+        while _bs_or_v2 > 0 {
+            let _bs_or_r2 = _bs_or_v2 % 2
+            if _bs_or_r2 == 1 {
+                let _bs_or_res = _bs_or_res + _bs_or_p2
+            }
+            let _bs_or_v2 = _bs_or_v2 / 2
+            let _bs_or_p2 = _bs_or_p2 * 2
+        }
+        store [_bs_or_dbuf + _bs_or_i] _bs_or_res
+        let _bs_or_i = _bs_or_i + 1
+    }
+
+    let nx_i0 = _bs_or_dst
+    call nx_bitset_recount
+    let nx_r0 = _bs_or_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_xor : dst (nx_i0) = dst XOR src (nx_i1)
+# nx_r0 = dst
+# ------------------------------------------------------------------------------
+fn nx_bitset_xor {
+    let _bs_xor_dst = nx_i0
+    let _bs_xor_src = nx_i1
+    let _bs_xor_dbuf = load64 [_bs_xor_dst + 0]
+    let _bs_xor_sbuf = load64 [_bs_xor_src + 0]
+    let _bs_xor_bytes = load64 [_bs_xor_dst + 16]
+    let _bs_xor_sbytes = load64 [_bs_xor_src + 16]
+    if _bs_xor_sbytes < _bs_xor_bytes {
+        let _bs_xor_bytes = _bs_xor_sbytes
+    }
+
+    let _bs_xor_i = 0
+    while _bs_xor_i < _bs_xor_bytes {
+        let _bs_xor_v1 = load [_bs_xor_dbuf + _bs_xor_i]
+        let _bs_xor_v2 = load [_bs_xor_sbuf + _bs_xor_i]
+        let _bs_xor_res = 0
+        let _bs_xor_p2 = 1
+        while _bs_xor_v1 > 0 {
+            let _bs_xor_r1 = _bs_xor_v1 % 2
+            let _bs_xor_r2 = _bs_xor_v2 % 2
+            if _bs_xor_r1 != _bs_xor_r2 {
+                let _bs_xor_res = _bs_xor_res + _bs_xor_p2
+            }
+            let _bs_xor_v1 = _bs_xor_v1 / 2
+            let _bs_xor_v2 = _bs_xor_v2 / 2
+            let _bs_xor_p2 = _bs_xor_p2 * 2
+        }
+        while _bs_xor_v2 > 0 {
+            let _bs_xor_r2 = _bs_xor_v2 % 2
+            if _bs_xor_r2 == 1 {
+                let _bs_xor_res = _bs_xor_res + _bs_xor_p2
+            }
+            let _bs_xor_v2 = _bs_xor_v2 / 2
+            let _bs_xor_p2 = _bs_xor_p2 * 2
+        }
+        store [_bs_xor_dbuf + _bs_xor_i] _bs_xor_res
+        let _bs_xor_i = _bs_xor_i + 1
+    }
+
+    let nx_i0 = _bs_xor_dst
+    call nx_bitset_recount
+    let nx_r0 = _bs_xor_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bitset_not : inverts all bits in BitSet nx_i0 (up to num_bits)
+# nx_r0 = nx_i0
+# ------------------------------------------------------------------------------
+fn nx_bitset_not {
+    let _bs_not_desc = nx_i0
+    let _bs_not_buf = load64 [_bs_not_desc + 0]
+    let _bs_not_bits = load64 [_bs_not_desc + 8]
+    let _bs_not_bytes = load64 [_bs_not_desc + 16]
+    let _bs_not_full = _bs_not_bits / 8
+    let _bs_not_rem = _bs_not_bits % 8
+
+    let _bs_not_i = 0
+    while _bs_not_i < _bs_not_full {
+        let _bs_not_val = load [_bs_not_buf + _bs_not_i]
+        let _bs_not_inv = 255 - _bs_not_val
+        store [_bs_not_buf + _bs_not_i] _bs_not_inv
+        let _bs_not_i = _bs_not_i + 1
+    }
+
+    if _bs_not_rem > 0 {
+        let _bs_not_val = load [_bs_not_buf + _bs_not_full]
+        let _bs_not_inv = 255 - _bs_not_val
+        let _bs_not_mask = 1
+        if _bs_not_rem == 2 {
+            let _bs_not_mask = 3
+        }
+        if _bs_not_rem == 3 {
+            let _bs_not_mask = 7
+        }
+        if _bs_not_rem == 4 {
+            let _bs_not_mask = 15
+        }
+        if _bs_not_rem == 5 {
+            let _bs_not_mask = 31
+        }
+        if _bs_not_rem == 6 {
+            let _bs_not_mask = 63
+        }
+        if _bs_not_rem == 7 {
+            let _bs_not_mask = 127
+        }
+
+        # Apply mask
+        let _bs_not_masked = 0
+        let _bs_not_p2 = 1
+        while _bs_not_inv > 0 {
+            if _bs_not_mask > 0 {
+                let _bs_not_r1 = _bs_not_inv % 2
+                let _bs_not_r2 = _bs_not_mask % 2
+                if _bs_not_r1 == 1 {
+                    if _bs_not_r2 == 1 {
+                        let _bs_not_masked = _bs_not_masked + _bs_not_p2
+                    }
+                }
+                let _bs_not_inv = _bs_not_inv / 2
+                let _bs_not_mask = _bs_not_mask / 2
+                let _bs_not_p2 = _bs_not_p2 * 2
+            } else {
+                let _bs_not_inv = 0
+            }
+        }
+        store [_bs_not_buf + _bs_not_full] _bs_not_masked
+    }
+
+    let nx_i0 = _bs_not_desc
+    call nx_bitset_recount
+    let nx_r0 = _bs_not_desc
+}

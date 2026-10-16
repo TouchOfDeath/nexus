@@ -1,0 +1,442 @@
+# ==============================================================================
+#   NEXUS TEST: Dense BitSet / BitVector
+#   Feature #78 (stdlib/bitset.nex)
+# ==============================================================================
+include "stdlib/bitset.nex"
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Creation and sizing
+# ==============================================================================
+let nx_i0 = 0
+call nx_bitset_new
+let bs0 = nx_r0
+let nx_i0 = bs0
+call nx_bitset_len
+assert_eq nx_r0, 0
+let nx_i0 = bs0
+call nx_bitset_bytes
+assert_eq nx_r0, 0
+let nx_i0 = bs0
+call nx_bitset_count
+assert_eq nx_r0, 0
+let nx_i0 = bs0
+call nx_bitset_is_empty
+assert_eq nx_r0, 1
+
+# 10-bit bitset (spans 2 bytes)
+let nx_i0 = 10
+call nx_bitset_new
+let bs10 = nx_r0
+let nx_i0 = bs10
+call nx_bitset_len
+assert_eq nx_r0, 10
+let nx_i0 = bs10
+call nx_bitset_bytes
+assert_eq nx_r0, 2
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+call nx_bitset_is_empty
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 2: Set, Clear, Test, Count
+# ==============================================================================
+# Set bit 0
+let nx_i0 = bs10
+let nx_i1 = 0
+call nx_bitset_set
+assert_eq nx_r0, 1
+
+let nx_i0 = bs10
+let nx_i1 = 0
+call nx_bitset_test
+assert_eq nx_r0, 1
+
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 1
+
+let nx_i0 = bs10
+call nx_bitset_is_empty
+assert_eq nx_r0, 0
+
+# Duplicate set bit 0 -> returns 0, count stays 1
+let nx_i0 = bs10
+let nx_i1 = 0
+call nx_bitset_set
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 1
+
+# Set bit 8 (in byte 1)
+let nx_i0 = bs10
+let nx_i1 = 8
+call nx_bitset_set
+assert_eq nx_r0, 1
+
+let nx_i0 = bs10
+let nx_i1 = 8
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 2
+
+# Set bit 9 (last bit)
+let nx_i0 = bs10
+let nx_i1 = 9
+call nx_bitset_set
+assert_eq nx_r0, 1
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 3
+
+# Test untouched bits
+let nx_i0 = bs10
+let nx_i1 = 1
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+let nx_i0 = bs10
+let nx_i1 = 7
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+# Out of bounds test
+let nx_i0 = bs10
+let nx_i1 = 10
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+let nx_i0 = bs10
+let nx_i1 = 100
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+let nx_i0 = bs10
+let nx_i1 = 0 - 1
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+# Out of bounds set
+let nx_i0 = bs10
+let nx_i1 = 10
+call nx_bitset_set
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 3
+
+# Clear bit 8
+let nx_i0 = bs10
+let nx_i1 = 8
+call nx_bitset_clear
+assert_eq nx_r0, 1
+let nx_i0 = bs10
+let nx_i1 = 8
+call nx_bitset_test
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 2
+
+# Duplicate clear bit 8 -> returns 0
+let nx_i0 = bs10
+let nx_i1 = 8
+call nx_bitset_clear
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 2
+
+# ==============================================================================
+# Section 3: Toggle
+# ==============================================================================
+# Bit 5 is currently 0, toggle -> 1, count increases to 3
+let nx_i0 = bs10
+let nx_i1 = 5
+call nx_bitset_toggle
+assert_eq nx_r0, 1
+let nx_i0 = bs10
+let nx_i1 = 5
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 3
+
+# Toggle bit 5 again -> 0, count decreases to 2
+let nx_i0 = bs10
+let nx_i1 = 5
+call nx_bitset_toggle
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+let nx_i1 = 5
+call nx_bitset_test
+assert_eq nx_r0, 0
+let nx_i0 = bs10
+call nx_bitset_count
+assert_eq nx_r0, 2
+
+# ==============================================================================
+# Section 4: Set All, Clear All, Find First Set / Clear
+# ==============================================================================
+let nx_i0 = 20
+call nx_bitset_new
+let bs20 = nx_r0
+
+let neg1 = 0 - 1
+let nx_i0 = bs20
+call nx_bitset_find_first_set
+assert_eq nx_r0, neg1
+
+let nx_i0 = bs20
+call nx_bitset_find_first_clear
+assert_eq nx_r0, 0
+
+# Set bit 13
+let nx_i0 = bs20
+let nx_i1 = 13
+call nx_bitset_set
+
+let nx_i0 = bs20
+call nx_bitset_find_first_set
+assert_eq nx_r0, 13
+
+# Set bit 3
+let nx_i0 = bs20
+let nx_i1 = 3
+call nx_bitset_set
+
+let nx_i0 = bs20
+call nx_bitset_find_first_set
+assert_eq nx_r0, 3
+
+# Find next set starting at 4 -> should find 13
+let nx_i0 = bs20
+let nx_i1 = 4
+call nx_bitset_find_next_set
+assert_eq nx_r0, 13
+
+# Find next set starting at 14 -> none (-1)
+let nx_i0 = bs20
+let nx_i1 = 14
+call nx_bitset_find_next_set
+assert_eq nx_r0, neg1
+
+# Set all 20 bits
+let nx_i0 = bs20
+call nx_bitset_set_all
+let nx_i0 = bs20
+call nx_bitset_count
+assert_eq nx_r0, 20
+let nx_i0 = bs20
+call nx_bitset_is_all_set
+assert_eq nx_r0, 1
+
+# When all set, find_first_clear should return -1
+let nx_i0 = bs20
+call nx_bitset_find_first_clear
+assert_eq nx_r0, neg1
+
+# Clear bit 7 -> find_first_clear should be 7
+let nx_i0 = bs20
+let nx_i1 = 7
+call nx_bitset_clear
+let nx_i0 = bs20
+call nx_bitset_find_first_clear
+assert_eq nx_r0, 7
+
+# Clear all
+let nx_i0 = bs20
+call nx_bitset_clear_all
+let nx_i0 = bs20
+call nx_bitset_count
+assert_eq nx_r0, 0
+let nx_i0 = bs20
+call nx_bitset_is_empty
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 5: Clone and Equality
+# ==============================================================================
+let nx_i0 = 16
+call nx_bitset_new
+let orig = nx_r0
+let nx_i0 = orig
+let nx_i1 = 2
+call nx_bitset_set
+let nx_i0 = orig
+let nx_i1 = 9
+call nx_bitset_set
+
+let nx_i0 = orig
+call nx_bitset_clone
+let cloned = nx_r0
+
+let nx_i0 = orig
+let nx_i1 = cloned
+call nx_bitset_equals
+assert_eq nx_r0, 1
+
+# Mutate clone, verify orig remains untouched
+let nx_i0 = cloned
+let nx_i1 = 4
+call nx_bitset_set
+
+let nx_i0 = orig
+let nx_i1 = 4
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+let nx_i0 = cloned
+let nx_i1 = 4
+call nx_bitset_test
+assert_eq nx_r0, 1
+
+let nx_i0 = orig
+let nx_i1 = cloned
+call nx_bitset_equals
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 6: Bitwise Operations (AND, OR, XOR, NOT)
+# ==============================================================================
+# Set A: bits {1, 3, 5}
+let nx_i0 = 8
+call nx_bitset_new
+let setA = nx_r0
+let nx_i0 = setA
+let nx_i1 = 1
+call nx_bitset_set
+let nx_i0 = setA
+let nx_i1 = 3
+call nx_bitset_set
+let nx_i0 = setA
+let nx_i1 = 5
+call nx_bitset_set
+
+# Set B: bits {3, 5, 7}
+let nx_i0 = 8
+call nx_bitset_new
+let setB = nx_r0
+let nx_i0 = setB
+let nx_i1 = 3
+call nx_bitset_set
+let nx_i0 = setB
+let nx_i1 = 5
+call nx_bitset_set
+let nx_i0 = setB
+let nx_i1 = 7
+call nx_bitset_set
+
+# AND test: copy of A AND B -> bits {3, 5}, count = 2
+let nx_i0 = setA
+call nx_bitset_clone
+let setAnd = nx_r0
+let nx_i0 = setAnd
+let nx_i1 = setB
+call nx_bitset_and
+let nx_i0 = setAnd
+call nx_bitset_count
+assert_eq nx_r0, 2
+let nx_i0 = setAnd
+let nx_i1 = 3
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = setAnd
+let nx_i1 = 5
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = setAnd
+let nx_i1 = 1
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+# OR test: copy of A OR B -> bits {1, 3, 5, 7}, count = 4
+let nx_i0 = setA
+call nx_bitset_clone
+let setOr = nx_r0
+let nx_i0 = setOr
+let nx_i1 = setB
+call nx_bitset_or
+let nx_i0 = setOr
+call nx_bitset_count
+assert_eq nx_r0, 4
+let nx_i0 = setOr
+let nx_i1 = 1
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = setOr
+let nx_i1 = 7
+call nx_bitset_test
+assert_eq nx_r0, 1
+
+# XOR test: copy of A XOR B -> bits {1, 7}, count = 2
+let nx_i0 = setA
+call nx_bitset_clone
+let setXor = nx_r0
+let nx_i0 = setXor
+let nx_i1 = setB
+call nx_bitset_xor
+let nx_i0 = setXor
+call nx_bitset_count
+assert_eq nx_r0, 2
+let nx_i0 = setXor
+let nx_i1 = 1
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = setXor
+let nx_i1 = 7
+call nx_bitset_test
+assert_eq nx_r0, 1
+let nx_i0 = setXor
+let nx_i1 = 3
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+# NOT test on 10-bit bitset:
+# Create 10-bit bitset with bit 0 and 9 set (count = 2)
+let nx_i0 = 10
+call nx_bitset_new
+let setNot = nx_r0
+let nx_i0 = setNot
+let nx_i1 = 0
+call nx_bitset_set
+let nx_i0 = setNot
+let nx_i1 = 9
+call nx_bitset_set
+
+# Invert -> bits 1..8 should be set, bits 0 and 9 clear (count = 8)
+let nx_i0 = setNot
+call nx_bitset_not
+let nx_i0 = setNot
+call nx_bitset_count
+assert_eq nx_r0, 8
+
+let nx_i0 = setNot
+let nx_i1 = 0
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+let nx_i0 = setNot
+let nx_i1 = 9
+call nx_bitset_test
+assert_eq nx_r0, 0
+
+let nx_i0 = setNot
+let nx_i1 = 1
+call nx_bitset_test
+assert_eq nx_r0, 1
+
+let nx_i0 = setNot
+let nx_i1 = 8
+call nx_bitset_test
+assert_eq nx_r0, 1
+
+print "BITSET_TEST_PASS"

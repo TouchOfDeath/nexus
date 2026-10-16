@@ -210,6 +210,41 @@ Layout in memory (32-byte header struct on heap):
 | `nx_hashset_cap` | (set=nx_i0) -> nx_r0 | Current slot capacity |
 | `nx_hashset_clear` | (set=nx_i0) | Marks every slot empty and resets count |
 
+### Dense BitSet / BitVector — `stdlib/bitset.nex` (Feature #78)
+
+A space-efficient, heap-allocated dense bit vector packed 8 bits per byte (1 byte per 8 flags). Ideal for dirty line markers, selection masks, and large boolean arrays.
+
+Layout in memory (32-byte header struct on heap):
+- Offset `0`: `buf_ptr` (pointer to raw byte buffer)
+- Offset `8`: `num_bits` (total bit capacity)
+- Offset `16`: `num_bytes` (allocated bytes, `(num_bits + 7) / 8`)
+- Offset `24`: `count` (number of set bits, cached popcount)
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_bitset_new` | (num_bits=nx_i0) -> nx_r0 | Allocates bitset initialized to 0 |
+| `nx_bitset_len` | (bs=nx_i0) -> nx_r0 | Returns total bit capacity |
+| `nx_bitset_bytes` | (bs=nx_i0) -> nx_r0 | Returns number of allocated bytes |
+| `nx_bitset_count` | (bs=nx_i0) -> nx_r0 | Returns O(1) count of set bits (cardinality) |
+| `nx_bitset_is_empty` | (bs=nx_i0) -> nx_r0 | Returns 1 if count == 0, else 0 |
+| `nx_bitset_is_all_set` | (bs=nx_i0) -> nx_r0 | Returns 1 if count == num_bits, else 0 |
+| `nx_bitset_test` | (bs=nx_i0, idx=nx_i1) -> nx_r0 | Returns bit at `idx` (1 or 0) |
+| `nx_bitset_set` | (bs=nx_i0, idx=nx_i1) -> nx_r0 | Sets bit to 1; returns 1 if changed, 0 otherwise |
+| `nx_bitset_clear` | (bs=nx_i0, idx=nx_i1) -> nx_r0 | Clears bit to 0; returns 1 if changed, 0 otherwise |
+| `nx_bitset_toggle` | (bs=nx_i0, idx=nx_i1) -> nx_r0 | Flips bit; returns new bit value (1 or 0) |
+| `nx_bitset_set_all` | (bs=nx_i0) -> nx_r0 | Sets all bits to 1 (with trailing mask) |
+| `nx_bitset_clear_all` | (bs=nx_i0) -> nx_r0 | Clears all bits to 0 |
+| `nx_bitset_find_first_set` | (bs=nx_i0) -> nx_r0 | First set bit index, or -1 if none |
+| `nx_bitset_find_first_clear` | (bs=nx_i0) -> nx_r0 | First clear bit index, or -1 if all set |
+| `nx_bitset_find_next_set` | (bs=nx_i0, start=nx_i1) -> nx_r0 | Next set bit index >= `start`, or -1 |
+| `nx_bitset_clone` | (bs=nx_i0) -> nx_r0 | Deep copy of bitset and byte buffer |
+| `nx_bitset_equals` | (bs1=nx_i0, bs2=nx_i1) -> nx_r0 | 1 if identical lengths and bits, else 0 |
+| `nx_bitset_and` | (dst=nx_i0, src=nx_i1) -> nx_r0 | In-place bitwise AND (`dst = dst & src`) |
+| `nx_bitset_or` | (dst=nx_i0, src=nx_i1) -> nx_r0 | In-place bitwise OR (`dst = dst \| src`) |
+| `nx_bitset_xor` | (dst=nx_i0, src=nx_i1) -> nx_r0 | In-place bitwise XOR (`dst = dst ^ src`) |
+| `nx_bitset_not` | (bs=nx_i0) -> nx_r0 | In-place bitwise NOT (inverts all bits) |
+| `nx_bitset_recount` | (bs=nx_i0) -> nx_r0 | Recalculates and caches popcount |
+
 ### Bitwise Operations — `stdlib/bitwise.nex`
 
 Software-emulated 64-bit bitwise primitives and shifts. When using operator syntax (`&`, `|`, `^`, `~`, `<<`, `>>`), `nexprep.c` automatically desugars them to these functions:

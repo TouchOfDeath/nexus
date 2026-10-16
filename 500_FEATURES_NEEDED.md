@@ -127,7 +127,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 75. **Circular Ring Buffer**: Fixed-size circular buffer for console output streaming, logging history, and audio sample mixing.
 76. **Priority Queue / Binary Heap**: Heap structure for scheduling asynchronous UI timer callbacks and sorting diagnostic errors by severity.
 77. **Doubly-Linked List**: Node-based list with bidirectional links for LRU cache management and tab ordering.
-78. **Dense BitSet / BitVector**: Space-efficient bitset for tracking dirty line flags and boolean selection masks across large files.
+78. [x] **Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset for tracking dirty line flags and boolean selection masks across large files. Supports creation, indexing, bit manipulation (set, clear, toggle, test), popcount/cardinality, first/next bit searches, and bitwise operations (AND, OR, XOR, NOT).
 79. **Bloom Filter**: Probabilistic filter for instantaneous negative lookups across vast codebase symbol indexes.
 80. **Trie / Prefix Tree**: Character trie for blazing-fast prefix autocompletion and keyword dictionary queries.
 81. **Compressed Radix Tree (Patricia Tree)**: Space-optimized prefix tree for path routing and symbol namespace resolution.
