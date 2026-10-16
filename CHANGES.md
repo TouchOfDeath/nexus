@@ -1,5 +1,11 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
+## Unreleased — String Utility Additions
+
+- Added `nx_str_starts_with` and `nx_str_ends_with` to `stdlib/strings.nex`, including correct empty and too-long prefix/suffix behavior.
+- Added `nx_str_trim` to copy a string without leading/trailing ASCII whitespace (space and bytes 9–13); Unicode whitespace is not currently supported.
+- Extended the standard-library regression suite from 94 to 108 assertions and documented the new APIs.
+
 ## v8.2+ — Phase 1: String Escapes & Universal Escape Decoding (current)
 
 Major compiler and preprocessor enhancement adding native C-style string escape sequence decoding across all execution engines and platforms (Linux x86-64, Windows PE32+, macOS ARM64).

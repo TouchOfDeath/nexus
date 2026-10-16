@@ -186,13 +186,13 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 129. **Regex In-Place Replacement with Group Substitution**: Replacing matches using `$1`, `$2`, and `\g<name>` capture references.
 130. **String Interpolation Syntax**: Format strings `f"Line {cursor_line}, Col {cursor_col}"` evaluated cleanly without string builder chaining.
 131. **Printf-Style Format Specifiers**: Low-level string formatting (`%08x`, `%10.2f`, `%-20s`) for compiler diagnostic listings.
-132. **String Trimming Utilities**: Functions removing leading/trailing ASCII and Unicode whitespace (`trim`, `trim_start`, `trim_end`).
+132. **String Trimming Utilities** *(PARTIAL)*: `nx_str_trim` removes leading/trailing ASCII space and control whitespace (bytes 9–13); Unicode whitespace and separate `trim_start`/`trim_end` functions remain unimplemented.
 133. **String Splitting by Delimiter / Predicate**: Zero-copy iterator yielding slices split by characters or substrings.
 134. **String Joining with Separator**: Concatenating arrays or iterators of strings with a delimiter into a single allocation.
 135. **String Case Transformations**: Methods converting strings to lowercase, uppercase, title case, snake_case, camelCase, and kebab-case.
 136. **String Padding & Alignment**: Methods padding strings with arbitrary fill characters to fixed visual column widths.
 137. **Substring Replacement Utilities**: Methods replacing all or first N occurrences of a substring with another string.
-138. **String Prefix & Suffix Checking**: Optimized `starts_with()` and `ends_with()` routines avoiding full string comparisons.
+138. **String Prefix & Suffix Checking** *(COMPLETED)*: `nx_str_starts_with` and `nx_str_ends_with` in `stdlib/strings.nex`, including empty and overlong match edge cases.
 139. **Levenshtein Edit Distance Algorithm**: Fuzzy string metric for 'Did you mean?' typo suggestions on compiler keyword errors.
 140. **Jaro-Winkler Similarity Metric**: Fuzzy matching algorithm favoring matching prefixes for IDE autocomplete ranking.
 141. **Fuzzy Subsequence Matcher**: Subsequence scoring algorithm (like fzf) for fast file switching (`Ctrl+P`) and symbol search.

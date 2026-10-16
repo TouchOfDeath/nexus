@@ -118,6 +118,170 @@ fn nx_str_chr {
 }
 
 # ------------------------------------------------------------------------------
+# fn nx_str_starts_with : nx_r0 = 1 if string nx_i0 begins with prefix nx_i1
+#                         (an empty prefix always matches)
+# ------------------------------------------------------------------------------
+fn nx_str_starts_with {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let nx_r0 = 1
+    let s2 = 0
+    let s5 = 1
+    while s5 == 1 {
+        let s3 = load [s1 + s2]
+        if s3 == 0 {
+            let s5 = 0
+        } else {
+            let s4 = load [s0 + s2]
+            if s4 == 0 {
+                let nx_r0 = 0
+                let s5 = 0
+            } else {
+                if s4 != s3 {
+                    let nx_r0 = 0
+                    let s5 = 0
+                } else {
+                    let s2 = s2 + 1
+                }
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_ends_with : nx_r0 = 1 if string nx_i0 ends with suffix nx_i1
+#                       (an empty suffix always matches)
+# ------------------------------------------------------------------------------
+fn nx_str_ends_with {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = 0
+    let s3 = load [s0 + 0]
+    while s3 != 0 {
+        let s2 = s2 + 1
+        let s3 = load [s0 + s2]
+    }
+    let s4 = 0
+    let s5 = load [s1 + 0]
+    while s5 != 0 {
+        let s4 = s4 + 1
+        let s5 = load [s1 + s4]
+    }
+    let nx_r0 = 1
+    if s4 > s2 {
+        let nx_r0 = 0
+    } else {
+        let s6 = s2 - s4
+        let s7 = 0
+        while s7 < s4 {
+            let s8 = s6 + s7
+            let s9 = s0 + s8
+            let s10 = load [s9]
+            let s11 = load [s1 + s7]
+            if s10 != s11 {
+                let nx_r0 = 0
+            }
+            let s7 = s7 + 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_trim : copy nx_i0 to nx_i1 without leading/trailing ASCII whitespace
+#                  Returns trimmed byte length in nx_r0. Supports space and
+#                  ASCII control whitespace TAB through CR (9..13).
+#                  Destination must hold the source length plus one byte.
+# ------------------------------------------------------------------------------
+fn nx_str_trim {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = 0
+    let s3 = load [s0 + 0]
+    while s3 != 0 {
+        let s2 = s2 + 1
+        let s3 = load [s0 + s2]
+    }
+
+    let s4 = 0
+    let s9 = 1
+    while s9 == 1 {
+        if s4 < s2 {
+            let s6 = load [s0 + s4]
+            let s7 = 0
+            if s6 == 32 {
+                let s7 = 1
+            }
+            if s6 == 9 {
+                let s7 = 1
+            }
+            if s6 == 10 {
+                let s7 = 1
+            }
+            if s6 == 11 {
+                let s7 = 1
+            }
+            if s6 == 12 {
+                let s7 = 1
+            }
+            if s6 == 13 {
+                let s7 = 1
+            }
+            if s7 == 1 {
+                let s4 = s4 + 1
+            } else {
+                let s9 = 0
+            }
+        } else {
+            let s9 = 0
+        }
+    }
+
+    let s9 = 1
+    while s9 == 1 {
+        if s2 > s4 {
+            let s8 = s2 - 1
+            let s6 = load [s0 + s8]
+            let s7 = 0
+            if s6 == 32 {
+                let s7 = 1
+            }
+            if s6 == 9 {
+                let s7 = 1
+            }
+            if s6 == 10 {
+                let s7 = 1
+            }
+            if s6 == 11 {
+                let s7 = 1
+            }
+            if s6 == 12 {
+                let s7 = 1
+            }
+            if s6 == 13 {
+                let s7 = 1
+            }
+            if s7 == 1 {
+                let s2 = s2 - 1
+            } else {
+                let s9 = 0
+            }
+        } else {
+            let s9 = 0
+        }
+    }
+
+    let s5 = 0
+    while s4 < s2 {
+        let s6 = load [s0 + s4]
+        store [s1 + s5] s6
+        let s4 = s4 + 1
+        let s5 = s5 + 1
+    }
+    store [s1 + s5] 0
+    let nx_r0 = s5
+}
+
+# ------------------------------------------------------------------------------
 # fn nx_str_to_int : nx_r0 = decimal integer parsed from string nx_i0
 #                    Accepts an optional leading '-'. Non-digit characters
 #                    are ignored. Stops at the null terminator.

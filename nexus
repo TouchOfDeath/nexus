@@ -518,7 +518,7 @@ for src, expected, tname in foundation_tests:
     else:
         print(f"[-] Foundation: {tname:28} FAIL")
 
-# Standard library test suite (94 assertions over all 26 functions)
+# Standard library test suite (108 assertions)
 stdlib_ok = False
 stdlib_src = os.path.join(base_dir, "tests", "stdlib_test.nex")
 if os.path.exists(stdlib_src):
@@ -531,7 +531,7 @@ if os.path.exists(stdlib_src):
         subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
     r = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True)
     if "[SUCCESS] ALL STDLIB TESTS PASSED!" in r.stdout:
-        log_pass("[+] Stdlib suite: 94 assertions                  PASS")
+        log_pass("[+] Stdlib suite: 108 assertions                 PASS")
         stdlib_ok = True
     else:
         print("[-] Stdlib suite: FAIL")
