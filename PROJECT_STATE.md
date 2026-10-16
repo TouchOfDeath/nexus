@@ -9,7 +9,8 @@
 ## 0.1 Unreleased — Standard Library String Utilities (2026-10-16)
 - Added `nx_str_starts_with` and `nx_str_ends_with` with empty and overlong input coverage (roadmap feature 138).
 - Added `nx_str_trim` for ASCII space and control whitespace bytes 9–13; Unicode whitespace remains unsupported (partial roadmap feature 132).
-- Standard-library regression coverage increased from 94 to 108 assertions.
+- Added `nx_str_normalize_newlines` for mixed CRLF, LF, and CR input, including mutable in-place normalization (roadmap feature 148).
+- Standard-library regression coverage increased from 94 to 116 assertions.
 - Verification: examples, foundation tests, stdlib, optimizer, interactive, type-inference, IDE, HYDRON, and string-escape suites passed. The full `./nexus test` run reported 0/13 compiler-diagnostic checks; invalid-source output showed an empty `Line:` field.
 
 ## 0. v8.2+ String Escapes & Optimization Release Snapshot (2026-10-13)

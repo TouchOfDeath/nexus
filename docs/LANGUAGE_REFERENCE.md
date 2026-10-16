@@ -6,7 +6,7 @@
 
 > Every example in this document was compiled and executed with the project's
 > own self-hosted compiler before publication. The runnable companion suite
-> lives in `tests/stdlib_test.nex` (108 assertions).
+> lives in `tests/stdlib_test.nex` (116 assertions).
 
 ---
 

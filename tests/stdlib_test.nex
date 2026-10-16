@@ -522,6 +522,10 @@ let s_zero1 = "0"
 let s_long_prefix = "abcd"
 let s_trim_input = " \t\nhello\r "
 let s_ws_only = " \t\r\n"
+let s_newline_mixed = "one\r\ntwo\rthree\n"
+let s_newline_expected = "one\ntwo\nthree\n"
+let s_crlf_only = "\r\n"
+let s_inplace_newlines = "x\r\ny"
 let buf_s = alloc 64
 
 # ------------------------------ nx_str_len -----------------------------------
@@ -699,6 +703,60 @@ let nx_i1 = 0
 call check_eq
 let nx_i0 = buf_s
 let nx_i1 = s_empty
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_normalize_newlines --------------------
+print "[strings] nx_str_normalize_newlines"
+let nx_i0 = s_newline_mixed
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 14
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_newline_expected
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_crlf_only
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = "\n"
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_empty
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_empty
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_inplace_newlines
+let nx_i1 = buf_s
+call nx_str_copy
+let nx_i0 = buf_s
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 3
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = "x\ny"
 call nx_str_cmp
 let nx_i0 = nx_r0
 let nx_i1 = 0

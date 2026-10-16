@@ -13,7 +13,8 @@
 #                      nx_arr_sort nx_arr_avg
 #   stdlib/strings.nex nx_str_len nx_str_copy nx_str_cmp nx_str_concat
 #                      nx_str_chr nx_str_starts_with nx_str_ends_with
-#                      nx_str_trim nx_str_to_int nx_int_to_str
+#                      nx_str_trim nx_str_normalize_newlines
+#                      nx_str_to_int nx_int_to_str
 #   stdlib/qarrays.nex nx_qarr_fill nx_qarr_iota nx_qarr_sum nx_qarr_max
 #                      nx_qarr_min nx_qarr_index_of nx_qarr_reverse
 #                      nx_qarr_count nx_qarr_sort nx_qarr_avg

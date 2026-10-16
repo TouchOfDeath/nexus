@@ -202,7 +202,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 145. **URL / Percent-Encoding Utilities**: Encoding and decoding file URIs (`file:///path/to/code.nex`) for LSP interactions.
 146. **Escape Character Unescaping Parser** *(COMPLETED)*: Transforming string literal escape codes (`\n`, `\t`, `\r`, `\0`, `\xHH`, `\e`, `\\`, `\"`) into binary bytes.
 147. **Escape Character Escaper**: Escaping arbitrary raw text into valid string literal representations.
-148. **Line Ending Normalizer**: Converting mixed CRLF (`\r\n`), LF (`\n`), and CR (`\r`) line endings to a consistent document format.
+148. **Line Ending Normalizer** *(COMPLETED)*: `nx_str_normalize_newlines` converts CRLF and lone CR to LF, preserves existing LF, and supports in-place normalization of mutable buffers.
 149. **Indentation Detection Engine**: Analyzing buffer lines to automatically detect whether a file uses tabs or spaces, and the tab width.
 150. **Tab-to-Space and Space-to-Tab Converter**: Utility converting between tab characters and aligned spaces based on tab stop positions.
 151. **Wildcard / Glob Pattern Matcher**: File path matching using `*`, `?`, and `**` patterns for `.gitignore` and project search exclusions.

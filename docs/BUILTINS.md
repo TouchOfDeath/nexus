@@ -137,6 +137,7 @@ Strings are pointers to null-terminated bytes (string literal variables or
 | `nx_str_starts_with` | (s=nx_i0, prefix=nx_i1) -> nx_r0 | 1 if matched; empty prefix matches |
 | `nx_str_ends_with` | (s=nx_i0, suffix=nx_i1) -> nx_r0 | 1 if matched; empty suffix matches |
 | `nx_str_trim` | (src=nx_i0, dst=nx_i1) -> nx_r0 | copies without edge ASCII whitespace; returns byte length; dst must hold source length + 1 |
+| `nx_str_normalize_newlines` | (src=nx_i0, dst=nx_i1) -> nx_r0 | converts CRLF and CR to LF; preserves LF; supports same mutable source/destination buffer |
 | `nx_str_to_int` | (s) -> nx_r0 | decimal parse; optional leading '-'; non-digits ignored |
 | `nx_int_to_str` | (v=nx_i0, buf=nx_i1) | writes decimal text of v into buf (needs 12 bytes) |
 
@@ -275,7 +276,7 @@ Prints 15 — the primes 2,3,5,7,11,13,17,19,23,29,31,37,41,43,47.
 
 Everything above is machine-checked:
 
-- `tests/stdlib_test.nex` — 108 assertions across math, byte arrays, strings
+- `tests/stdlib_test.nex` — 116 assertions across math, byte arrays, strings
 - `tests/test_vec.nex` — Dynamic vector reallocation, push, pop, indexing
 - `tests/test_hashmap.nex` — Open-addressing hashmap put, get, collision probing
 - `tests/test_bitwise_ops.nex` — Bitwise operations desugared and verified

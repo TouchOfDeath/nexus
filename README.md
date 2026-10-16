@@ -78,7 +78,7 @@ nexus_project/
 │   ├── math.nex               <- Math utilities (max, min, clamp, sign, pow, isqrt, gcd, lcm, fib, prime)
 │   ├── arrays.nex             <- Contiguous byte array utilities (fill, iota, sum, max, min, reverse, sort)
 │   ├── qarrays.nex            <- 64-bit integer array utilities
-│   ├── strings.nex            <- String utilities (len, copy, cmp, concat, chr, starts/ends, trim, atoi, itoa)
+│   ├── strings.nex            <- String utilities (len, copy, cmp, concat, chr, starts/ends, trim, newline normalization, atoi, itoa)
 │   ├── assert.nex             <- Assertion framework backing assert_eq / assert_ne
 │   ├── http.nex               <- Native HTTP/1.1 web server & JSON engine
 │   ├── x11.nex                <- Direct X11 wire protocol graphical windowing
@@ -436,7 +436,7 @@ Running NEXUS test suite on Linux (Direct Native ELF64 Execution)...
 ...
 [+] 13/13 Compiler Diagnostics  PASS
 [+] 48/48 Foundation Tests      PASS
-[+] Stdlib suite (108 asserts)  PASS
+[+] Stdlib suite (116 asserts)  PASS
 [+] Optimizer suite (52 asserts)PASS
 [+] Type inference (7 categories)PASS
 [+] Native IDE (100% NEXUS)     PASS

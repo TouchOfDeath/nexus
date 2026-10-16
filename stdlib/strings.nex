@@ -282,6 +282,40 @@ fn nx_str_trim {
 }
 
 # ------------------------------------------------------------------------------
+# fn nx_str_normalize_newlines : copy nx_i0 to nx_i1 with CRLF/CR changed to LF
+#                                Existing LF bytes are preserved. Returns the
+#                                normalized byte length in nx_r0. Source and
+#                                destination may be the same mutable buffer.
+#                                Destination must hold source length plus 1.
+# ------------------------------------------------------------------------------
+fn nx_str_normalize_newlines {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = 0
+    let s3 = 0
+    let s4 = load [s0 + s2]
+    while s4 != 0 {
+        if s4 == 13 {
+            store [s1 + s3] 10
+            let s3 = s3 + 1
+            let s2 = s2 + 1
+            let s4 = load [s0 + s2]
+            if s4 == 10 {
+                let s2 = s2 + 1
+                let s4 = load [s0 + s2]
+            }
+        } else {
+            store [s1 + s3] s4
+            let s3 = s3 + 1
+            let s2 = s2 + 1
+            let s4 = load [s0 + s2]
+        }
+    }
+    store [s1 + s3] 0
+    let nx_r0 = s3
+}
+
+# ------------------------------------------------------------------------------
 # fn nx_str_to_int : nx_r0 = decimal integer parsed from string nx_i0
 #                    Accepts an optional leading '-'. Non-digit characters
 #                    are ignored. Stops at the null terminator.
