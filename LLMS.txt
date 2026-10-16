@@ -298,6 +298,46 @@ call nx_hashmap_contains
 let exists = nx_r0              # 1
 ```
 
+### Hash Sets (`stdlib/hashset.nex`)
+```nexus
+include "stdlib/nstdlib.nex"
+
+# Create new hash set (capacity 16, auto-doubles with rehash)
+call nx_hashset_new
+let set = nx_r0
+
+# Add integer element (duplicate elimination)
+let nx_i0 = set
+let nx_i1 = 42
+call nx_hashset_add
+let added = nx_r0                # 1 if inserted, 0 if already present
+
+# Add string element (matched by CONTENT, not pointer)
+let nx_i0 = set
+let nx_i1 = "keyword"
+call nx_hashset_add_str
+
+# Check membership
+let nx_i0 = set
+let nx_i1 = 42
+call nx_hashset_contains
+let exists = nx_r0               # 1
+
+let nx_i0 = set
+let nx_i1 = "keyword"
+call nx_hashset_contains_str
+
+# Remove element (tombstone-based; traversal stays correct)
+let nx_i0 = set
+let nx_i1 = 42
+call nx_hashset_remove
+
+# Length
+let nx_i0 = set
+call nx_hashset_len
+let count = nx_r0
+```
+
 ---
 
 ## 9. Assertions & Testing

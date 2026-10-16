@@ -251,7 +251,7 @@ class NexusInterpreter:
         return res
 
     def eval_addr(self, mem_expr):
-        # Evaluate ptr + offset or ptr - offset
+        # Evaluate ptr + offset or ptr - offset (supports scaled index: ptr + idx * 8)
         mem_expr = mem_expr.strip()
         parts = re.split(r'(\+|\-)', mem_expr)
         base = self.eval_atom(parts[0].strip())
@@ -259,10 +259,15 @@ class NexusInterpreter:
         i = 1
         while i < len(parts):
             sign = parts[i].strip()
-            val = self.eval_atom(parts[i+1].strip())
+            rhs_str = parts[i+1].strip()
             i += 2
-            if sign == '+': addr += int(val)
-            elif sign == '-': addr -= int(val)
+            if '*' in rhs_str:
+                term, scale = rhs_str.split('*', 1)
+                val = int(self.eval_atom(term.strip())) * int(self.eval_atom(scale.strip()))
+            else:
+                val = int(self.eval_atom(rhs_str))
+            if sign == '+': addr += val
+            elif sign == '-': addr -= val
         return addr
 
     def eval_cond(self, cond):

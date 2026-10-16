@@ -72,7 +72,7 @@ Developer tooling:
   ./nexus studio [file.nex]      Alias for nexus ide
   ./nexus new <project-name>      Scaffold a new NEXUS project in the current directory
   ./nexus fmt [--check] <file>    Format a .nex source file (stable, idempotent)
-  ./nexus build <file.nex>        Incremental project build with dependency caching
+  ./nexus build <file.nex> [-o out] Incremental project build with dependency caching
                                   (.nexuscache; skips rebuild when nothing changed)
   ./nexus build                   Full master build + verification pipeline
   ./nexus sprite <in.sprite|png>  Compile pixel art/PNG into a standalone NEXUS sprite asset
@@ -97,18 +97,57 @@ cmd="${1:-}"
 case "$cmd" in
     build)
         if [ -n "${2:-}" ]; then
-            python3 - "$SCRIPT_DIR" "$(realpath "$2")" "${3:-}" << 'PYBUILD'
+            python3 - "$SCRIPT_DIR" "${@:2}" << 'PYBUILD'
 import hashlib, os, shutil, subprocess, sys
 
-root, src, flag = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
+root = sys.argv[1]
+raw_args = sys.argv[2:]
+
+src = None
+custom_out = None
+is_clean = False
+
+i = 0
+while i < len(raw_args):
+    arg = raw_args[i]
+    if arg == '--clean':
+        is_clean = True
+    elif arg in ('-o', '--out'):
+        if i + 1 < len(raw_args):
+            custom_out = raw_args[i + 1]
+            i += 1
+    elif not arg.startswith('-') and src is None:
+        src = os.path.realpath(arg)
+    i += 1
+
+if not src:
+    print("[-] nexus build: missing source file argument", file=sys.stderr)
+    sys.exit(1)
+
 src_dir = os.path.dirname(src)
 base = os.path.splitext(os.path.basename(src))[0]
 cache_file = os.path.join(src_dir, '.nexuscache')
-out_exe = os.path.join(src_dir, base + '.exe')
-out_elf = os.path.join(src_dir, base + '.elf')
+
+if custom_out:
+    custom_out = os.path.realpath(custom_out)
+    out_dir = os.path.dirname(custom_out)
+    if out_dir: os.makedirs(out_dir, exist_ok=True)
+    if custom_out.endswith('.elf'):
+        out_elf = custom_out
+        out_exe = custom_out[:-4] + '.exe'
+    elif custom_out.endswith('.exe'):
+        out_exe = custom_out
+        out_elf = custom_out[:-4] + '.elf'
+    else:
+        out_elf = custom_out
+        out_exe = custom_out + '.exe'
+else:
+    out_exe = os.path.join(src_dir, base + '.exe')
+    out_elf = os.path.join(src_dir, base + '.elf')
+
 compiler_dir = os.path.join(root, 'compiler')
 
-if flag == '--clean':
+if is_clean:
     for p in (out_exe, out_elf, cache_file):
         if os.path.exists(p):
             os.remove(p)
@@ -149,6 +188,8 @@ if os.path.exists(cache_file):
         if k and v:
             cache[k] = v
 key = base + ':' + hashlib.sha256(src.encode()).hexdigest()[:12]
+if custom_out:
+    key += ':' + hashlib.sha256(custom_out.encode()).hexdigest()[:8]
 fp = fingerprint()
 
 cached = cache.get(key)
@@ -704,6 +745,25 @@ if os.path.exists(range_src):
         else:
             print("[-] Loop & Range suite: FAIL")
 
+# Hash Set (Feature #71) regression suite
+hs_ok = False
+hs_src = os.path.join(base_dir, "tests", "test_hashset.nex")
+if os.path.exists(hs_src):
+    subprocess.run([nexprep, hs_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_hs = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "HASHSET_TEST_PASS" in out_hs:
+            log_pass("[+] Hash set suite: Feature #71 (add, contains, remove, len, string/int) PASS")
+            hs_ok = True
+        else:
+            print("[-] Hash set suite: FAIL")
+
 s_ok = "PASS" if stdlib_ok else "FAIL"
 o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
@@ -713,60 +773,76 @@ e_ok = "PASS" if str_escapes_ok else "FAIL"
 p_ok = "PASS" if pt_ok else "FAIL"
 syn_status = "PASS" if syn_ok else "FAIL"
 range_status = "PASS" if range_ok else "FAIL"
+hashset_status = "PASS" if hs_ok else "FAIL"
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}")
 '
         ;;
     self-host)
         echo "Verifying Stage 5 Bit-for-Bit Self-Hosting Convergence (PE + Native ELF)..."
         python3 -c '
-import subprocess, os
+import subprocess, os, sys
 base_dir = "'"$SCRIPT_DIR"'"
 compiler_dir = os.path.join(base_dir, "compiler")
 nexload = os.path.join(base_dir, "bin", "nexload")
 nexelf = os.path.join(base_dir, "bin", "nexelf")
+code_nex = os.path.join(compiler_dir, "code.nex")
 
-with open(os.path.join(compiler_dir, "nexc.nex"), "rb") as f: c = f.read()
-with open(os.path.join(compiler_dir, "code.nex"), "wb") as f: f.write(c)
+# Backup existing code.nex if present so we restore it afterwards
+old_code = None
+if os.path.exists(code_nex):
+    with open(code_nex, "rb") as f:
+        old_code = f.read()
 
-print("1. Testing Gen 3 (nexc3.exe) -> app.exe (Gen 4)...")
-subprocess.run([nexload, os.path.join(compiler_dir, "nexc3.exe")], cwd=compiler_dir, capture_output=True)
+try:
+    with open(os.path.join(compiler_dir, "nexc.nex"), "rb") as f: c = f.read()
+    with open(code_nex, "wb") as f: f.write(c)
 
-with open(os.path.join(compiler_dir, "app.exe"), "rb") as f: app = f.read()
-with open(os.path.join(compiler_dir, "nexc3.exe"), "rb") as f: n3 = f.read()
-with open(os.path.join(compiler_dir, "nexc4.exe"), "rb") as f: n4 = f.read()
+    print("1. Testing Gen 3 (nexc3.exe) -> app.exe (Gen 4)...")
+    subprocess.run([nexload, os.path.join(compiler_dir, "nexc3.exe")], cwd=compiler_dir, capture_output=True)
 
-diffs_3 = sum(1 for a, b in zip(app, n3) if a != b)
-diffs_4 = sum(1 for a, b in zip(app, n4) if a != b)
-print(f"   Generated PE size: {len(app)} bytes")
-print(f"   Diff vs nexc3.exe: {diffs_3} byte differences across 49,152 bytes")
-print(f"   Diff vs nexc4.exe: {diffs_4} byte differences across 49,152 bytes")
+    with open(os.path.join(compiler_dir, "app.exe"), "rb") as f: app = f.read()
+    with open(os.path.join(compiler_dir, "nexc3.exe"), "rb") as f: n3 = f.read()
+    with open(os.path.join(compiler_dir, "nexc4.exe"), "rb") as f: n4 = f.read()
 
-nexc_elf = os.path.join(compiler_dir, "nexc.elf")
-if os.path.exists(nexc_elf):
-    print("2. Testing Standalone Linux Compiler (nexc.elf) Self-Hosting...")
-    subprocess.run([nexc_elf], cwd=compiler_dir, capture_output=True)
-    with open(os.path.join(compiler_dir, "app.exe"), "rb") as f: app_from_elf = f.read()
-    diffs_elf_pe = sum(1 for a, b in zip(app_from_elf, n3) if a != b)
-    print(f"   Diff (nexc.elf emitted app.exe vs nexc3.exe): {diffs_elf_pe} differences")
-    
-    app_elf = os.path.join(compiler_dir, "app.elf")
-    if not os.path.exists(app_elf):
-        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), app_elf], capture_output=True)
-    with open(app_elf, "rb") as f: app_elf_data = f.read()
-    with open(nexc_elf, "rb") as f: nexc_elf_data = f.read()
-    diffs_elf_elf = sum(1 for a, b in zip(app_elf_data, nexc_elf_data) if a != b)
-    print(f"   Diff (app.elf vs nexc.elf): {diffs_elf_elf} differences across {len(nexc_elf_data)} bytes")
-else:
-    diffs_elf_pe = 0
-    diffs_elf_elf = 0
+    diffs_3 = sum(1 for a, b in zip(app, n3) if a != b)
+    diffs_4 = sum(1 for a, b in zip(app, n4) if a != b)
+    print(f"   Generated PE size: {len(app)} bytes")
+    print(f"   Diff vs nexc3.exe: {diffs_3} byte differences across 49,152 bytes")
+    print(f"   Diff vs nexc4.exe: {diffs_4} byte differences across 49,152 bytes")
 
-if diffs_3 == 0 and diffs_4 == 0 and diffs_elf_pe == 0 and diffs_elf_elf == 0:
-    print("[SUCCESS] 100% Bit-for-bit identical across Windows PE32+ and Linux ELF64!")
-else:
-    print("[FAIL] Mismatch detected.")
+    nexc_elf = os.path.join(compiler_dir, "nexc.elf")
+    if os.path.exists(nexc_elf):
+        print("2. Testing Standalone Linux Compiler (nexc.elf) Self-Hosting...")
+        subprocess.run([nexc_elf], cwd=compiler_dir, capture_output=True)
+        with open(os.path.join(compiler_dir, "app.exe"), "rb") as f: app_from_elf = f.read()
+        diffs_elf_pe = sum(1 for a, b in zip(app_from_elf, n3) if a != b)
+        print(f"   Diff (nexc.elf emitted app.exe vs nexc3.exe): {diffs_elf_pe} differences")
+        
+        app_elf = os.path.join(compiler_dir, "app.elf")
+        if not os.path.exists(app_elf):
+            subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), app_elf], capture_output=True)
+        with open(app_elf, "rb") as f: app_elf_data = f.read()
+        with open(nexc_elf, "rb") as f: nexc_elf_data = f.read()
+        diffs_elf_elf = sum(1 for a, b in zip(app_elf_data, nexc_elf_data) if a != b)
+        print(f"   Diff (app.elf vs nexc.elf): {diffs_elf_elf} differences across {len(nexc_elf_data)} bytes")
+    else:
+        diffs_elf_pe = 0
+        diffs_elf_elf = 0
+
+    if diffs_3 == 0 and diffs_4 == 0 and diffs_elf_pe == 0 and diffs_elf_elf == 0:
+        print("[SUCCESS] 100% Bit-for-bit identical across Windows PE32+ and Linux ELF64!")
+    else:
+        print("[FAIL] Mismatch detected.")
+        sys.exit(1)
+finally:
+    if old_code is not None:
+        with open(code_nex, "wb") as f:
+            f.write(old_code)
+    elif os.path.exists(code_nex):
+        os.remove(code_nex)
 '
         ;;
     dump)

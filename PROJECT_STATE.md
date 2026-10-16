@@ -41,6 +41,7 @@
     - `tests/test_piece_table.nex`: PASS (Feature #67 Piece Table: insert, delete, coalescing, slice export, line navigation, atomic snapshot undo/redo)
     - `tests/test_syntax_v83.nex`: PASS (Features #30, #35, #36: Octal literals `0o...`, increment/decrement `++`/`--`, ternary expressions `cond ? a : b`)
     - `tests/test_loop_ranges_v84.nex`: PASS (Features #37, #50, #59: Compile-time `const`, range loops `0..N` / `0..=N` with `step`, null coalescing `??`)
+    - `tests/test_hashset.nex`: 117/117 PASS (Feature #71 string/integer hash set: add/add_str/contains/contains_str/remove/remove_str/len with tombstones & rehash)
     - `tests/test_hydron_correctness.nex`: 13/13 PASS (boundary & scoping verification)
     - `tests/test_hydron_overflow.nex`: 21/21 PASS (64-bit integer overflow & boundary safety)
 - **Determinism**: Gen 1 == Gen 2 == Gen 3 bit-for-bit self-hosting parity verified via `./nexus bootstrap` and `./nexus self-host`.
@@ -52,6 +53,12 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **NEXUS Feature #71 — Hash Set (`stdlib/hashset.nex`) (2026-10-16)**:
+  - **String/Integer HashSet (`stdlib/hashset.nex`)**: Open-addressing set collection (modeled on `stdlib/hashmap.nex`) storing unique 64-bit integer AND null-terminated string elements.
+  - **Capabilities**: `nx_hashset_new` (capacity 16), `nx_hashset_add` / `nx_hashset_add_str` (returns 1 inserted / 0 duplicate — duplicate elimination), `nx_hashset_contains` / `nx_hashset_contains_str` (O(1) membership), `nx_hashset_remove` / `nx_hashset_remove_str` (tombstone-based removal, probing chains stay correct), `nx_hashset_len`/`nx_hashset_cap`/`nx_hashset_clear`.
+  - **Design**: Per-slot state byte (`0`=empty, `1`=integer, `2`=string, `3`=tombstone) allows integer element `0` as a fully valid member (no sentinel collision like hashmap key 0); strings compared by CONTENT via `nx_str_cmp` so distinct literals with equal bytes count as one element; automatic capacity doubling with full rehash whenever live count reaches 1/2 load (16→32→64→128, exercised by tests).
+  - **Toolchain notes**: The canonical (git-tracked) `bin/nexc.*` toolchain rejects arithmetic expressions inside `if`/`while` conditions ("Condition Expr Trap") and renders chained numeric expressions left-to-right (verified: `1000 + i * 5 == (1000 + i) * 5`) — grow-trigger conditions use precomputed load temporaries, and tests precompute strides accordingly.
+  - **Verification**: `tests/test_hashset.nex` — 117/117 PASS on native Linux ELF64 (`./nexus run`); integrated into `./nexus test` (hashset suite block, alongside piece_table pattern).
 - **NEXUS v8.5 — Modern Loop & Range Ergonomics Bundle (Features #37, #50, #59) (2026-10-14)**:
   - **Feature #37: Compile-Time Constants (`const`)**: Full support for `const NAME = <val_or_expr>` across top-level and local scopes. Immediate integer arithmetic chains (e.g. `4 * 10` -> `40`) are folded at compile time, and constant identifiers are substituted as immediate values outside strings and comments, eliminating unnecessary stack/heap allocations and memory loads.
   - **Feature #50: Range Expressions in Loops (`start..end`, `start..=end`)**: Exclusive (`..`) and inclusive (`..=`) range syntax for clean loops `for i in 0..10 { ... }`, with optional positive/negative stride syntax (`for i in 0..10 step 2 { ... }`, `for i in 10..0 step -2 { ... }`). Seamlessly desugared to canonical compiler headers with full lexical scoping and stack frame registration.

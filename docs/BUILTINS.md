@@ -180,6 +180,31 @@ Layout in memory (32-byte header struct on heap):
 | `nx_hashmap_clear` | (map=nx_i0) | Clears all buckets and resets count to 0 |
 | `nx_hash_int` | (val=nx_i0) -> nx_r0 | Fast integer hash subroutine |
 
+### Hash Sets — `stdlib/hashset.nex` (Feature #71)
+
+An open-addressing hash set (`HashSet<T>`) storing unique integer AND string elements with linear probing, tombstone-based removal, and automatic capacity doubling with full rehash when the live load factor reaches 1/2.
+
+Strings are matched by **content** (`nx_str_cmp`), so different literals with identical bytes count as one element; integer `0` is a fully valid element (slots are classified by a per-slot state byte, not a sentinel value).
+
+Layout in memory (32-byte header struct on heap):
+- Offset `0`: `vals_ptr` (pointer to element array, 8 bytes per slot)
+- Offset `8`: `state_ptr` (pointer to state array, 1 byte per slot: `0`=empty, `1`=integer, `2`=string, `3`=tombstone)
+- Offset `16`: `count` (number of live entries)
+- Offset `24`: `capacity` (number of hash slots, initially 16)
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_hashset_new` | () -> nx_r0 | Allocates set with initial capacity 16 |
+| `nx_hashset_add` | (set=nx_i0, val=nx_i1) -> nx_r0 | Adds integer element; 1 if inserted, 0 if already present |
+| `nx_hashset_add_str` | (set=nx_i0, str=nx_i1) -> nx_r0 | Adds string element (content-matched) |
+| `nx_hashset_contains` | (set=nx_i0, val=nx_i1) -> nx_r0 | 1 if integer element exists, 0 otherwise |
+| `nx_hashset_contains_str` | (set=nx_i0, str=nx_i1) -> nx_r0 | 1 if string exists (by content) |
+| `nx_hashset_remove` | (set=nx_i0, val=nx_i1) -> nx_r0 | Removes element (leaves tombstone); 1 if removed |
+| `nx_hashset_remove_str` | (set=nx_i0, str=nx_i1) -> nx_r0 | Removes string element (by content) |
+| `nx_hashset_len` | (set=nx_i0) -> nx_r0 | Number of live entries |
+| `nx_hashset_cap` | (set=nx_i0) -> nx_r0 | Current slot capacity |
+| `nx_hashset_clear` | (set=nx_i0) | Marks every slot empty and resets count |
+
 ### Bitwise Operations — `stdlib/bitwise.nex`
 
 Software-emulated 64-bit bitwise primitives and shifts. When using operator syntax (`&`, `|`, `^`, `~`, `<<`, `>>`), `nexprep.c` automatically desugars them to these functions:

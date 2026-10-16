@@ -1,0 +1,357 @@
+# ==============================================================================
+#   NEXUS TEST: Hash Set (HashSet<T>) — string/integer membership collection
+#   Feature #71 (stdlib/hashset.nex)
+# ==============================================================================
+include "stdlib/nstdlib.nex"
+
+# ==============================================================================
+# Section A: integer set basics
+# ==============================================================================
+# A1. Create and add integers (duplicate elimination)
+let nx_i0 = 0
+call nx_hashset_new
+let hs = nx_r0
+
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_add
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_add
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+let nx_i1 = 7
+call nx_hashset_add
+assert_eq nx_r0, 1
+
+# A2. Integer 0 is a fully valid element (slot classification is by state, not sentinel)
+let nx_i0 = hs
+let nx_i1 = 0
+call nx_hashset_add
+assert_eq nx_r0, 1
+
+# A3. Length after inserts
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 3
+
+# A4. Contains
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = 0
+call nx_hashset_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = 999
+call nx_hashset_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section B: remove with tombstones, then re-add
+# ==============================================================================
+# B1. Remove present element
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_remove
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 2
+
+# B2. Contains gone, others still present (tombstone must not kill probing)
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+let nx_i1 = 7
+call nx_hashset_contains
+assert_eq nx_r0, 1
+
+# B3. Removing again is a no-op
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_remove
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 2
+
+# B4. Re-add after removal
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_add
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = 42
+call nx_hashset_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 3
+
+# ==============================================================================
+# Section C: string elements (content-based identity)
+# ==============================================================================
+# C1. Add strings, dedupe equal content
+let ap = "apple"
+let bn = "banana"
+let ch = "cherry"
+
+let nx_i0 = hs
+let nx_i1 = ap
+call nx_hashset_add_str
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = bn
+call nx_hashset_add_str
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = ch
+call nx_hashset_add_str
+assert_eq nx_r0, 1
+
+# Same content via a different literal still counts as duplicate
+let nx_i0 = hs
+let nx_i1 = "apple"
+call nx_hashset_add_str
+assert_eq nx_r0, 0
+
+# C2. Length: 3 ints + 3 strings
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 6
+
+# C3. Contains (by content, not by pointer)
+let nx_i0 = hs
+let nx_i1 = "banana"
+call nx_hashset_contains_str
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = "durian"
+call nx_hashset_contains_str
+assert_eq nx_r0, 0
+
+# C4. Integer membership still works alongside string elements
+let nx_i0 = hs
+let nx_i1 = 7
+call nx_hashset_contains
+assert_eq nx_r0, 1
+
+# C5. Remove string by content
+let nx_i0 = hs
+let nx_i1 = bn
+call nx_hashset_remove_str
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = "banana"
+call nx_hashset_contains_str
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 5
+
+# ==============================================================================
+# Section D: duplicate elimination, growth & rehashing
+# ==============================================================================
+# D1. Add 50 integers (forces the table past its 1/2 load factor and rehashes)
+let i = 0
+while i < 50 {
+    let nx_i0 = hs
+    let nx_i1 = 1000 + i
+    call nx_hashset_add
+    let i = i + 1
+}
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 55
+
+# D2. Capacity doubled each time the load factor crosses 1/2:
+#     cnt 8 -> 32, cnt 16 -> 64, cnt 32 -> 128 (55 live entries -> cap 128)
+let nx_i0 = hs
+call nx_hashset_cap
+assert_eq nx_r0, 128
+
+# D3. Every element survives the rehash
+let i = 0
+while i < 50 {
+    let nx_i0 = hs
+    let nx_i1 = 1000 + i
+    call nx_hashset_contains
+    assert_eq nx_r0, 1
+    let i = i + 1
+}
+
+# D4. Re-adding existing elements is a no-op (no growth spillover)
+# NOTE: expressions evaluate left-to-right; precompute the stride to stay safe
+let i = 0
+while i < 10 {
+    let stride = i * 5
+    let nx_i0 = hs
+    let nx_i1 = 1000 + stride
+    call nx_hashset_add
+    assert_eq nx_r0, 0
+    let i = i + 1
+}
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 55
+
+# ==============================================================================
+# Section E: tombstone correctness at scale (remove, then add near slots)
+# ==============================================================================
+# E1. Remove 10 of them (precompute stride: left-to-right expression semantics)
+let i = 0
+while i < 10 {
+    let stride = i * 3
+    let nx_i0 = hs
+    let nx_i1 = 1000 + stride
+    call nx_hashset_remove
+    assert_eq nx_r0, 1
+    let i = i + 1
+}
+
+# E2. Length reflects removals; removed ones absent; present ones intact
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 45
+
+let nx_i0 = hs
+let nx_i1 = 1000
+call nx_hashset_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+let nx_i1 = 1001
+call nx_hashset_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = 1009
+call nx_hashset_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+let nx_i1 = "cherry"
+call nx_hashset_contains_str
+assert_eq nx_r0, 1
+
+# E3. Strings survive a mass rehash triggered by fresh inserts
+let i = 0
+while i < 10 {
+    let nx_i0 = hs
+    let nx_i1 = 2000 + i
+    call nx_hashset_add
+    let i = i + 1
+}
+
+let nx_i0 = hs
+let nx_i1 = "apple"
+call nx_hashset_contains_str
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+let nx_i1 = "cherry"
+call nx_hashset_contains_str
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section F: string token categorization (batch membership)
+# ==============================================================================
+call nx_hashset_new
+let tok = nx_r0
+
+let t0 = "cursor"
+let t1 = "walker"
+let t2 = "spirit"
+let t3 = "ember"
+let t4 = "drift"
+
+let nx_i0 = tok
+let nx_i1 = t0
+call nx_hashset_add_str
+assert_eq nx_r0, 1
+
+let nx_i0 = tok
+let nx_i1 = t1
+call nx_hashset_add_str
+
+let nx_i0 = tok
+let nx_i1 = t2
+call nx_hashset_add_str
+
+let nx_i0 = tok
+let nx_i1 = t3
+call nx_hashset_add_str
+
+let nx_i0 = tok
+let nx_i1 = t4
+call nx_hashset_add_str
+
+# Categorize: only t2 is in the set at time of first contains probe pattern
+let nx_i0 = tok
+let nx_i1 = "drift"
+call nx_hashset_contains_str
+assert_eq nx_r0, 1
+
+let nx_i0 = tok
+let nx_i1 = "shadow"
+call nx_hashset_contains_str
+assert_eq nx_r0, 0
+
+let nx_i0 = tok
+call nx_hashset_len
+assert_eq nx_r0, 5
+
+# ==============================================================================
+# Section G: clear and reuse
+# ==============================================================================
+let nx_i0 = hs
+call nx_hashset_clear
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+let nx_i1 = 1007
+call nx_hashset_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = hs
+let nx_i1 = "apple"
+call nx_hashset_contains_str
+assert_eq nx_r0, 0
+
+# Set is reusable after clear
+let nx_i0 = hs
+let nx_i1 = 5
+call nx_hashset_add
+assert_eq nx_r0, 1
+
+let nx_i0 = hs
+call nx_hashset_len
+assert_eq nx_r0, 1
+
+call nx_assert_summary
+print "HASHSET_TEST_PASS"

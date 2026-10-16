@@ -1,0 +1,482 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: hashset.nex
+#        Hash Set (HashSet<T>) — string/integer membership collection
+# ==============================================================================
+#
+# A HashSet is a heap-allocated, open-addressing hash table that stores unique
+# elements. It supports both 64-bit integer elements and null-terminated
+# string elements (Feature #71): membership testing, duplicate elimination,
+# and token categorization.
+#
+# Elements are tagged per-slot, so a single set may hold integers AND strings:
+#   - integer element 0 is fully valid (slots are classified by their state
+#     byte, not by a sentinel value in the value array)
+#   - strings are compared by CONTENT (nx_str_cmp), so different string
+#     literals with equal bytes count as the same element
+#
+# Memory Layout (stored in a 32-byte struct on the heap):
+#   offset 0:  vals_ptr   - pointer to the value array (8 bytes per slot)
+#   offset 8:  state_ptr  - pointer to the state array (1 byte per slot)
+#   offset 16: count      - number of live entries
+#   offset 24: capacity   - number of slots in vals/state arrays
+#
+# Per-slot state byte:
+#   0 = empty        (slot never used / cleared)
+#   1 = occupied integer element (val is the raw 64-bit integer)
+#   2 = occupied string element  (val is a pointer to a string)
+#   3 = tombstone    (removed element; probing continues past it)
+#
+# The table automatically doubles its capacity (with a full rehash) whenever
+# the live load factor reaches 1/2, keeping linear-probe chains short.
+#
+# CALLING CONVENTION (all functions):
+#   1. Set inputs in nx_i0, nx_i1 (per-function signature)
+#   2. call <fn>
+#   3. Read the result from nx_r0
+#
+# IMPORTANT: Functions that call other stdlib functions must use non-scratch
+# variables (not s0..s7) for data that must persist across the call.
+# We use _hs_* prefixed variables for this purpose.
+#
+# DEPENDENCY: requires stdlib/strings.nex (included via stdlib/nstdlib.nex).
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_hash_int : nx_r0 = hash of integer element nx_i0 (always >= 0)
+# ------------------------------------------------------------------------------
+fn nx_hashset_hash_int {
+    let s0 = nx_i0
+    let s0 = s0 * 2654435761
+    let s0 = s0 + 97
+    if s0 < 0 {
+        let s0 = 0 - s0
+    }
+    if s0 < 0 {
+        let s0 = 0
+    }
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_hash_str : nx_r0 = djb2 hash of string nx_i0 (always >= 0)
+#   String must be null-terminated.
+# ------------------------------------------------------------------------------
+fn nx_hashset_hash_str {
+    let s0 = nx_i0
+    let nx_r0 = 5381
+    let s1 = 0
+    let s2 = load [s0 + 0]
+    while s2 != 0 {
+        let s3 = nx_r0 * 33
+        let nx_r0 = s3 + s2
+        let s1 = s1 + 1
+        let s2 = load [s0 + s1]
+    }
+    if nx_r0 < 0 {
+        let nx_r0 = 0 - nx_r0
+    }
+    if nx_r0 < 0 {
+        let nx_r0 = 0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_new : allocates a new HashSet with initial capacity 16
+#   nx_r0 = set handle
+# ------------------------------------------------------------------------------
+fn nx_hashset_new {
+    let s0 = alloc 32
+    let s1 = alloc 128
+    let s2 = alloc 16
+    store64 [s0 + 0] s1
+    store64 [s0 + 8] s2
+    store64 [s0 + 16] 0
+    store64 [s0 + 24] 16
+    let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_grow : rehash set nx_i0 into a new table of double capacity
+#   (internal; called by add/add_str when live count reaches half capacity)
+# ------------------------------------------------------------------------------
+fn nx_hashset_grow {
+    let _hs_g_set = nx_i0
+    let _hs_g_cap = load64 [_hs_g_set + 24]
+    let _hs_g_new = _hs_g_cap * 2
+    let _hs_g_vp = load64 [_hs_g_set + 0]
+    let _hs_g_tp = load64 [_hs_g_set + 8]
+    let _hs_g_nvp = alloc _hs_g_new * 8
+    let _hs_g_ntp = alloc _hs_g_new
+    let _hs_g_i = 0
+    while _hs_g_i < _hs_g_cap {
+        let s0 = load [_hs_g_tp + _hs_g_i]
+        if s0 == 1 {
+            let _hs_g_v = load64 [_hs_g_vp + _hs_g_i * 8]
+            let nx_i0 = _hs_g_v
+            call nx_hashset_hash_int
+            let s2 = nx_r0
+            let s2 = s2 % _hs_g_new
+            let s3 = load [_hs_g_ntp + s2]
+            while s3 != 0 {
+                let s2 = s2 + 1
+                if s2 >= _hs_g_new {
+                    let s2 = 0
+                }
+                let s3 = load [_hs_g_ntp + s2]
+            }
+            store64 [_hs_g_nvp + s2 * 8] _hs_g_v
+            store [_hs_g_ntp + s2] 1
+        }
+        if s0 == 2 {
+            let _hs_g_v = load64 [_hs_g_vp + _hs_g_i * 8]
+            let nx_i0 = _hs_g_v
+            call nx_hashset_hash_str
+            let s2 = nx_r0
+            let s2 = s2 % _hs_g_new
+            let s3 = load [_hs_g_ntp + s2]
+            while s3 != 0 {
+                let s2 = s2 + 1
+                if s2 >= _hs_g_new {
+                    let s2 = 0
+                }
+                let s3 = load [_hs_g_ntp + s2]
+            }
+            store64 [_hs_g_nvp + s2 * 8] _hs_g_v
+            store [_hs_g_ntp + s2] 2
+        }
+        let _hs_g_i = _hs_g_i + 1
+    }
+    store64 [_hs_g_set + 0] _hs_g_nvp
+    store64 [_hs_g_set + 8] _hs_g_ntp
+    store64 [_hs_g_set + 24] _hs_g_new
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_add : add integer element nx_i1 to set nx_i0
+#   nx_r0 = 1 if inserted, 0 if the element was already present
+# ------------------------------------------------------------------------------
+fn nx_hashset_add {
+    let _hs_set = nx_i0
+    let _hs_val = nx_i1
+    let _hs_cnt = load64 [_hs_set + 16]
+    let _hs_cap = load64 [_hs_set + 24]
+    let _hs_load = _hs_cnt * 2
+    if _hs_load >= _hs_cap {
+        let nx_i0 = _hs_set
+        call nx_hashset_grow
+        let _hs_cap = load64 [_hs_set + 24]
+    }
+    let _hs_vp = load64 [_hs_set + 0]
+    let _hs_tp = load64 [_hs_set + 8]
+    let nx_i0 = _hs_val
+    call nx_hashset_hash_int
+    let _hs_slot = nx_r0
+    let _hs_slot = _hs_slot % _hs_cap
+    let _hs_probe = 0
+    let _hs_reuse = 0 - 1
+    let _hs_empty = 0 - 1
+    let _hs_found = 0
+    let nx_r0 = 0
+    while _hs_probe < _hs_cap {
+        let s0 = load [_hs_tp + _hs_slot]
+        if s0 == 0 {
+            let _hs_empty = _hs_slot
+            let _hs_probe = _hs_cap
+        }
+        if s0 == 1 {
+            let s1 = load64 [_hs_vp + _hs_slot * 8]
+            if s1 == _hs_val {
+                let _hs_found = 1
+                let _hs_probe = _hs_cap
+            }
+        }
+        if s0 == 3 {
+            if _hs_reuse < 0 {
+                let _hs_reuse = _hs_slot
+            }
+        }
+        if _hs_probe < _hs_cap {
+            let _hs_slot = _hs_slot + 1
+            if _hs_slot >= _hs_cap {
+                let _hs_slot = 0
+            }
+        }
+        let _hs_probe = _hs_probe + 1
+    }
+    if _hs_found == 0 {
+        if _hs_empty >= 0 {
+            let _hs_pos = _hs_empty
+            if _hs_reuse >= 0 {
+                let _hs_pos = _hs_reuse
+            }
+            store64 [_hs_vp + _hs_pos * 8] _hs_val
+            store [_hs_tp + _hs_pos] 1
+            let s2 = load64 [_hs_set + 16]
+            let s2 = s2 + 1
+            store64 [_hs_set + 16] s2
+            let nx_r0 = 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_add_str : add string element nx_i1 to set nx_i0
+#   Strings are matched by content, not by pointer.
+#   nx_r0 = 1 if inserted, 0 if an equal string was already present
+# ------------------------------------------------------------------------------
+fn nx_hashset_add_str {
+    let _hs_set = nx_i0
+    let _hs_str = nx_i1
+    let _hs_cnt = load64 [_hs_set + 16]
+    let _hs_cap = load64 [_hs_set + 24]
+    let _hs_load = _hs_cnt * 2
+    if _hs_load >= _hs_cap {
+        let nx_i0 = _hs_set
+        call nx_hashset_grow
+        let _hs_cap = load64 [_hs_set + 24]
+    }
+    let _hs_vp = load64 [_hs_set + 0]
+    let _hs_tp = load64 [_hs_set + 8]
+    let nx_i0 = _hs_str
+    call nx_hashset_hash_str
+    let _hs_slot = nx_r0
+    let _hs_slot = _hs_slot % _hs_cap
+    let _hs_probe = 0
+    let _hs_reuse = 0 - 1
+    let _hs_empty = 0 - 1
+    let _hs_found = 0
+    let nx_r0 = 0
+    while _hs_probe < _hs_cap {
+        let s0 = load [_hs_tp + _hs_slot]
+        if s0 == 0 {
+            let _hs_empty = _hs_slot
+            let _hs_probe = _hs_cap
+        }
+        if s0 == 2 {
+            let s1 = load64 [_hs_vp + _hs_slot * 8]
+            let nx_i0 = s1
+            let nx_i1 = _hs_str
+            call nx_str_cmp
+            let _hs_cmp = nx_r0
+            let nx_r0 = 0
+            if _hs_cmp == 0 {
+                let _hs_found = 1
+                let _hs_probe = _hs_cap
+            }
+        }
+        if s0 == 3 {
+            if _hs_reuse < 0 {
+                let _hs_reuse = _hs_slot
+            }
+        }
+        if _hs_probe < _hs_cap {
+            let _hs_slot = _hs_slot + 1
+            if _hs_slot >= _hs_cap {
+                let _hs_slot = 0
+            }
+        }
+        let _hs_probe = _hs_probe + 1
+    }
+    if _hs_found == 0 {
+        if _hs_empty >= 0 {
+            let _hs_pos = _hs_empty
+            if _hs_reuse >= 0 {
+                let _hs_pos = _hs_reuse
+            }
+            store64 [_hs_vp + _hs_pos * 8] _hs_str
+            store [_hs_tp + _hs_pos] 2
+            let s2 = load64 [_hs_set + 16]
+            let s2 = s2 + 1
+            store64 [_hs_set + 16] s2
+            let nx_r0 = 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_contains : nx_r0 = 1 if integer element nx_i1 exists, else 0
+# ------------------------------------------------------------------------------
+fn nx_hashset_contains {
+    let _hs_set = nx_i0
+    let _hs_val = nx_i1
+    let _hs_cap = load64 [_hs_set + 24]
+    let nx_i0 = _hs_val
+    call nx_hashset_hash_int
+    let _hs_slot = nx_r0
+    let _hs_slot = _hs_slot % _hs_cap
+    let _hs_vp = load64 [_hs_set + 0]
+    let _hs_tp = load64 [_hs_set + 8]
+    let _hs_probe = 0
+    let nx_r0 = 0
+    while _hs_probe < _hs_cap {
+        let s0 = load [_hs_tp + _hs_slot]
+        if s0 == 0 {
+            let _hs_probe = _hs_cap
+        }
+        if s0 == 1 {
+            let s1 = load64 [_hs_vp + _hs_slot * 8]
+            if s1 == _hs_val {
+                let nx_r0 = 1
+                let _hs_probe = _hs_cap
+            }
+        }
+        let _hs_slot = _hs_slot + 1
+        if _hs_slot >= _hs_cap {
+            let _hs_slot = 0
+        }
+        let _hs_probe = _hs_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_contains_str : nx_r0 = 1 if string nx_i1 exists (by content)
+# ------------------------------------------------------------------------------
+fn nx_hashset_contains_str {
+    let _hs_set = nx_i0
+    let _hs_str = nx_i1
+    let _hs_cap = load64 [_hs_set + 24]
+    let nx_i0 = _hs_str
+    call nx_hashset_hash_str
+    let _hs_slot = nx_r0
+    let _hs_slot = _hs_slot % _hs_cap
+    let _hs_vp = load64 [_hs_set + 0]
+    let _hs_tp = load64 [_hs_set + 8]
+    let _hs_probe = 0
+    let nx_r0 = 0
+    while _hs_probe < _hs_cap {
+        let s0 = load [_hs_tp + _hs_slot]
+        if s0 == 0 {
+            let _hs_probe = _hs_cap
+        }
+        if s0 == 2 {
+            let s1 = load64 [_hs_vp + _hs_slot * 8]
+            let nx_i0 = s1
+            let nx_i1 = _hs_str
+            call nx_str_cmp
+            let _hs_cmp = nx_r0
+            let nx_r0 = 0
+            if _hs_cmp == 0 {
+                let nx_r0 = 1
+                let _hs_probe = _hs_cap
+            }
+        }
+        let _hs_slot = _hs_slot + 1
+        if _hs_slot >= _hs_cap {
+            let _hs_slot = 0
+        }
+        let _hs_probe = _hs_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_remove : remove integer element nx_i1 from set nx_i0
+#   nx_r0 = 1 if removed, 0 if not present (leaves a tombstone behind)
+# ------------------------------------------------------------------------------
+fn nx_hashset_remove {
+    let _hs_set = nx_i0
+    let _hs_val = nx_i1
+    let _hs_cap = load64 [_hs_set + 24]
+    let nx_i0 = _hs_val
+    call nx_hashset_hash_int
+    let _hs_slot = nx_r0
+    let _hs_slot = _hs_slot % _hs_cap
+    let _hs_vp = load64 [_hs_set + 0]
+    let _hs_tp = load64 [_hs_set + 8]
+    let _hs_probe = 0
+    let nx_r0 = 0
+    while _hs_probe < _hs_cap {
+        let s0 = load [_hs_tp + _hs_slot]
+        if s0 == 0 {
+            let _hs_probe = _hs_cap
+        }
+        if s0 == 1 {
+            let s1 = load64 [_hs_vp + _hs_slot * 8]
+            if s1 == _hs_val {
+                store [_hs_tp + _hs_slot] 3
+                let s2 = load64 [_hs_set + 16]
+                let s2 = s2 - 1
+                store64 [_hs_set + 16] s2
+                let nx_r0 = 1
+                let _hs_probe = _hs_cap
+            }
+        }
+        let _hs_slot = _hs_slot + 1
+        if _hs_slot >= _hs_cap {
+            let _hs_slot = 0
+        }
+        let _hs_probe = _hs_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_remove_str : remove string nx_i1 (matched by content)
+#   nx_r0 = 1 if removed, 0 if not present
+# ------------------------------------------------------------------------------
+fn nx_hashset_remove_str {
+    let _hs_set = nx_i0
+    let _hs_str = nx_i1
+    let _hs_cap = load64 [_hs_set + 24]
+    let nx_i0 = _hs_str
+    call nx_hashset_hash_str
+    let _hs_slot = nx_r0
+    let _hs_slot = _hs_slot % _hs_cap
+    let _hs_vp = load64 [_hs_set + 0]
+    let _hs_tp = load64 [_hs_set + 8]
+    let _hs_probe = 0
+    let nx_r0 = 0
+    while _hs_probe < _hs_cap {
+        let s0 = load [_hs_tp + _hs_slot]
+        if s0 == 0 {
+            let _hs_probe = _hs_cap
+        }
+        if s0 == 2 {
+            let s1 = load64 [_hs_vp + _hs_slot * 8]
+            let nx_i0 = s1
+            let nx_i1 = _hs_str
+            call nx_str_cmp
+            let _hs_cmp = nx_r0
+            let nx_r0 = 0
+            if _hs_cmp == 0 {
+                store [_hs_tp + _hs_slot] 3
+                let s2 = load64 [_hs_set + 16]
+                let s2 = s2 - 1
+                store64 [_hs_set + 16] s2
+                let nx_r0 = 1
+                let _hs_probe = _hs_cap
+            }
+        }
+        let _hs_slot = _hs_slot + 1
+        if _hs_slot >= _hs_cap {
+            let _hs_slot = 0
+        }
+        let _hs_probe = _hs_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_len : nx_r0 = number of live entries
+# ------------------------------------------------------------------------------
+fn nx_hashset_len {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_cap : nx_r0 = current capacity
+# ------------------------------------------------------------------------------
+fn nx_hashset_cap {
+    let nx_r0 = load64 [nx_i0 + 24]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashset_clear : remove all entries (marks every slot empty)
+# ------------------------------------------------------------------------------
+fn nx_hashset_clear {
+    let s0 = nx_i0
+    let s1 = load64 [s0 + 24]
+    let s2 = load64 [s0 + 8]
+    let s3 = 0
+    while s3 < s1 {
+        store [s2 + s3] 0
+        let s3 = s3 + 1
+    }
+    store64 [s0 + 16] 0
+}

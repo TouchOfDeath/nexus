@@ -18,6 +18,15 @@
 #                      nx_qarr_count nx_qarr_sort nx_qarr_avg
 #   stdlib/assert.nex  nx_assert_passes nx_assert_fails nx_assert_summary
 #                      (backs the assert_eq / assert_ne macros of nexprep)
+#   stdlib/vec.nex     nx_vec_new nx_vec_push nx_vec_pop nx_vec_get nx_vec_set
+#                      nx_vec_len nx_vec_cap nx_vec_clear
+#   stdlib/hashmap.nex nx_hashmap_new nx_hashmap_put nx_hashmap_get
+#                      nx_hashmap_contains nx_hashmap_len nx_hashmap_cap
+#                      nx_hashmap_clear
+#   stdlib/hashset.nex nx_hashset_new nx_hashset_add nx_hashset_add_str
+#                      nx_hashset_contains nx_hashset_contains_str
+#                      nx_hashset_remove nx_hashset_remove_str
+#                      nx_hashset_len nx_hashset_cap nx_hashset_clear
 #
 # CALLING CONVENTION (all functions):
 #   1. Set inputs in nx_i0, nx_i1, nx_i2 (per-function signature)
@@ -36,4 +45,5 @@ include "stdlib/qarrays.nex"
 include "stdlib/bitwise.nex"
 include "stdlib/vec.nex"
 include "stdlib/hashmap.nex"
+include "stdlib/hashset.nex"
 include "stdlib/assert.nex"

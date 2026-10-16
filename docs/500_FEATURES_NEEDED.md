@@ -120,7 +120,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 68. **Rope Data Structure**: Binary tree of string leaves with balanced B-tree nodes providing O(log N) insertions, deletions, and splits for large documents.
 69. **Gap Buffer**: Classic buffer structure with a sliding contiguous cursor gap, providing O(1) localized character insertions and deletions.
 70. **Associative Hash Map (`HashMap<K, V>`)** *(COMPLETED)*: High-performance hash map (e.g. SwissTable or open-addressing linear probing) for keyword lookups, symbol tables, and settings (`stdlib/hashmap.nex`).
-71. **Hash Set (`HashSet<T>`)**: Set collection for fast membership testing, duplicate elimination, and token categorization.
+71. **Hash Set (`HashSet<T>`)** *(COMPLETED)*: Open-addressing set collection (linear probing + tombstones) supporting integer and string elements, content-based string identity, and automatic doubling rehash for fast membership testing, duplicate elimination, and token categorization (`stdlib/hashset.nex`).
 72. **Ordered Map (`BTreeMap<K, V>`)**: Self-balancing B-Tree mapping keys in sorted order for line index lookups and bookmark positioning.
 73. **Ordered Set (`BTreeSet<T>`)**: Sorted set for tracking active breakpoint line numbers and diagnostic markers.
 74. **Double-Ended Queue (`Deque<T>`)**: Ring-buffer backed double-ended queue for efficient O(1) push and pop at both head and tail.

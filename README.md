@@ -73,6 +73,7 @@ nexus_project/
 │   ├── nstdlib.nex            <- Master include (math, arrays, strings, vec, hashmap, bitwise, assert)
 │   ├── vec.nex                <- Growable dynamic array vector with amortized O(1) push/pop
 │   ├── hashmap.nex            <- Associative hash map with linear probing & string keys
+│   ├── hashset.nex            <- Hash set (int/string elements) with probing, tombstones & rehash
 │   ├── poll.nex               <- Direct Linux kernel non-blocking async event loop (sys_epoll)
 │   ├── bitwise.nex            <- 64-bit bitwise logic (&, |, ^, ~, <<, >>) & compound updates
 │   ├── math.nex               <- Math utilities (max, min, clamp, sign, pow, isqrt, gcd, lcm, fib, prime)
@@ -100,6 +101,7 @@ nexus_project/
 │   ├── test_bitwise_ops.nex   <- Bitwise operators and bit shifts
 │   ├── test_vec.nex           <- Dynamic vector capacity doubling and operations
 │   ├── test_hashmap.nex       <- Hash map insertion, retrieval, and collision probing
+│   ├── test_hashset.nex       <- Hash set membership, dedupe, tombstones, rehash & string tokens
 │   ├── test_poll_events.nex   <- Epoll non-blocking async event polling
 │   ├── test_closures.nex      <- Closures, lambdas & environment capture
 │   ├── test_frame_pointers.nex<- Stack-allocated frame pointer chains

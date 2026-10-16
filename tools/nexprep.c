@@ -4677,6 +4677,266 @@ static int desugar_truthiness_and_conditions(const char *in, char *out, size_t c
     return 1;
 }
 
+
+/* ==========================================================================
+ * Integer operator precedence (Feature #34 / correctness fix)
+ *
+ * The nexc core evaluates `<expr>` strictly left-to-right, so `1 + 2 * 3`
+ * yields 9 instead of 7.  This pass rewrites `let D = <expr>` and
+ * `D = <expr>` into a precedence-correct sequence of single-operator
+ * statements using compiler temporaries, which nexc already handles
+ * correctly:
+ *
+ *   let c = 1 + 2 * 3
+ *     ->
+ *   let _prec_1 = 2 * 3
+ *   let c = 1 + _prec_1
+ *
+ * Two precedence levels are handled (additive over multiplicative), which
+ * covers the whole operator set the language has: + - * / %.
+ *
+ * Safety rules -- the pass bails out (returns 0) unless the RHS is a pure
+ * infix chain of identifiers / decimal literals / bracketed loads joined by
+ * + - * / %.  Anything with parentheses, strings, floats, function calls,
+ * comparisons or unary operators is left untouched for other passes.
+ * ========================================================================== */
+
+static int prec_tmp_counter = 0;
+
+static int prec_is_ident0(unsigned char c) {
+    return isalpha(c) || c == '_';
+}
+static int prec_is_ident1(unsigned char c) {
+    return isalnum(c) || c == '_';
+}
+
+/* Tokenize a pure infix chain.  Returns token count or -1 if unsafe. */
+#define PREC_MAXTOK 64
+typedef struct {
+    char tok[128];      /* operand text (ident / literal / [..]) or operator */
+    int  is_op;         /* 1 = operator, 0 = operand                        */
+} prec_tok;
+
+static int prec_tokenize(const char *s, prec_tok *tk, int max) {
+    int n = 0;
+    const char *p = s;
+    int want_operand = 1;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        if (n >= max) return -1;
+        if (want_operand) {
+            if (*p == '[') {
+                /* bracketed memory load: copy to matching ']' */
+                int depth = 0;
+                int o = 0;
+                while (*p) {
+                    if (*p == '[') depth++;
+                    else if (*p == ']') { depth--; }
+                    if (o + 1 < (int)sizeof tk[n].tok) tk[n].tok[o++] = *p;
+                    p++;
+                    if (depth == 0) break;
+                }
+                tk[n].tok[o] = '\0';
+                if (depth != 0) return -1;
+                if (!o) return -1;
+                tk[n].is_op = 0;
+                n++;
+                want_operand = 0;
+                continue;
+            }
+            int o = 0;
+            if (prec_is_ident0((unsigned char)*p)) {
+                while (prec_is_ident1((unsigned char)*p)) {
+                    if (o + 1 < (int)sizeof tk[n].tok) tk[n].tok[o++] = *p;
+                    p++;
+                }
+                /* an identifier followed immediately by '(' is a call: unsafe */
+                {
+                    const char *q = p;
+                    while (*q == ' ' || *q == '\t') q++;
+                    if (*q == '(') return -1;
+                }
+            } else if (isdigit((unsigned char)*p)) {
+                while (isdigit((unsigned char)*p)) {
+                    if (o + 1 < (int)sizeof tk[n].tok) tk[n].tok[o++] = *p;
+                    p++;
+                }
+                if (*p == '.') return -1;       /* float literal -> other pass */
+                if (*p == 'e' || *p == 'E') return -1;
+            } else {
+                return -1;
+            }
+            tk[n].tok[o] = '\0';
+            if (!o) return -1;
+            tk[n].is_op = 0;
+            n++;
+            want_operand = 0;
+        } else {
+            char c = *p;
+            if (c != '+' && c != '-' && c != '*' && c != '/' && c != '%') return -1;
+            p++;
+            /* reject ** (power), //, += style, and anything else doubled */
+            if (*p == c) return -1;
+            if (*p == '=') return -1;
+            tk[n].tok[0] = c;
+            tk[n].tok[1] = '\0';
+            tk[n].is_op = 1;
+            n++;
+            want_operand = 1;
+        }
+    }
+    if (want_operand) return -1;    /* trailing operator */
+    if (n == 0) return -1;
+    /* need at least one operator and at least one * / % for a rewrite to matter */
+    return n;
+}
+
+/* Does the token list contain a multiplicative operator? */
+static int prec_has_mul(const prec_tok *tk, int n) {
+    for (int i = 1; i < n; i += 2) {
+        if (tk[i].tok[0] == '*' || tk[i].tok[0] == '/' || tk[i].tok[0] == '%') return 1;
+    }
+    return 0;
+}
+
+/* Is the list free of multiplicative operators (single flat additive chain)? */
+static int prec_no_mul(const prec_tok *tk, int n) {
+    return !prec_has_mul(tk, n);
+}
+
+/* Emit the precedence-corrected form of `let D = <chain>` (or `D = <chain>`).
+ * `indent` is the leading whitespace, `is_let` selects the statement form. */
+static int prec_rewrite(const char *indent, const char *dest, int is_let,
+                        const char *rhs, char *out, size_t cap) {
+    prec_tok tk[PREC_MAXTOK];
+    int n = prec_tokenize(rhs, tk, PREC_MAXTOK);
+    if (n < 0) return 0;
+    if (n < 3) return 0;                       /* nothing to reorder */
+    if (prec_no_mul(tk, n)) return 0;          /* already correct L-to-R */
+#ifdef PREC_DEBUG
+    for (int d = 0; d < n; d++) fprintf(stderr, "TOK[%d] op=%d '%s'\n", d, tk[d].is_op, tk[d].tok);
+#endif
+
+    /* Build segments: maximal runs of multiplicative operators. */
+    char buf[MAXLINE * 8];
+    buf[0] = '\0';
+    int ids[PREC_MAXTOK];
+    int nids = 0;
+
+    int i = 1;                                  /* tk[0] is the first operand */
+    int first_operand_is_temp = 0;
+    char cur[512];
+    snprintf(cur, sizeof cur, "%s", tk[0].tok);
+
+    while (i + 1 < n) {
+        char op = tk[i].tok[0];
+        if (op == '*' || op == '/' || op == '%') {
+            /* extend the running multiplicative sub-expression */
+            char nxt[640];
+            snprintf(nxt, sizeof nxt, "%s %c %s", cur, op, tk[i + 1].tok);
+            if (strlen(nxt) >= sizeof cur) return 0;
+            snprintf(cur, sizeof cur, "%s", nxt);
+            i += 2;
+            continue;
+        }
+        /* additive operator: flush `cur` as a temp if it is multiplicative */
+        if (strchr(cur, '*') || strchr(cur, '/') || strchr(cur, '%')) {
+            if (nids >= PREC_MAXTOK) return 0;
+            prec_tmp_counter++;
+            int id = prec_tmp_counter;
+            ids[nids++] = id;
+            char line[768];
+            snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, cur);
+            if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
+            strcat(buf, line);
+            if (first_operand_is_temp == 0 && nids == 1) first_operand_is_temp = 1;
+            snprintf(cur, sizeof cur, "_prec_%d", id);
+        }
+        /* now append the additive operator and the next operand */
+        {
+            char nxt[640];
+            snprintf(nxt, sizeof nxt, "%s %c %s", cur, op, tk[i + 1].tok);
+            if (strlen(nxt) >= sizeof cur) return 0;
+            snprintf(cur, sizeof cur, "%s", nxt);
+        }
+        i += 2;
+    }
+    /* flush a trailing multiplicative run */
+    if (strchr(cur, '*') || strchr(cur, '/') || strchr(cur, '%')) {
+        if (nids >= PREC_MAXTOK) return 0;
+        prec_tmp_counter++;
+        int id = prec_tmp_counter;
+        ids[nids++] = id;
+        char line[768];
+        snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, cur);
+        if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
+        strcat(buf, line);
+        snprintf(cur, sizeof cur, "_prec_%d", id);
+    }
+    if (nids == 0) return 0;
+
+    {
+        char line[768];
+        if (is_let) {
+            snprintf(line, sizeof line, "%slet %s = %s\n", indent, dest, cur);
+        } else {
+            snprintf(line, sizeof line, "%s%s = %s\n", indent, dest, cur);
+        }
+        if (strlen(buf) + strlen(line) + 1 >= cap) return 0;
+        strcat(buf, line);
+    }
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
+/* Entry point: rewrite `let D = <chain>` with correct precedence. */
+static int desugar_precedence(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *e = clean + strlen(clean);
+    while (e > clean && (e[-1] == '\n' || e[-1] == '\r')) *--e = '\0';
+
+    const char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || !*p) return 0;
+
+    int is_let = 0;
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        is_let = 1;
+        p += 4;
+        while (*p == ' ' || *p == '\t') p++;
+    } else if (prec_is_ident0((unsigned char)*p)) {
+        /* bare assignment `D = ...` */
+    } else {
+        return 0;
+    }
+
+    /* read destination identifier */
+    const char *dstart = p;
+    while (prec_is_ident1((unsigned char)*p)) p++;
+    char dest[128];
+    size_t dl = (size_t)(p - dstart);
+    if (!dl || dl >= sizeof dest) return 0;
+    memcpy(dest, dstart, dl);
+    dest[dl] = '\0';
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=' || p[1] == '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* indent */
+    char indent[64];
+    size_t ind = 0;
+    for (const char *q = clean; (*q == ' ' || *q == '\t') && ind + 1 < sizeof indent; q++) {
+        indent[ind++] = *q;
+    }
+    indent[ind] = '\0';
+
+    return prec_rewrite(indent, dest, is_let, p, out, cap);
+}
+
 /* Constant folding & 64-bit decomposition for 'let <dest> = <expr>' */
 static int desugar_constant_folding(const char *in, char *out, size_t cap) {
     char clean[MAXLINE];
@@ -5868,6 +6128,16 @@ static void emit_line(const char *raw, FILE *out) {
     char opt_buf[MAXLINE];
     if (desugar_constant_folding(clean, opt_buf, sizeof opt_buf)) {
         snprintf(clean, sizeof clean, "%s", opt_buf);
+    }
+    /* Integer operator precedence: `1 + 2 * 3` must be 7, not 9.
+     * Runs after constant folding (pure literal chains are already folded). */
+    {
+        char prec_buf[MAXLINE * 8];
+        if (desugar_precedence(clean, prec_buf, sizeof prec_buf)) {
+            fprintf(out, "%s", prec_buf);
+            update_fn_depth(prec_buf);
+            return;
+        }
     }
 
     update_fn_depth(clean);
@@ -7317,11 +7587,6 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[argi], "--list-deps")) {
             list_deps_mode = 1;
             argi++;
-            if (argi < argc && argv[argi][0] != '-') {
-                deps_out = fopen(argv[argi], "w");
-                if (!deps_out) die("Cannot write", argv[argi]);
-                argi++;
-            }
         } else if (!strcmp(argv[argi], "--no-hydron") || !strcmp(argv[argi], "-O0")) {
             hydron_opt_enabled = 0;
             argi++;
