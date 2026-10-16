@@ -1,8 +1,101 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.2+ — Phase 1: String Escapes & Universal Escape Decoding (current)
+## v8.5 — Modern Loop & Range Ergonomics Bundle: Features #37, #50, #59 (current)
 
-Major compiler and preprocessor enhancement adding native C-style string escape sequence decoding across all execution engines and platforms (Linux x86-64, Windows PE32+, macOS ARM64).
+Major language ergonomics release delivering three high-impact syntax features from Category 1 of the 500-feature roadmap: Compile-Time Constants (`const`) (#37), Range Expressions in Loops (`0..N`, `0..=N`, `step S`) (#50), and Null Coalescing Operator (`??`) (#59).
+
+### 1. Feature #37: Compile-Time Constants (`const NAME = expr`)
+- **Immutable Values & Compile-Time Substitution**: Full support for top-level and scoped constant declarations (`const MAX_BUF = 65536`, `const COLOR_BG = 0x11111B`, `const OCT_PERM = 0o755`, `const STR = "OK"`).
+- **Constant Expression Evaluation**: Preprocessor automatically folds integer arithmetic chains (e.g., `4 * 10` -> `40`) and substitutes constant identifiers outside strings and comments, emitting immediate CPU operands without stack/memory overhead.
+- **Reference Semantic Interpreter**: Added `const` evaluation to `exec_block` in `tools/nexinterp.py`.
+
+### 2. Feature #50: Range Expressions in Loops (`for i in start..end`)
+- **Exclusive (`..`) & Inclusive (`..=`) Ranges**:
+  - `for i in 0..10 { ... }` desugars cleanly to `for i = 0, i < 10, i = i + 1 { ... }`.
+  - `for i in 0..=10 { ... }` desugars cleanly to `for i = 0, i <= 10, i = i + 1 { ... }`.
+- **Step Stride Syntax**: Full support for custom positive or negative strides:
+  - `for i in 0..10 step 2 { ... }` (`i = i + 2`).
+  - `for i in 10..0 step -2 { ... }` (`i = i - 2` with inverted `>` / `>=` comparisons).
+- **Constant & Expression Bounds**: Range bounds can be arbitrary identifiers, constants, or expressions (`for i in 0..SCALE_FACTOR step 10`).
+- **Reference Semantic Interpreter**: Added native range loop parsing and stride evaluation to `tools/nexinterp.py`.
+
+### 3. Feature #59: Null Coalescing Operator (`a ?? b`)
+- **Concise Fallback**: Native inline support for `let title = opt_title ?? "Untitled"`, returning LHS if non-zero, otherwise evaluating RHS.
+- **Short-Circuit Evaluation**: Emits scoped `_nc_` and `_nc_res_` temporaries with conditional branching, guaranteeing that the RHS fallback is never evaluated when LHS is non-zero (preventing side effects and redundant function calls).
+- **Left-to-Right Chaining**: Multiple fallbacks chain with perfect short-circuiting (`a ?? b ?? c`).
+- **Bitwise Normalization Fix**: Hardened `desugar_bitwise_binop` in `tools/nexprep.c` to ignore `=` and `&` inside string literals.
+- **Reference Semantic Interpreter**: Added top-level null coalescing evaluation in `eval_expr` with short-circuiting.
+
+### 4. Tri-Platform Execution & Verification
+- **Automated Regression Suite (`tests/test_loop_ranges_v84.nex`)**: 16 assertions testing constants (int, hex, octal, folded, string), range loops (exclusive, inclusive, non-zero start, step 2, countdown step -2, constant bounds, scoped function), and null coalescing (zero fallback, non-zero passthrough, chaining, constant fallback, function return, short-circuit verification).
+- **Tri-Platform Verification**:
+  - Direct Native Linux ELF64: 100% PASS (`./nexus run tests/test_loop_ranges_v84.nex`).
+  - Reference Semantic Interpreter: 100% PASS (`./nexus interpret tests/test_loop_ranges_v84.nex`).
+  - Apple Silicon ARM64 Mach-O: 100% PASS (`./nexus arm64 tests/test_loop_ranges_v84.nex`).
+  - Linux AArch64 ELF64: 100% PASS (`./nexus arm64 --target linux tests/test_loop_ranges_v84.nex`).
+  - Full Test Suite (`./nexus test`): 29/29 suites PASS (all green).
+  - Self-Hosting Bit-for-Bit Determinism: 100% PASS (`./nexus self-host`).
+
+## v8.4 — Syntax Ergonomics Bundle: Features #30, #35, #36
+
+### 1. Feature #30: Octal Number Literals (`0o755`, `0o644`, `0O...`)
+- **POSIX Permission Masks & Bitmasks**: Full support for standard `0o` and `0O` octal notation (e.g., `0o755` -> 493, `0o644` -> 420, `0o10` -> 8, `0o0` -> 0).
+- **Toolchain Normalization**: `normalize_octal_literals` in `tools/nexprep.c` normalizes octal literals to decimal strings while preserving string literals and comments, ensuring immediate zero-regression compatibility across all compiler generations.
+- **Semantic Oracle**: `eval_atom` in `tools/nexinterp.py` updated with `int(tok, 0)` for native octal decoding.
+
+### 2. Feature #35: Increment / Decrement Operators (`++`, `--`)
+- **Prefix & Postfix**: Full statement support for `target++`, `target--`, `++target`, `--target` across local variables (`let target = target + 1`) and struct members (`obj.field = obj.field + 1`).
+- **Loop Counters**: `desugar_for_compound` upgraded to support both 2-comma (`for i = 0, i < 10, i++ {`) and 3-comma (`for i, 0, 10, i++ {`) loop steps, desugaring to standard reassignments.
+- **Semantic Oracle**: Integrated statement-level increment/decrement into `exec_block` and `parse_blocks` in `tools/nexinterp.py`.
+
+### 3. Feature #36: Ternary / Conditional Expressions (`cond ? a : b`)
+- **Inline Expressions**: Native support for inline ternary expressions across variable assignments (`let col = is_err ? col_err : col_ok`), return statements (`return cond ? a : b`), and nested call arguments (`call foo(c ? a : b)`).
+- **Chained & Right-Associative**: Proper operator precedence handling enabling nested and chained else-if ternaries (`score >= 90 ? 1 : score >= 80 ? 2 : 3`).
+- **Short-Circuit Semantics**: Desugars to scoped temporary `_tern_N` with `if ... else ...` branches, guaranteeing that unused branches and recursive calls (e.g. `fib(n-1)`) are never evaluated when base conditions hold.
+- **Stack-Frame Preservation**: Exemption in `fn_add_local` protects `_tern_` variables across reentrant and recursive stack frames.
+- **Semantic Oracle**: Added top-level ternary conditional parsing to `eval_expr` in `tools/nexinterp.py`.
+
+### 4. Tri-Platform Execution & Verification
+- **Automated Regression Suite (`tests/test_syntax_v83.nex`)**: Comprehensive tests verifying octal arithmetic, uppercase prefixes, prefix/postfix increments/decrements, struct member mutation, for loops, simple ternaries, parenthesized ternaries, chained ternaries, and recursive Fibonacci with ternary branching.
+- **Tri-Platform Verification**:
+  - Direct Native Linux ELF64: 100% PASS (`./nexus run tests/test_syntax_v83.nex`).
+  - Reference Semantic Interpreter: 100% PASS (`./nexus interpret tests/test_syntax_v83.nex`).
+  - Apple Silicon ARM64 Mach-O: 100% PASS (`./nexus arm64 tests/test_syntax_v83.nex`).
+  - Linux AArch64 ELF64: 100% PASS (`./nexus arm64 --target linux tests/test_syntax_v83.nex`).
+  - Self-Hosting Bit-for-Bit Determinism: 100% PASS (`./nexus self-host`).
+  - Integrated into `./nexus test`: 28/28 suites PASS (0 regressions).
+
+## v8.3 — Feature #67: Piece Table Text Buffer & Editor Architecture
+
+Major standard library addition implementing Feature #67 from the 500-feature native IDE roadmap. Replaces static, fixed-capacity 16KB text buffers with a dynamic, non-contiguous Piece Table text structure enabling arbitrary file sizes, fast localized insertions/deletions, O(1) contiguous keystroke coalescing, slice export, line navigation, and atomic snapshot undo/redo.
+
+### 1. Piece Table Architecture (`stdlib/piece_table.nex`)
+- **Dual-Buffer Structure**: Implements the classic Bravo/VS Code piece table design using an immutable original buffer (`orig_buf`) and an append-only add buffer (`add_buf`).
+- **40-Byte Doubly-Linked Piece Node**: Node fields store `buf_type` (0=ORIG, 1=ADD), `offset`, `length`, `prev` pointer, and `next` pointer. Inserting and deleting operations manipulate node pointers rather than shifting megabytes of character memory.
+- **O(1) Contiguous Keystroke Coalescing**: Consecutive character appends into `add_buf` directly extend the tail node's length without allocating additional piece descriptors.
+- **Core Operations**:
+  - `nx_pt_new`: Allocate piece table initialized with string pointer and length.
+  - `nx_pt_len`, `nx_pt_piece_count`, `nx_pt_is_dirty`, `nx_pt_set_clean`: O(1) metadata inspection.
+  - `nx_pt_insert`: General insertion with piece splitting and node linking.
+  - `nx_pt_insert_char`: Convenience helper for single-byte character typing.
+  - `nx_pt_delete`: Slicing and unlinking pieces across arbitrary deleted ranges.
+  - `nx_pt_delete_char`: Single-character backspace/delete helper.
+  - `nx_pt_get_char`: Logical document byte retrieval at position `pos`.
+  - `nx_pt_export_to_buf`: Contiguous buffer export with null termination.
+  - `nx_pt_export_slice`: Substring slice export into destination buffer.
+  - `nx_pt_line_count`: Total document line count calculation.
+  - `nx_pt_line_to_offset`: 1-based line number to byte offset translation.
+  - `nx_pt_snapshot` & `nx_pt_restore`: Deep copy and restoration of piece chains for multi-level undo/redo without modifying text buffers.
+
+### 2. Tri-Platform Execution & Verification
+- **Automated Regression Suite (`tests/test_piece_table.nex`)**: 12 comprehensive categories verifying empty table creation, string initialization, appending, keystroke coalescing, prefix insertion, character querying, middle piece splitting, slice export, character deletion, multi-piece range deletion, multi-line navigation, and atomic undo/redo.
+- **Tri-Platform Verification**:
+  - Direct Native Linux ELF64: 100% PASS (`./nexus run tests/test_piece_table.nex`).
+  - Reference Semantic Interpreter: 100% PASS (`./nexus interpret tests/test_piece_table.nex`).
+  - Apple Silicon ARM64 Mach-O: 100% PASS (`./nexus arm64 tests/test_piece_table.nex`).
+  - Integrated into `./nexus test` (PASS).
+
+## v8.2+ — Phase 1: String Escapes & Universal Escape Decoding
 
 ### 1. Compiler Core Native Escape Decoding (`compiler/nexc.nex`)
 - **`parse_str_lit` Subroutine**: Implemented a standalone string literal parser directly in pure NEXUS source code. Decodes escape sequences directly into read-only data (`.rdata`) without emitting intermediate multi-line text:

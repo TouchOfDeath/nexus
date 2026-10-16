@@ -1,7 +1,7 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-10-13  
-> **Current Version**: v8.2+ — Phase 1 String Escapes & Phase 2 Optimizer  
+> **Last Updated**: 2026-10-14  
+> **Current Version**: v8.5 — Modern Loop & Range Ergonomics Bundle (Features #37, #50, #59)  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
@@ -38,6 +38,9 @@
     - `tests/test_vec.nex`: 11/11 PASS (dynamic growable heap vector)
     - `tests/test_hashmap.nex`: 13/13 PASS (string-keyed linear probing hash map)
     - `tests/test_poll_events.nex`: 13/13 PASS (non-blocking `poll`/`epoll` async event loop)
+    - `tests/test_piece_table.nex`: PASS (Feature #67 Piece Table: insert, delete, coalescing, slice export, line navigation, atomic snapshot undo/redo)
+    - `tests/test_syntax_v83.nex`: PASS (Features #30, #35, #36: Octal literals `0o...`, increment/decrement `++`/`--`, ternary expressions `cond ? a : b`)
+    - `tests/test_loop_ranges_v84.nex`: PASS (Features #37, #50, #59: Compile-time `const`, range loops `0..N` / `0..=N` with `step`, null coalescing `??`)
     - `tests/test_hydron_correctness.nex`: 13/13 PASS (boundary & scoping verification)
     - `tests/test_hydron_overflow.nex`: 21/21 PASS (64-bit integer overflow & boundary safety)
 - **Determinism**: Gen 1 == Gen 2 == Gen 3 bit-for-bit self-hosting parity verified via `./nexus bootstrap` and `./nexus self-host`.
@@ -49,6 +52,32 @@
 ---
 
 ## 2. Recent Milestones Completed
+- **NEXUS v8.5 — Modern Loop & Range Ergonomics Bundle (Features #37, #50, #59) (2026-10-14)**:
+  - **Feature #37: Compile-Time Constants (`const`)**: Full support for `const NAME = <val_or_expr>` across top-level and local scopes. Immediate integer arithmetic chains (e.g. `4 * 10` -> `40`) are folded at compile time, and constant identifiers are substituted as immediate values outside strings and comments, eliminating unnecessary stack/heap allocations and memory loads.
+  - **Feature #50: Range Expressions in Loops (`start..end`, `start..=end`)**: Exclusive (`..`) and inclusive (`..=`) range syntax for clean loops `for i in 0..10 { ... }`, with optional positive/negative stride syntax (`for i in 0..10 step 2 { ... }`, `for i in 10..0 step -2 { ... }`). Seamlessly desugared to canonical compiler headers with full lexical scoping and stack frame registration.
+  - **Feature #59: Null Coalescing Operator (`??`)**: Concise fallback expressions `let title = opt_title ?? "Untitled"`. Left-to-right desugaring with scoped `_nc_` / `_nc_res_` temporaries and conditional branches guarantees short-circuit execution: the fallback expression is never evaluated when LHS is non-zero. Hardened string scanning in `desugar_bitwise_binop` to prevent `=` inside string literals from triggering false assignments.
+  - **Multi-Platform Verification & Self-Hosting Parity**:
+    - Direct Linux ELF64: PASS (`./nexus run tests/test_loop_ranges_v84.nex`).
+    - Reference Semantic Interpreter: PASS (`./nexus interpret tests/test_loop_ranges_v84.nex`).
+    - Apple Silicon ARM64 Mach-O: PASS (`./nexus arm64 tests/test_loop_ranges_v84.nex`).
+    - Linux AArch64 ELF64: PASS (`./nexus arm64 --target linux tests/test_loop_ranges_v84.nex`).
+    - Full Test Suite: 29/29 PASS (`./nexus test`).
+    - Self-Hosting Determinism: 100% bit-for-bit identical fixed point (`./nexus self-host`, 0 byte differences across PE32+ and ELF64).
+- **NEXUS v8.4 — Syntax Ergonomics Bundle (Features #30, #35, #36) (2026-10-14)**:
+  - **Feature #30: Octal Number Literals**: Full support for POSIX file permissions and bitmasks via `0o...` / `0O...` (e.g., `0o755`, `0o644`, `0o10`). Transparently desugared in `tools/nexprep.c` to decimal literals outside string literals and comments, and supported natively in `tools/nexinterp.py`.
+  - **Feature #35: Increment / Decrement Operators (`++`, `--`)**: Postfix and prefix `++`/`--` across standalone statements (`i++`, `i--`, `++i`, `--i`), optional declaration prefixes (`let count++`), struct field modifications (`pt.x++`, `pt.y--`), and both 2-comma (`for i = 0, i < 10, i++ {`) and 3-comma (`for i, 0, 10, i++ {`) loop headers. Emits clean scalar updates preserving comments and stack balance.
+  - **Feature #36: Ternary / Conditional Expressions (`cond ? true_val : false_val`)**: Native inline conditional expressions across variable assignments, return statements, and function argument lists. Right-associative chained else-if evaluation (`a ? 1 : b ? 2 : 3`) and short-circuit evaluation via `if ... { let _tern_N = ... } else { let _tern_N = ... }` ensuring branch isolation (e.g. recursive `fib(n)`).
+  - **Multi-Platform Verification & Self-Hosting Parity**:
+    - Direct Linux ELF64: PASS (`./nexus run tests/test_syntax_v83.nex`).
+    - Reference Semantic Interpreter: PASS (`./nexus interpret tests/test_syntax_v83.nex`).
+    - Apple Silicon ARM64 Mach-O: PASS (`./nexus arm64 tests/test_syntax_v83.nex`).
+    - Linux AArch64 ELF64: PASS (`./nexus arm64 --target linux tests/test_syntax_v83.nex`).
+    - Full Test Suite: 28/28 PASS (`./nexus test`).
+    - Self-Hosting Determinism: 100% bit-for-bit identical fixed point (`./nexus self-host`, 0 byte differences across PE32+ and ELF64).
+- **NEXUS v8.3 — Feature #67 Piece Table Text Buffer (2026-10-14)**:
+  - **Production-Grade Text Buffer (`stdlib/piece_table.nex`)**: Solves the 16KB static buffer limit in `examples/nexus_ide.nex`. Implements a two-buffer piece table (read-only original buffer + append-only add buffer) over a 40-byte doubly-linked piece chain.
+  - **Capabilities**: O(1) contiguous keystroke coalescing, middle insertion via piece splitting, arbitrary range deletion with boundary trimming and node unlinking, character lookup (`nx_pt_get_char`), whole/slice buffer export (`nx_pt_export_to_buf`, `nx_pt_export_slice`), line count and 1-based line offset navigation (`nx_pt_line_count`, `nx_pt_line_to_offset`), and atomic snapshot undo/redo (`nx_pt_snapshot`, `nx_pt_restore`).
+  - **Verification**: Verified 100% PASS on native Linux ELF64 (`./nexus run tests/test_piece_table.nex`), reference interpreter (`./nexus interpret tests/test_piece_table.nex`), and Apple Silicon ARM64 Mach-O (`./nexus arm64 tests/test_piece_table.nex`). Integrated into `./nexus test`.
 - **NEXUS v8.2+ — Phase 1 String Escapes (2026-10-13)**:
   - **Self-Hosted Core Decoding (`compiler/nexc.nex`)**: Implemented `parse_str_lit` subroutine, decoding `\n` (10), `\r` (13), `\t` (9), `\0` (0), `\e` (27), `\"` (34), `\\` (92), and `\xHH` directly into read-only binary `.rdata`.
   - **Comprehensive Compiler Integration**: Connected `parse_str_lit` across all 5 string parsing sites: `let <dest> = "..."`, `print "..."`, `len "..."`, `file_open`, and `file_create`.

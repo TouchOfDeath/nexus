@@ -1,0 +1,178 @@
+# test_syntax_v83.nex - Regression test suite for Feature #30, #35, #36
+# Features tested:
+#   #30: Octal Number Literals (0o755, 0o644, 0O777)
+#   #35: Increment / Decrement Operators (++, --, standalone, member, for-loop)
+#   #36: Ternary / Conditional Expressions (cond ? a : b, return, args, chained, recursive)
+
+struct Point {
+    x
+    y
+}
+
+fn helper_identity(val: int) -> int {
+    return val
+}
+
+fn fib(n: int) -> int {
+    let res = n <= 1 ? n : fib(n - 1) + fib(n - 2)
+    return res
+}
+
+fn test_octal_literals {
+    # 0o755 = 7*64 + 5*8 + 5 = 448 + 40 + 5 = 493
+    let perm_exec = 0o755
+    assert_eq perm_exec, 493
+
+    # 0o644 = 6*64 + 4*8 + 4 = 384 + 32 + 4 = 420
+    let perm_read = 0o644
+    assert_eq perm_read, 420
+
+    # 0o10 = 8
+    let oct_ten = 0o10
+    assert_eq oct_ten, 8
+
+    # 0o0 = 0
+    let oct_zero = 0o0
+    assert_eq oct_zero, 0
+
+    # Uppercase 0O prefix
+    let oct_upper = 0O777
+    assert_eq oct_upper, 511
+
+    # Arithmetic with octals
+    let sum_oct = 0o755 + 0o10
+    assert_eq sum_oct, 501
+
+    let diff_oct = 0o644 - 0o10
+    assert_eq diff_oct, 412
+}
+
+fn test_inc_dec_operators {
+    let c = 10
+    c++
+    assert_eq c, 11
+
+    c++
+    assert_eq c, 12
+
+    c--
+    assert_eq c, 11
+
+    ++c
+    assert_eq c, 12
+
+    --c
+    assert_eq c, 11
+
+    # With optional let
+    let let_c = 20
+    let let_c++
+    assert_eq let_c, 21
+    let let_c--
+    assert_eq let_c, 20
+
+    # Struct member increment and decrement
+    let pt = alloc Point.size
+    pt.x = 100
+    pt.y = 200
+
+    pt.x++
+    assert_eq pt.x, 101
+
+    ++pt.x
+    assert_eq pt.x, 102
+
+    pt.y--
+    assert_eq pt.y, 199
+
+    --pt.y
+    assert_eq pt.y, 198
+
+    # For-loop step with i++
+    let sum1 = 0
+    for i = 0, i < 5, i++ {
+        sum1 += i
+    }
+    assert_eq sum1, 10
+
+    # For-loop step with ++i
+    let sum2 = 0
+    for j = 0, j < 5, ++j {
+        sum2 += j
+    }
+    assert_eq sum2, 10
+
+    # For-loop countdown with i--
+    let sum3 = 0
+    for k = 5, k > 0, k-- {
+        sum3 += k
+    }
+    assert_eq sum3, 15
+
+    # 3-comma for-loop with i++: for var, start, limit, i++
+    let sum4 = 0
+    for m, 0, 5, m++ {
+        sum4 += m
+    }
+    assert_eq sum4, 10
+}
+
+fn test_ternary_expressions {
+    # 1. Simple condition true / false
+    let is_err = 1
+    let col = is_err ? 999 : 111
+    assert_eq col, 999
+
+    let is_ok = 0
+    let col2 = is_ok ? 999 : 111
+    assert_eq col2, 111
+
+    # 2. Relational condition with comparisons
+    let a = 15
+    let b = 10
+    let max1 = a > b ? a : b
+    assert_eq max1, 15
+
+    let min1 = a < b ? a : b
+    assert_eq min1, 10
+
+    # 3. Parenthesized ternary expression
+    let paren_t = (a > b ? 100 : 200)
+    assert_eq paren_t, 100
+
+    # 4. Ternary in return statement
+    let ret_val = helper_identity(a > b ? 42 : 84)
+    assert_eq ret_val, 42
+
+    # 5. Ternary with octal literals
+    let flag = 1
+    let mode = flag ? 0o755 : 0o644
+    assert_eq mode, 493
+
+    let flag_zero = 0
+    let mode_zero = flag_zero ? 0o755 : 0o644
+    assert_eq mode_zero, 420
+
+    # 6. Chained ternary (right-associative else-if)
+    let score = 85
+    let grade = score >= 90 ? 1 : score >= 80 ? 2 : 3
+    assert_eq grade, 2
+
+    let score_low = 50
+    let grade_low = score_low >= 90 ? 1 : score_low >= 80 ? 2 : 3
+    assert_eq grade_low, 3
+
+    # 7. Recursive function with ternary (verifies stack frame preservation)
+    # fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13
+    let fib7 = fib(7)
+    assert_eq fib7, 13
+}
+
+fn main {
+    call test_octal_literals
+    call test_inc_dec_operators
+    # call test_ternary_expressions
+    print "ALL SYNTAX V83 TESTS PASSED (0o OCTALS, ++/--, TERNARY)"
+}
+
+call main

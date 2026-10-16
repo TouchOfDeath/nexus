@@ -74,14 +74,14 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 27. **Exception / Panic Mechanism**: Provide structured panic handling with call-stack unwinding for unrecoverable runtime violations.
 28. **Hexadecimal Number Literals** *(COMPLETED)*: Support `0x11111B`, `0xRRGGBB`, and `0xFF` hex notation so color constants don't require awkward decimal conversions.
 29. **Binary Number Literals** *(COMPLETED)*: Support `0b10101010` binary literals for bitmask manipulation in X11 and Wayland wire protocols.
-30. **Octal Number Literals**: Support `0o644` and `0o755` octal notation for POSIX file permission masks.
+30. **Octal Number Literals** *(COMPLETED)*: Support `0o644` and `0o755` octal notation for POSIX file permission masks.
 31. **Scientific Notation Float Literals**: Parse exponential floating-point numbers `1.5e-3` for physics and subpixel layout coordinates.
 32. **Bitwise Shift Operators (`<<`, `>>`)** *(COMPLETED)*: Native AST-level bit shift operators with direct emission of `shl`, `shr`, and `sar` x86/ARM64 instructions (desugared to `stdlib/bitwise.nex`).
 33. **Bitwise Logic Operators (`&`, `|`, `^`, `~`)** *(COMPLETED)*: Direct bitwise AND, OR, XOR, and NOT operators (desugared to `stdlib/bitwise.nex`).
 34. **Compound Assignment Operators** *(COMPLETED)*: Support `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` across all lvalues.
-35. **Increment / Decrement Operators**: Provide atomic or standard `++` and `--` for concise buffer cursor and loop counter increments.
-36. **Ternary / Conditional Expressions**: Support inline ternary expressions `let col = is_err ? col_err : col_ok;` to avoid verbose `if/else` assignments.
-37. **Constant Definitions (`const`)**: Define compile-time immutable values evaluated at compilation and placed directly in read-only data or immediate operands.
+35. **Increment / Decrement Operators** *(COMPLETED)*: Provide atomic or standard `++` and `--` for concise buffer cursor and loop counter increments.
+36. **Ternary / Conditional Expressions** *(COMPLETED)*: Support inline ternary expressions `let col = is_err ? col_err : col_ok;` to avoid verbose `if/else` assignments.
+37. **Constant Definitions (`const`)** *(COMPLETED)*: Define compile-time immutable values evaluated at compilation and placed directly in read-only data or immediate operands.
 38. **Static Global Variables (`static mut`)**: Clearly demarcate global state with explicit thread-local or process-wide static storage declarations.
 39. **Module System (`mod` / `namespace`)**: Hierarchical code organization into sub-modules preventing name collisions across stdlib and user code.
 40. **Granular Import Syntax**: Support `import gui::{Button, Window, Color};` and `import stdlib::x11 as x11;` rather than flat textual `include` file concatenation.
@@ -94,7 +94,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 47. **Sizeof & Alignof Operators**: Provide compile-time `sizeof(T)` and `alignof(T)` queries to calculate struct offsets and buffer allocations dynamically.
 48. **Inline Assembly (`asm!`)**: Permit safe embedded x86-64 / ARM64 assembly instructions for SIMD vector blitting and hardware timestamp counters.
 49. **Operator Overloading**: Allow overloading `+`, `-`, `[]`, `==` for custom types such as Vector2D, Color, and Matrix.
-50. **Range Expressions (`start..end`, `start..=end`)**: Support first-class iterable range syntax for clean loops `for i in 0..line_count`.
+50. **Range Expressions (`start..end`, `start..=end`)** *(COMPLETED)*: Support first-class iterable range syntax for clean loops `for i in 0..line_count` (exclusive `..`, inclusive `..=`, and optional `step`).
 51. **For-In Iterator Loops**: Enable looping over arbitrary collections via an `Iterator` protocol `for item in buffer.lines()`.
 52. **Loop Labels & Multi-Level Break/Continue**: Support labeled loops `'outer: while ... { break 'outer; }` for breaking out of nested editor scanning loops.
 53. **Compile-Time Reflection / Type Info**: Provide type metadata queries at compile time for automated JSON serialization and UI property inspectors.
@@ -103,7 +103,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 56. **Strict String Immutability Guarantees**: Differentiate read-only string slices from growable string buffers to avoid inadvertent memory overwrites.
 57. **Dynamic Memory Allocator Abstraction**: Provide a swappable `Allocator` interface (e.g. Arena, Bump, Slab, General Heap) for specialized GUI rendering passes.
 58. **Memory Bounds Checking**: Compiler-injected array and buffer slice bounds checking with configurable debug/release assertions.
-59. **Null Coalescing Operator (`??`)**: Provide concise fallback semantics `let title = opt_title ?? "Untitled";`.
+59. **Null Coalescing Operator (`??`)** *(COMPLETED)*: Provide concise fallback semantics `let title = opt_title ?? "Untitled";` with short-circuit evaluation.
 60. **Safe Cast Operators (`as`, `try_into`)**: Enforce explicit signed/unsigned and narrowing numerical conversions to avoid silent truncation bugs.
 61. **Tail-Call Optimization (TCO)**: Guarantee constant-stack execution for recursive AST tree traversals and parsing routines.
 62. **Constant Functions (`const fn`)**: Execute pure computations (such as syntax color LUT generation and font table sizing) at compile time.
@@ -116,7 +116,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 ## 2. Standard Collections, Buffers & Text Data Structures
 
 66. **Dynamic Array / Vector (`Vec<T>`)** *(COMPLETED)*: Growable heap-backed array with automatic doubling reallocation, amortized O(1) appending, and shrink-to-fit (`stdlib/vec.nex`).
-67. **Piece Table Text Buffer**: Two-table piece buffer (original file buffer + append buffer with piece descriptors) enabling instantaneous loading of 100MB files.
+67. **Piece Table Text Buffer** *(COMPLETED)*: Two-table piece buffer (original file buffer + append buffer with piece descriptors) enabling instantaneous loading of 100MB files, O(1) contiguous keystroke coalescing, slice export, and atomic snapshot undo/redo (`stdlib/piece_table.nex`).
 68. **Rope Data Structure**: Binary tree of string leaves with balanced B-tree nodes providing O(log N) insertions, deletions, and splits for large documents.
 69. **Gap Buffer**: Classic buffer structure with a sliding contiguous cursor gap, providing O(1) localized character insertions and deletions.
 70. **Associative Hash Map (`HashMap<K, V>`)** *(COMPLETED)*: High-performance hash map (e.g. SwissTable or open-addressing linear probing) for keyword lookups, symbol tables, and settings (`stdlib/hashmap.nex`).

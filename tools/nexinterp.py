@@ -102,13 +102,68 @@ class NexusInterpreter:
         try:
             if '.' in tok:
                 return float(tok)
-            return int(tok)
+            try:
+                return int(tok, 0)
+            except ValueError:
+                return int(tok)
         except ValueError:
             return self.get_var(tok)
 
     def eval_expr(self, expr):
         expr = expr.strip()
         if not expr: return 0
+
+        # Null coalescing operator: expr ?? fallback
+        if '??' in expr:
+            in_str = False
+            paren_depth = 0
+            bracket_depth = 0
+            nc_idx = -1
+            for idx in range(len(expr) - 1):
+                ch = expr[idx]
+                if ch == '"': in_str = not in_str
+                if in_str: continue
+                if ch == '(': paren_depth += 1
+                elif ch == ')': paren_depth = max(0, paren_depth - 1)
+                elif ch == '[': bracket_depth += 1
+                elif ch == ']': bracket_depth = max(0, bracket_depth - 1)
+                elif paren_depth == 0 and bracket_depth == 0 and ch == '?' and expr[idx+1] == '?':
+                    nc_idx = idx
+                    break
+            if nc_idx != -1:
+                lhs_str = expr[:nc_idx].strip()
+                rhs_str = expr[nc_idx+2:].strip()
+                lhs_val = self.eval_expr(lhs_str)
+                if lhs_val != 0:
+                    return lhs_val
+                return self.eval_expr(rhs_str)
+
+        # Ternary conditional expression: cond ? true_val : false_val
+        if '?' in expr:
+            in_str = False
+            paren_depth = 0
+            q_idx = -1
+            colon_idx = -1
+            for idx, ch in enumerate(expr):
+                if ch == '"': in_str = not in_str
+                if in_str: continue
+                if ch == '(': paren_depth += 1
+                elif ch == ')': paren_depth -= 1
+                elif ch == '?' and paren_depth == 0 and q_idx == -1:
+                    if idx + 1 < len(expr) and expr[idx+1] == '?':
+                        continue
+                    q_idx = idx
+                elif ch == ':' and paren_depth == 0 and q_idx != -1:
+                    colon_idx = idx
+                    break
+            if q_idx != -1 and colon_idx != -1:
+                cond_str = expr[:q_idx].strip()
+                true_str = expr[q_idx+1:colon_idx].strip()
+                false_str = expr[colon_idx+1:].strip()
+                if self.eval_cond(cond_str):
+                    return self.eval_expr(true_str)
+                else:
+                    return self.eval_expr(false_str)
 
         # String literal
         if expr.startswith('"') and expr.endswith('"'):
@@ -292,6 +347,20 @@ class NexusInterpreter:
                 stmts.append(('if', cond, self.parse_blocks(then_body), self.parse_blocks(else_body)))
                 continue
 
+            if line.startswith('for ') and line.endswith('{'):
+                header = line[4:-1].strip()
+                body = []
+                depth = 1
+                while i < len(lines) and depth > 0:
+                    l = lines[i]
+                    i += 1
+                    for ch in l:
+                        if ch == '{': depth += 1
+                        elif ch == '}': depth -= 1
+                    if depth > 0: body.append(l)
+                stmts.append(('for', header, self.parse_blocks(body)))
+                continue
+
             # Simple statement
             stmts.append(('stmt', line))
         return stmts
@@ -305,6 +374,59 @@ class NexusInterpreter:
                     ret = self.exec_block(body)
                     if ret == 'break': break
                     if ret == 'return': return 'return'
+            elif kind == 'for':
+                header, body = stmt[1], stmt[2]
+                if ' in ' in header:
+                    var_part, range_part = header.split(' in ', 1)
+                    var = var_part.strip()
+                    step_val = 1
+                    if ' step ' in range_part:
+                        range_part, step_part = range_part.split(' step ', 1)
+                        step_val = self.eval_expr(step_part.strip())
+                    range_part = range_part.strip()
+                    inclusive = False
+                    if '..=' in range_part:
+                        inclusive = True
+                        s_str, e_str = range_part.split('..=', 1)
+                    elif '..' in range_part:
+                        s_str, e_str = range_part.split('..', 1)
+                    else:
+                        raise SyntaxError(f"Invalid range in for loop: {header}")
+                    start_val = self.eval_expr(s_str.strip())
+                    end_val = self.eval_expr(e_str.strip())
+                    cur = start_val
+                    while True:
+                        if step_val > 0:
+                            if inclusive and cur > end_val: break
+                            if not inclusive and cur >= end_val: break
+                        else:
+                            if inclusive and cur < end_val: break
+                            if not inclusive and cur <= end_val: break
+                        self.set_var(var, cur)
+                        ret = self.exec_block(body)
+                        if ret == 'break': break
+                        if ret == 'return': return 'return'
+                        cur += step_val
+                    continue
+                parts = header.split(',')
+                if len(parts) == 3:
+                    init_str, cond_str, upd_str = parts[0].strip(), parts[1].strip(), parts[2].strip()
+                    self.exec_block([('stmt', init_str)])
+                    while self.eval_cond(cond_str):
+                        ret = self.exec_block(body)
+                        if ret == 'break': break
+                        if ret == 'return': return 'return'
+                        self.exec_block([('stmt', upd_str)])
+                elif len(parts) == 4:
+                    var, start_v, end_v, upd_str = parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()
+                    self.set_var(var, self.eval_expr(start_v))
+                    cmp_op = '<' if ('++' in upd_str or '+=' in upd_str or '+' in upd_str) else '>'
+                    cond_str = f"{var} {cmp_op} {end_v}"
+                    while self.eval_cond(cond_str):
+                        ret = self.exec_block(body)
+                        if ret == 'break': break
+                        if ret == 'return': return 'return'
+                        self.exec_block([('stmt', upd_str)])
             elif kind == 'if':
                 cond, then_body = stmt[1], stmt[2]
                 else_body = stmt[3] if len(stmt) > 3 else []
@@ -323,6 +445,34 @@ class NexusInterpreter:
                     if rest:
                         self.set_var('_ret_val', self.eval_expr(rest))
                     return 'return'
+
+                if line.startswith('const '):
+                    rest = line[6:].strip()
+                    if '=' in rest:
+                        name, expr = rest.split('=', 1)
+                        name = name.strip()
+                        val = self.eval_expr(expr.strip())
+                        self.globals[name] = val
+                    continue
+
+                # Increment / decrement: var++ or ++var or var-- or --var
+                tline = line
+                if tline.startswith('let ') or tline.startswith('local '):
+                    tline = tline.split(' ', 1)[1].strip()
+                if tline.endswith('++') or tline.endswith('--'):
+                    op = tline[-2:]
+                    var = tline[:-2].strip()
+                    val = self.eval_expr(var)
+                    new_val = (val + 1) if op == '++' else (val - 1)
+                    self.set_var(var, new_val)
+                    continue
+                if tline.startswith('++') or tline.startswith('--'):
+                    op = tline[:2]
+                    var = tline[2:].strip()
+                    val = self.eval_expr(var)
+                    new_val = (val + 1) if op == '++' else (val - 1)
+                    self.set_var(var, new_val)
+                    continue
 
                 # Print statement
                 if line.startswith('print '):

@@ -1975,7 +1975,7 @@ static int cur_fn_nlocals = 0;
 
 static void fn_add_local(const char *var) {
     if (!var || !*var) return;
-    if (var[0] == '_' && strncmp(var, "_fcall_", 7) != 0 && strncmp(var, "_ls_", 4) != 0) return; /* save _fcall_ call temporaries and _ls_ scoped locals in stack frame */
+    if (var[0] == '_' && strncmp(var, "_fcall_", 7) != 0 && strncmp(var, "_ls_", 4) != 0 && strncmp(var, "_tern_", 6) != 0 && strncmp(var, "_nc_", 4) != 0) return; /* save _fcall_ call temporaries, _ls_ scoped locals, _tern_ and _nc_ temporaries in stack frame */
     for (int i = 0; i < cur_fn_nlocals; i++) {
         if (!strcmp(cur_fn_locals[i], var)) return;
     }
@@ -3015,14 +3015,29 @@ static int desugar_for_compound(const char *in, char *out, size_t cap) {
     while (*p == ' ' || *p == '\t') p++;
     if (strncmp(p, "for ", 4) && strncmp(p, "for\t", 4)) return 0;
 
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
     /* find first comma */
     char *c1 = strchr(p, ',');
     if (!c1) return 0;
     /* find second comma */
     char *c2 = strchr(c1 + 1, ',');
     if (!c2) return 0;
+    /* optional third comma: for i, 0, 10, i++ { */
+    char *c3 = strchr(c2 + 1, ',');
 
-    char *upd = c2 + 1;
+    char *upd = c3 ? (c3 + 1) : (c2 + 1);
+    while (*upd == ' ' || *upd == '\t') upd++;
+
+    /* Check prefix ++ / -- */
+    int prefix_inc = 0;
+    if (upd[0] == '+' && upd[1] == '+') { prefix_inc = 1; upd += 2; }
+    else if (upd[0] == '-' && upd[1] == '-') { prefix_inc = -1; upd += 2; }
     while (*upd == ' ' || *upd == '\t') upd++;
 
     char var[128] = "";
@@ -3036,28 +3051,55 @@ static int desugar_for_compound(const char *in, char *out, size_t cap) {
 
     while (*upd == ' ' || *upd == '\t') upd++;
 
-    int op_len = 0;
     const char *base_op = NULL;
-    const char *cop = check_compound_op(upd, &op_len, &base_op);
-    if (!cop) return 0;
-    if (strcmp(base_op, "+") && strcmp(base_op, "-")) return 0;
+    char rhs[128] = "1";
 
-    upd += op_len;
+    if (prefix_inc != 0) {
+        base_op = (prefix_inc == 1) ? "+" : "-";
+    } else if (upd[0] == '+' && upd[1] == '+') {
+        base_op = "+";
+        upd += 2;
+    } else if (upd[0] == '-' && upd[1] == '-') {
+        base_op = "-";
+        upd += 2;
+    } else {
+        int op_len = 0;
+        const char *cop = check_compound_op(upd, &op_len, &base_op);
+        if (!cop) return 0;
+        if (strcmp(base_op, "+") && strcmp(base_op, "-")) return 0;
+
+        upd += op_len;
+        while (*upd == ' ' || *upd == '\t') upd++;
+
+        /* find '{' */
+        char *brace = strchr(upd, '{');
+        if (!brace) return 0;
+
+        int rlen = (int)(brace - upd);
+        while (rlen > 0 && (upd[rlen-1] == ' ' || upd[rlen-1] == '\t')) rlen--;
+        snprintf(rhs, sizeof rhs, "%.*s", rlen, upd);
+        upd = brace;
+    }
+
     while (*upd == ' ' || *upd == '\t') upd++;
-
-    /* find '{' */
     char *brace = strchr(upd, '{');
     if (!brace) return 0;
 
-    int rlen = (int)(brace - upd);
-    while (rlen > 0 && (upd[rlen-1] == ' ' || upd[rlen-1] == '\t')) rlen--;
-
-    char rhs[128];
-    snprintf(rhs, sizeof rhs, "%.*s", rlen, upd);
-
-    int prefix_len = (int)(c2 - clean) + 1;
-    snprintf(out, cap, "%.*s %s = %s %s %s %s\n",
-             prefix_len, clean, var, var, base_op, rhs, brace);
+    if (c3) {
+        /* 3-comma form: for var, start, end, upd { */
+        char v_init[128] = "", v_start[128] = "", v_end[128] = "";
+        trim_bounds(p + 4, c1, v_init, sizeof v_init);
+        trim_bounds(c1 + 1, c2, v_start, sizeof v_start);
+        trim_bounds(c2 + 1, c3, v_end, sizeof v_end);
+        const char *cmp_op = (strcmp(base_op, "+") == 0) ? "<" : ">";
+        snprintf(out, cap, "%sfor %s = %s, %s %s %s, %s = %s %s %s %s\n",
+                 indent, v_init, v_start, v_init, cmp_op, v_end, var, var, base_op, rhs, brace);
+    } else {
+        /* standard 2-comma form: for init, cond, upd { */
+        int prefix_len = (int)(c2 - clean) + 1;
+        snprintf(out, cap, "%.*s %s = %s %s %s %s\n",
+                 prefix_len, clean, var, var, base_op, rhs, brace);
+    }
     return 1;
 }
 
@@ -3084,6 +3126,479 @@ static void normalize_hex_literals(char *line) {
 }
 
 /* --------------------------------------------------------------------------
+ * octal literal normalization: 0o755 / 0O755 -> decimal string
+ * Converts octal literals to decimal representation so they work across
+ * all bootstrap compiler stages and target architectures.
+ * -------------------------------------------------------------------------- */
+static void normalize_octal_literals(char *line) {
+    char tmp[MAXLINE];
+    int ti = 0;
+    int in_str = 0;
+    int len = (int)strlen(line);
+    for (int i = 0; i < len; ) {
+        if (in_str) {
+            if (line[i] == '\\' && i + 1 < len) {
+                if (ti < MAXLINE - 2) {
+                    tmp[ti++] = line[i++];
+                    tmp[ti++] = line[i++];
+                } else {
+                    i += 2;
+                }
+                continue;
+            }
+            if (line[i] == '"') in_str = 0;
+            if (ti < MAXLINE - 1) tmp[ti++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '"') {
+            in_str = 1;
+            if (ti < MAXLINE - 1) tmp[ti++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '#' || line[i] == ';') {
+            while (i < len && ti < MAXLINE - 1) tmp[ti++] = line[i++];
+            break;
+        }
+
+        /* Check for 0o or 0O token: must not be part of an identifier */
+        if (line[i] == '0' && (line[i+1] == 'o' || line[i+1] == 'O') &&
+            (i == 0 || !is_ident1((unsigned char)line[i-1]))) {
+            int j = i + 2;
+            if (j < len && line[j] >= '0' && line[j] <= '7') {
+                unsigned long long val = 0;
+                while (j < len && (line[j] >= '0' && line[j] <= '7')) {
+                    val = (val << 3) + (line[j] - '0');
+                    j++;
+                }
+                /* Ensure it doesn't end with identifier char (e.g. 0o755xyz) */
+                if (j >= len || !is_ident1((unsigned char)line[j])) {
+                    ti += snprintf(tmp + ti, sizeof(tmp) - ti, "%llu", val);
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        if (ti < MAXLINE - 1) {
+            tmp[ti++] = line[i++];
+        } else {
+            i++;
+        }
+    }
+    tmp[ti] = '\0';
+    snprintf(line, MAXLINE, "%s", tmp);
+}
+
+/* --------------------------------------------------------------------------
+ * increment / decrement operator desugaring:
+ *   target++ / ++target -> let target = target + 1
+ *   target-- / --target -> let target = target - 1
+ *   obj.field++ / ++obj.field -> obj.field = obj.field + 1
+ *   obj.field-- / --obj.field -> obj.field = obj.field - 1
+ * -------------------------------------------------------------------------- */
+static int desugar_inc_dec(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    /* Optional 'let ' in front */
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        p += 4;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+
+    const char *op = NULL;
+    char target[128] = "";
+    int tlen = 0;
+
+    /* Check prefix ++ / -- */
+    if (p[0] == '+' && p[1] == '+') {
+        op = "+";
+        p += 2;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!is_ident0((unsigned char)*p)) return 0;
+        while (*p && is_ident1((unsigned char)*p)) {
+            if (tlen < 127) target[tlen++] = *p;
+            p++;
+        }
+        if (*p == '.') {
+            if (tlen < 127) target[tlen++] = *p;
+            p++;
+            while (*p && is_ident1((unsigned char)*p)) {
+                if (tlen < 127) target[tlen++] = *p;
+                p++;
+            }
+        }
+        target[tlen] = '\0';
+    } else if (p[0] == '-' && p[1] == '-') {
+        op = "-";
+        p += 2;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!is_ident0((unsigned char)*p)) return 0;
+        while (*p && is_ident1((unsigned char)*p)) {
+            if (tlen < 127) target[tlen++] = *p;
+            p++;
+        }
+        if (*p == '.') {
+            if (tlen < 127) target[tlen++] = *p;
+            p++;
+            while (*p && is_ident1((unsigned char)*p)) {
+                if (tlen < 127) target[tlen++] = *p;
+                p++;
+            }
+        }
+        target[tlen] = '\0';
+    } else if (is_ident0((unsigned char)*p)) {
+        /* Check postfix target++ / target-- */
+        while (*p && is_ident1((unsigned char)*p)) {
+            if (tlen < 127) target[tlen++] = *p;
+            p++;
+        }
+        if (*p == '.') {
+            if (tlen < 127) target[tlen++] = *p;
+            p++;
+            while (*p && is_ident1((unsigned char)*p)) {
+                if (tlen < 127) target[tlen++] = *p;
+                p++;
+            }
+        }
+        target[tlen] = '\0';
+
+        while (*p == ' ' || *p == '\t') p++;
+        if (p[0] == '+' && p[1] == '+') {
+            op = "+";
+            p += 2;
+        } else if (p[0] == '-' && p[1] == '-') {
+            op = "-";
+            p += 2;
+        } else {
+            return 0;
+        }
+    } else {
+        return 0;
+    }
+
+    if (!op || tlen == 0) return 0;
+    if (is_nexus_keyword(target)) return 0;
+
+    /* Remainder of the line must be trailing whitespace and optional comment */
+    while (*p == ' ' || *p == '\t') p++;
+    char trailing[MAXLINE] = "";
+    if (*p == '#' || *p == ';') {
+        snprintf(trailing, sizeof trailing, " %s", p);
+        int trlen = (int)strlen(trailing);
+        while (trlen > 0 && (trailing[trlen-1] == '\n' || trailing[trlen-1] == '\r')) {
+            trailing[--trlen] = '\0';
+        }
+    } else if (*p != '\0' && *p != '\n' && *p != '\r') {
+        return 0;
+    }
+
+    if (strchr(target, '.')) {
+        snprintf(out, cap, "%s%s = %s %s 1%s\n", indent, target, target, op, trailing);
+    } else {
+        snprintf(out, cap, "%slet %s = %s %s 1%s\n", indent, target, target, op, trailing);
+    }
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
+ * ternary / conditional expression desugaring:
+ *   let col = is_err ? col_err : col_ok
+ *   ->
+ *   let _tern_N = col_ok
+ *   if is_err != 0 {
+ *       let _tern_N = col_err
+ *   }
+ *   let col = _tern_N
+ * -------------------------------------------------------------------------- */
+static int tern_tmp_counter = 0;
+
+static int contains_relop(const char *s) {
+    int in_s = 0;
+    int len = (int)strlen(s);
+    for (int i = 0; i < len; i++) {
+        if (in_s && s[i] == '\\' && i + 1 < len) { i++; continue; }
+        if (s[i] == '"') { in_s = !in_s; continue; }
+        if (in_s) continue;
+        int rlen = 0;
+        const char *cop = NULL;
+        if (is_relop_std(s + i, &rlen, &cop) || is_relop_f(s + i, &rlen, &cop)) return 1;
+    }
+    return 0;
+}
+
+static void trim_outer_parens(char *s) {
+    char *p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '(') return;
+    int match = find_matching_paren(p, 0);
+    if (match < 0) return;
+    char *end = p + match + 1;
+    while (*end == ' ' || *end == '\t') end++;
+    if (*end == '\0') {
+        p[match] = '\0';
+        memmove(s, p + 1, strlen(p + 1) + 1);
+        trim_outer_parens(s);
+    }
+}
+
+static int desugar_ternary(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    int clen = (int)strlen(clean);
+    while (clen > 0 && (clean[clen-1] == '\n' || clean[clen-1] == '\r')) {
+        clean[--clen] = '\0';
+    }
+
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    /* Skip declarations that cannot contain expressions */
+    if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3) ||
+        !strncmp(p, "include ", 8) || !strncmp(p, "include\t", 8) ||
+        !strncmp(p, "import ", 7) || !strncmp(p, "import\t", 7) ||
+        !strncmp(p, "struct ", 7) || !strncmp(p, "struct\t", 7)) {
+        return 0;
+    }
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    int len = (int)strlen(clean);
+    int in_str = 0;
+    int max_depth = -1;
+    int best_q = -1;
+    int depth = 0;
+
+    for (int i = 0; i < len; i++) {
+        if (in_str) {
+            if (clean[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (clean[i] == '"') in_str = 0;
+            continue;
+        }
+        if (clean[i] == '"') { in_str = 1; continue; }
+        if (clean[i] == '#' || clean[i] == ';') break;
+
+        if (clean[i] == '(' || clean[i] == '[' || clean[i] == '{') {
+            depth++;
+        } else if (clean[i] == ')' || clean[i] == ']' || clean[i] == '}') {
+            if (depth > 0) depth--;
+        } else if (clean[i] == '?') {
+            if (i + 1 < len && clean[i+1] == '?') {
+                i++; /* Skip ?? */
+                continue;
+            }
+            if (depth >= max_depth) {
+                max_depth = depth;
+                best_q = i;
+            }
+        }
+    }
+
+    if (best_q < 0) return 0;
+
+    /* Find matching ':' at max_depth */
+    int colon_pos = -1;
+    depth = max_depth;
+    in_str = 0;
+    for (int i = best_q + 1; i < len; i++) {
+        if (in_str) {
+            if (clean[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (clean[i] == '"') in_str = 0;
+            continue;
+        }
+        if (clean[i] == '"') { in_str = 1; continue; }
+        if (clean[i] == '#' || clean[i] == ';') break;
+
+        if (clean[i] == '(' || clean[i] == '[' || clean[i] == '{') {
+            depth++;
+        } else if (clean[i] == ')' || clean[i] == ']' || clean[i] == '}') {
+            if (depth == max_depth) break;
+            if (depth > 0) depth--;
+        } else if (clean[i] == ':') {
+            if (depth == max_depth) {
+                colon_pos = i;
+                break;
+            }
+        }
+    }
+
+    if (colon_pos < 0) return 0;
+
+    /* Find end_pos of val_false */
+    int end_pos = -1;
+    depth = max_depth;
+    in_str = 0;
+    for (int i = colon_pos + 1; i < len; i++) {
+        if (in_str) {
+            if (clean[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (clean[i] == '"') in_str = 0;
+            continue;
+        }
+        if (clean[i] == '"') { in_str = 1; continue; }
+        if (clean[i] == '#' || clean[i] == ';' || clean[i] == '\n' || clean[i] == '\r') {
+            end_pos = i;
+            break;
+        }
+        if (clean[i] == '(' || clean[i] == '[' || clean[i] == '{') {
+            depth++;
+        } else if (clean[i] == ')' || clean[i] == ']' || clean[i] == '}') {
+            if (depth == max_depth) {
+                end_pos = i;
+                break;
+            }
+            if (depth > 0) depth--;
+        } else if (clean[i] == ',') {
+            if (depth == max_depth) {
+                end_pos = i;
+                break;
+            }
+        }
+    }
+    if (end_pos < 0) end_pos = len;
+
+    /* Find start_pos of cond */
+    int last_boundary = indent_len;
+    depth = 0;
+    in_str = 0;
+    for (int i = 0; i < best_q; i++) {
+        if (in_str) {
+            if (clean[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (clean[i] == '"') in_str = 0;
+            continue;
+        }
+        if (clean[i] == '"') { in_str = 1; continue; }
+        if (clean[i] == '#' || clean[i] == ';') break;
+
+        if (clean[i] == '(' || clean[i] == '[' || clean[i] == '{') {
+            if (depth == max_depth - 1) {
+                last_boundary = i + 1;
+            }
+            depth++;
+        } else if (clean[i] == ')' || clean[i] == ']' || clean[i] == '}') {
+            if (depth > 0) depth--;
+        } else if (depth == max_depth) {
+            if (clean[i] == ',' || clean[i] == ':') {
+                last_boundary = i + 1;
+            } else if (clean[i] == '=') {
+                int is_asgn = 1;
+                if (i > 0 && (clean[i-1] == '=' || clean[i-1] == '!' || clean[i-1] == '<' ||
+                              clean[i-1] == '>' || clean[i-1] == '+' || clean[i-1] == '-' ||
+                              clean[i-1] == '*' || clean[i-1] == '/' || clean[i-1] == '%' ||
+                              clean[i-1] == '&' || clean[i-1] == '|' || clean[i-1] == '^')) {
+                    is_asgn = 0;
+                }
+                if (i + 1 < len && clean[i+1] == '=') is_asgn = 0;
+                if (is_asgn) last_boundary = i + 1;
+            } else if (!strncmp(clean + i, "return ", 7) || !strncmp(clean + i, "return\t", 7)) {
+                last_boundary = i + 7;
+            } else if (!strncmp(clean + i, "call ", 5) || !strncmp(clean + i, "call\t", 5)) {
+                last_boundary = i + 5;
+            } else if (!strncmp(clean + i, "print ", 6) || !strncmp(clean + i, "print\t", 6)) {
+                last_boundary = i + 6;
+            } else if (!strncmp(clean + i, "print_str ", 10) || !strncmp(clean + i, "print_str\t", 10)) {
+                last_boundary = i + 10;
+            }
+        }
+    }
+
+    int start_pos = last_boundary;
+    while (start_pos < best_q && (clean[start_pos] == ' ' || clean[start_pos] == '\t')) {
+        start_pos++;
+    }
+
+    /* Extract cond, val_true, val_false */
+    char cond[MAXLINE];
+    int cond_len = best_q - start_pos;
+    while (cond_len > 0 && (clean[start_pos + cond_len - 1] == ' ' || clean[start_pos + cond_len - 1] == '\t')) {
+        cond_len--;
+    }
+    snprintf(cond, sizeof cond, "%.*s", cond_len, clean + start_pos);
+
+    char val_true[MAXLINE];
+    int vt_start = best_q + 1;
+    while (vt_start < colon_pos && (clean[vt_start] == ' ' || clean[vt_start] == '\t')) vt_start++;
+    int vt_len = colon_pos - vt_start;
+    while (vt_len > 0 && (clean[vt_start + vt_len - 1] == ' ' || clean[vt_start + vt_len - 1] == '\t')) vt_len--;
+    snprintf(val_true, sizeof val_true, "%.*s", vt_len, clean + vt_start);
+
+    char val_false[MAXLINE];
+    int vf_start = colon_pos + 1;
+    while (vf_start < end_pos && (clean[vf_start] == ' ' || clean[vf_start] == '\t')) vf_start++;
+    int vf_len = end_pos - vf_start;
+    while (vf_len > 0 && (clean[vf_start + vf_len - 1] == ' ' || clean[vf_start + vf_len - 1] == '\t')) vf_len--;
+    snprintf(val_false, sizeof val_false, "%.*s", vf_len, clean + vf_start);
+
+    if (cond_len <= 0 || vt_len <= 0 || vf_len <= 0) return 0;
+
+    /* Check if the ternary is wrapped in parentheses: (cond ? a : b) */
+    int repl_start = start_pos;
+    int repl_end = end_pos;
+    if (start_pos > 0 && clean[start_pos - 1] == '(' && end_pos < len && clean[end_pos] == ')') {
+        int bi = start_pos - 2;
+        while (bi >= 0 && (clean[bi] == ' ' || clean[bi] == '\t')) bi--;
+        if (bi < 0 || clean[bi] == '=' || clean[bi] == ',' || clean[bi] == '(' ||
+            (bi >= 5 && (!strncmp(clean + bi - 5, "return", 6)))) {
+            repl_start = start_pos - 1;
+            repl_end = end_pos + 1;
+        }
+    }
+
+    trim_outer_parens(cond);
+    trim_outer_parens(val_true);
+    trim_outer_parens(val_false);
+
+    /* Format condition */
+    char cond_fmt[MAXLINE];
+    if (cond[0] == '!') {
+        char *ci = cond + 1;
+        while (*ci == ' ' || *ci == '\t') ci++;
+        snprintf(cond_fmt, sizeof cond_fmt, "%s == 0", ci);
+    } else if (contains_relop(cond)) {
+        snprintf(cond_fmt, sizeof cond_fmt, "%s", cond);
+    } else {
+        snprintf(cond_fmt, sizeof cond_fmt, "%s != 0", cond);
+    }
+
+    int tmp_id = tern_tmp_counter++;
+    char tmp_var[64];
+    snprintf(tmp_var, sizeof tmp_var, "_tern_%d", tmp_id);
+
+    char mod_line[MAXLINE];
+    snprintf(mod_line, sizeof mod_line, "%.*s%s%s",
+             repl_start, clean, tmp_var, clean + repl_end);
+
+    int is_fl = is_operand_float(cur_fn_name, val_true) || is_operand_float(cur_fn_name, val_false);
+    const char *init_val = is_fl ? "0.0" : "0";
+
+    snprintf(out, cap, "%slet %s = %s\n%sif %s {\n%s    let %s = %s\n%s} else {\n%s    let %s = %s\n%s}\n%s\n",
+             indent, tmp_var, init_val,
+             indent, cond_fmt,
+             indent, tmp_var, val_true,
+             indent,
+             indent, tmp_var, val_false,
+             indent,
+             mod_line);
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
  * bitwise binary operator desugaring:
  *   Converts simple "LHS op RHS" patterns to function calls.
  *   Handles: & -> nx_band, | -> nx_bor, ^ -> nx_bxor, << -> nx_shl, >> -> nx_shr
@@ -3097,10 +3612,18 @@ static int desugar_bitwise_binop(const char *in, char *out, size_t cap) {
     while (*p == ' ' || *p == '\t') p++;
     if (*p == '#' || *p == ';' || *p == '\0') return 0;
 
-    /* Find '=' (but not '==', '!=', '<=', '>=', '+=', etc.) */
+    /* Find '=' (but not '==', '!=', '<=', '>=', '+=', etc.) outside strings */
     char *eq = NULL;
     char *q = p;
+    int in_str_scan = 0;
     while (*q) {
+        if (in_str_scan) {
+            if (*q == '\\' && *(q+1)) { q += 2; continue; }
+            if (*q == '"') in_str_scan = 0;
+            q++;
+            continue;
+        }
+        if (*q == '"') { in_str_scan = 1; q++; continue; }
         if (*q == '#' || *q == '\n') break;
         if (*q == '=' && (q == p || (q[-1] != '=' && q[-1] != '!' &&
                                      q[-1] != '<' && q[-1] != '>' &&
@@ -4596,9 +5119,471 @@ static void emit_lambdas_and_dispatchers(FILE *out) {
 }
 
 /* --------------------------------------------------------------------------
+ * Feature #37: Compile-Time Constants (const NAME = <val>)
+ * -------------------------------------------------------------------------- */
+#define MAX_USER_CONSTS 512
+typedef struct {
+    char name[64];
+    char val[256];
+} UserConst;
+
+static UserConst user_consts[MAX_USER_CONSTS];
+static int n_user_consts = 0;
+
+static void reset_user_consts(void) {
+    n_user_consts = 0;
+}
+
+static int find_user_const(const char *name) {
+    for (int i = 0; i < n_user_consts; i++) {
+        if (!strcmp(user_consts[i].name, name)) return i;
+    }
+    return -1;
+}
+
+static void substitute_user_consts(char *line);
+
+static int register_user_const(const char *line, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", line);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "const ", 6) != 0 && strncmp(p, "const\t", 6) != 0) return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    p += 6;
+    while (*p == ' ' || *p == '\t') p++;
+    char name[64];
+    int nlen = 0;
+    if (!is_ident0((unsigned char)*p)) return 0;
+    while (*p && is_ident1((unsigned char)*p)) {
+        if (nlen < 63) name[nlen++] = *p;
+        p++;
+    }
+    name[nlen] = '\0';
+    if (is_nexus_keyword(name)) return 0;
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=') return 0;
+    p++; /* skip '=' */
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Isolate expression up to comment or newline */
+    char expr[MAXLINE];
+    int elen = 0;
+    int in_str = 0;
+    while (*p) {
+        if (in_str) {
+            if (*p == '\\' && *(p+1)) {
+                if (elen < MAXLINE - 2) { expr[elen++] = *p++; expr[elen++] = *p++; }
+                else p += 2;
+                continue;
+            }
+            if (*p == '"') in_str = 0;
+            if (elen < MAXLINE - 1) expr[elen++] = *p++;
+            else p++;
+            continue;
+        }
+        if (*p == '"') { in_str = 1; if (elen < MAXLINE - 1) expr[elen++] = *p++; else p++; continue; }
+        if (*p == '#' || *p == ';' || *p == '\n' || *p == '\r') break;
+        if (elen < MAXLINE - 1) expr[elen++] = *p++;
+        else p++;
+    }
+    expr[elen] = '\0';
+    trim_ws(expr);
+    if (!expr[0]) return 0;
+
+    /* First substitute any previously registered constants into expr */
+    substitute_user_consts(expr);
+
+    /* Normalize octal/hex inside expr if present */
+    normalize_hex_literals(expr);
+    normalize_octal_literals(expr);
+
+    /* Try folding integer arithmetic chains (e.g. 1024 * 64 -> 65536) */
+    int64_t folded_val = 0;
+    const char *end_ptr = NULL;
+    if (eval_int_chain(expr, &end_ptr, &folded_val)) {
+        while (*end_ptr == ' ' || *end_ptr == '\t') end_ptr++;
+        if (*end_ptr == '\0') {
+            snprintf(expr, sizeof expr, "%" PRId64, folded_val);
+        }
+    }
+
+    int idx = find_user_const(name);
+    if (idx >= 0) {
+        snprintf(user_consts[idx].val, sizeof(user_consts[idx].val), "%s", expr);
+    } else if (n_user_consts < MAX_USER_CONSTS) {
+        snprintf(user_consts[n_user_consts].name, sizeof(user_consts[n_user_consts].name), "%s", name);
+        snprintf(user_consts[n_user_consts].val, sizeof(user_consts[n_user_consts].val), "%s", expr);
+        n_user_consts++;
+    }
+
+    /* Emit declaration as commented-out line so nexc ignores it */
+    snprintf(out, cap, "%s# const %s = %s\n", indent, name, expr);
+    return 1;
+}
+
+static void substitute_user_consts(char *line) {
+    if (n_user_consts == 0) return;
+    char tmp[MAXLINE * 2];
+    int ti = 0, len = (int)strlen(line);
+    int in_str = 0;
+
+    for (int i = 0; i < len; ) {
+        if (in_str) {
+            if (line[i] == '\\' && i + 1 < len) {
+                if (ti < (int)sizeof(tmp) - 2) { tmp[ti++] = line[i++]; tmp[ti++] = line[i++]; }
+                else i += 2;
+                continue;
+            }
+            if (line[i] == '"') in_str = 0;
+            if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '"') {
+            in_str = 1;
+            if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '#' || line[i] == ';') {
+            while (i < len && ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+            break;
+        }
+        if (is_ident0((unsigned char)line[i])) {
+            char tok[128];
+            int tlen = 0;
+            int start_idx = i;
+            while (i < len && is_ident1((unsigned char)line[i])) {
+                if (tlen < 127) tok[tlen++] = line[i];
+                i++;
+            }
+            tok[tlen] = '\0';
+
+            int preceded_by_dot = (start_idx > 0 && line[start_idx - 1] == '.');
+            int followed_by_dot = (i < len && line[i] == '.');
+
+            int c_idx = -1;
+            if (!preceded_by_dot && !followed_by_dot) {
+                c_idx = find_user_const(tok);
+            }
+
+            if (c_idx >= 0) {
+                const char *val = user_consts[c_idx].val;
+                int vlen = (int)strlen(val);
+                for (int v = 0; v < vlen && ti < (int)sizeof(tmp) - 1; v++) {
+                    tmp[ti++] = val[v];
+                }
+            } else {
+                for (int t = 0; t < tlen && ti < (int)sizeof(tmp) - 1; t++) {
+                    tmp[ti++] = tok[t];
+                }
+            }
+            continue;
+        }
+        if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+        else i++;
+    }
+    tmp[ti] = '\0';
+    snprintf(line, MAXLINE, "%s", tmp);
+}
+
+/* --------------------------------------------------------------------------
+ * Feature #50: Range Expressions in Loops (for <var> in <start>..<end>)
+ *   for i in 0..10 {           -> for i = 0, i < 10, i = i + 1 {
+ *   for i in 0..=10 {          -> for i = 0, i <= 10, i = i + 1 {
+ *   for i in 0..10 step 2 {    -> for i = 0, i < 10, i = i + 2 {
+ *   for i in 10..0 step -1 {   -> for i = 10, i > 0, i = i - 1 {
+ *   for i in 10..=0 step -1 {  -> for i = 10, i >= 0, i = i - 1 {
+ * -------------------------------------------------------------------------- */
+static int desugar_for_range(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "for ", 4) != 0 && strncmp(p, "for\t", 4) != 0) return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    p += 4;
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Parse loop variable */
+    char var[64];
+    int vlen = 0;
+    if (!is_ident0((unsigned char)*p)) return 0;
+    while (*p && is_ident1((unsigned char)*p)) {
+        if (vlen < 63) var[vlen++] = *p;
+        p++;
+    }
+    var[vlen] = '\0';
+    if (is_nexus_keyword(var)) return 0;
+
+    /* Must be followed by 'in' */
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "in", 2) != 0 || (p[2] != ' ' && p[2] != '\t')) return 0;
+    p += 2;
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Find opening '{' at end of line */
+    char *brace = strchr(p, '{');
+    if (!brace) return 0;
+
+    /* Extract the range + optional step spec between 'in' and '{' */
+    int spec_len = (int)(brace - p);
+    char spec[MAXLINE];
+    snprintf(spec, sizeof spec, "%.*s", spec_len, p);
+    trim_ws(spec);
+
+    /* Check for 'step' keyword */
+    char range_part[MAXLINE];
+    char step_part[128] = "1";
+    char *step_kw = strstr(spec, " step ");
+    if (!step_kw) step_kw = strstr(spec, "\tstep ");
+    if (!step_kw) step_kw = strstr(spec, " step\t");
+    if (step_kw) {
+        int rlen = (int)(step_kw - spec);
+        snprintf(range_part, sizeof range_part, "%.*s", rlen, spec);
+        trim_ws(range_part);
+        snprintf(step_part, sizeof step_part, "%s", step_kw + 6);
+        trim_ws(step_part);
+    } else {
+        snprintf(range_part, sizeof range_part, "%s", spec);
+    }
+
+    /* Check for '..=' or '..' */
+    int inclusive = 0;
+    char *dotdot = strstr(range_part, "..=");
+    if (dotdot) {
+        inclusive = 1;
+    } else {
+        dotdot = strstr(range_part, "..");
+    }
+    if (!dotdot) return 0;
+
+    char start_expr[128], end_expr[128];
+    int start_len = (int)(dotdot - range_part);
+    snprintf(start_expr, sizeof start_expr, "%.*s", start_len, range_part);
+    trim_ws(start_expr);
+
+    const char *after_dots = dotdot + (inclusive ? 3 : 2);
+    snprintf(end_expr, sizeof end_expr, "%s", after_dots);
+    trim_ws(end_expr);
+
+    if (!start_expr[0] || !end_expr[0]) return 0;
+
+    /* Determine step sign & comparison */
+    int is_neg_step = (step_part[0] == '-');
+    const char *cmp_op;
+    char upd_expr[160];
+
+    if (is_neg_step) {
+        cmp_op = inclusive ? ">=" : ">";
+        const char *abs_step = step_part + 1;
+        while (*abs_step == ' ' || *abs_step == '\t') abs_step++;
+        if (!strcmp(abs_step, "1")) {
+            snprintf(upd_expr, sizeof upd_expr, "%s = %s - 1", var, var);
+        } else {
+            snprintf(upd_expr, sizeof upd_expr, "%s = %s - %s", var, var, abs_step);
+        }
+    } else {
+        cmp_op = inclusive ? "<=" : "<";
+        if (!strcmp(step_part, "1")) {
+            snprintf(upd_expr, sizeof upd_expr, "%s = %s + 1", var, var);
+        } else {
+            snprintf(upd_expr, sizeof upd_expr, "%s = %s + %s", var, var, step_part);
+        }
+    }
+
+    /* Preserve brace and any trailing comment */
+    char trailing[MAXLINE] = "";
+    snprintf(trailing, sizeof trailing, "%s", brace);
+    int trlen = (int)strlen(trailing);
+    while (trlen > 0 && (trailing[trlen-1] == '\n' || trailing[trlen-1] == '\r')) trailing[--trlen] = '\0';
+
+    snprintf(out, cap, "%sfor %s = %s, %s %s %s, %s %s\n",
+             indent, var, start_expr, var, cmp_op, end_expr, upd_expr, trailing);
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
+ * Feature #59: Null Coalescing Operator (a ?? b)
+ * -------------------------------------------------------------------------- */
+static int nc_tmp_counter = 0;
+
+static int desugar_null_coalescing(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    int clen = (int)strlen(clean);
+    while (clen > 0 && (clean[clen-1] == '\n' || clean[clen-1] == '\r')) {
+        clean[--clen] = '\0';
+    }
+
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    /* Skip declarations that cannot contain expressions */
+    if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3) ||
+        !strncmp(p, "include ", 8) || !strncmp(p, "include\t", 8) ||
+        !strncmp(p, "import ", 7) || !strncmp(p, "import\t", 7) ||
+        !strncmp(p, "struct ", 7) || !strncmp(p, "struct\t", 7)) {
+        return 0;
+    }
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    int len = (int)strlen(clean);
+    int in_str = 0;
+    int first_nc = -1;
+
+    /* Find leftmost '??' outside strings and comments */
+    for (int i = 0; i < len - 1; i++) {
+        if (in_str) {
+            if (clean[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (clean[i] == '"') in_str = 0;
+            continue;
+        }
+        if (clean[i] == '"') { in_str = 1; continue; }
+        if (clean[i] == '#' || clean[i] == ';') break;
+
+        if (clean[i] == '?' && clean[i+1] == '?') {
+            first_nc = i;
+            break;
+        }
+    }
+
+    if (first_nc < 0) return 0;
+
+    /* Find LHS boundary by scanning left from first_nc */
+    int lhs_start = -1;
+    int depth = 0;
+    for (int i = first_nc - 1; i >= 0; i--) {
+        char c = clean[i];
+        if (c == ')' || c == ']' || c == '}') depth++;
+        else if (c == '(' || c == '[' || c == '{') {
+            if (depth == 0) { lhs_start = i + 1; break; }
+            depth--;
+        } else if (depth == 0) {
+            if (c == '=' || c == ',' || c == ':') {
+                lhs_start = i + 1;
+                break;
+            }
+        }
+    }
+    if (lhs_start < 0) {
+        char *s = clean;
+        while (*s == ' ' || *s == '\t') s++;
+        if (!strncmp(s, "let ", 4)) s += 4;
+        else if (!strncmp(s, "return ", 7)) s += 7;
+        else if (!strncmp(s, "print ", 6)) s += 6;
+        while (*s == ' ' || *s == '\t') s++;
+        lhs_start = (int)(s - clean);
+    }
+
+    char lhs[MAXLINE];
+    snprintf(lhs, sizeof lhs, "%.*s", first_nc - lhs_start, clean + lhs_start);
+    trim_ws(lhs);
+    trim_outer_parens(lhs);
+    if (!lhs[0]) return 0;
+
+    /* Find RHS boundary by scanning right from first_nc + 2 */
+    int rhs_start = first_nc + 2;
+    int rhs_end = len;
+    depth = 0;
+    in_str = 0;
+    for (int i = rhs_start; i < len; i++) {
+        if (in_str) {
+            if (clean[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (clean[i] == '"') in_str = 0;
+            continue;
+        }
+        if (clean[i] == '"') { in_str = 1; continue; }
+        if (clean[i] == '#' || clean[i] == ';' || clean[i] == '\n' || clean[i] == '\r') {
+            rhs_end = i;
+            break;
+        }
+        if (clean[i] == '(' || clean[i] == '[' || clean[i] == '{') depth++;
+        else if (clean[i] == ')' || clean[i] == ']' || clean[i] == '}') {
+            if (depth == 0) { rhs_end = i; break; }
+            depth--;
+        } else if (depth == 0) {
+            if (clean[i] == '?' && i + 1 < len && clean[i+1] == '?') {
+                rhs_end = i;
+                break;
+            }
+            if (clean[i] == ',' || clean[i] == ':') {
+                rhs_end = i;
+                break;
+            }
+        }
+    }
+
+    char rhs[MAXLINE];
+    snprintf(rhs, sizeof rhs, "%.*s", rhs_end - rhs_start, clean + rhs_start);
+    trim_ws(rhs);
+    trim_outer_parens(rhs);
+    if (!rhs[0]) return 0;
+
+    nc_tmp_counter++;
+    int id = nc_tmp_counter;
+
+    char pre[MAXLINE];
+    snprintf(pre, sizeof pre, "%.*s", lhs_start, clean);
+    const char *post = clean + rhs_end;
+
+    char rewritten_line[MAXLINE];
+    snprintf(rewritten_line, sizeof rewritten_line, "%s_nc_res_%d%s", pre, id, post);
+
+    snprintf(out, cap,
+             "%slet _nc_%d = %s\n"
+             "%slet _nc_res_%d = _nc_%d\n"
+             "%sif _nc_res_%d == 0 {\n"
+             "%s    let _nc_res_%d = %s\n"
+             "%s}\n"
+             "%s\n",
+             indent, id, lhs,
+             indent, id, id,
+             indent, id,
+             indent, id, rhs,
+             indent,
+             rewritten_line);
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
  * per-line transform
  * -------------------------------------------------------------------------- */
 static void emit_line(const char *raw, FILE *out) {
+    char const_reg[MAXLINE];
+    if (register_user_const(raw, const_reg, sizeof const_reg)) {
+        fprintf(out, "%s", const_reg);
+        return;
+    }
+
+    char const_sub_buf[MAXLINE * 2];
+    snprintf(const_sub_buf, sizeof const_sub_buf, "%s", raw);
+    substitute_user_consts(const_sub_buf);
+    raw = const_sub_buf;
+
     char fb_desugared[MAXLINE * 2];
     if (desugar_frame_builtins(raw, fb_desugared, sizeof fb_desugared)) {
         raw = fb_desugared;
@@ -4637,9 +5622,47 @@ static void emit_line(const char *raw, FILE *out) {
         return;
     }
 
+    char oct_buf[MAXLINE * 2];
+    snprintf(oct_buf, sizeof oct_buf, "%s", raw);
+    normalize_octal_literals(oct_buf);
+    raw = oct_buf;
+
+    char nc_desugared[MAXLINE * 4];
+    if (desugar_null_coalescing(raw, nc_desugared, sizeof nc_desugared)) {
+        char *p = nc_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char inc_desugared[MAXLINE];
+    if (desugar_inc_dec(raw, inc_desugared, sizeof inc_desugared)) {
+        emit_line(inc_desugared, out);
+        return;
+    }
+
+    char tern_desugared[MAXLINE * 4];
+    if (desugar_ternary(raw, tern_desugared, sizeof tern_desugared)) {
+        char *p = tern_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
     char u_buf[MAXLINE];
     snprintf(u_buf, sizeof u_buf, "%s", raw);
     normalize_hex_literals(u_buf);
+    normalize_octal_literals(u_buf);
     fold_unary_builtins(u_buf);
     fold_mem_offsets(u_buf);
 
@@ -4771,6 +5794,12 @@ static void emit_line(const char *raw, FILE *out) {
     char bit_desugared[MAXLINE];
     if (desugar_bitwise_binop(raw, bit_desugared, sizeof bit_desugared)) {
         emit_line(bit_desugared, out);
+        return;
+    }
+
+    char for_range_desugared[MAXLINE];
+    if (desugar_for_range(raw, for_range_desugared, sizeof for_range_desugared)) {
+        emit_line(for_range_desugared, out);
         return;
     }
 
@@ -5256,7 +6285,9 @@ static void scan_file_for_types(const char *path) {
 }
 
 static void run_type_inference_pass(const char *canon_path) {
+    reset_user_consts();
     scan_file_for_types(canon_path);
+    reset_user_consts();
     scan_file_for_types(canon_path);
 }
 
@@ -6334,6 +7365,7 @@ int main(int argc, char **argv) {
 
     FILE *body_tmp = create_body_tmp();
     if (!body_tmp) die("Cannot create temporary stream", NULL);
+    reset_user_consts();
     process_file(canon, body_tmp);
     fflush(body_tmp);
 

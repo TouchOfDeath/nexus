@@ -647,16 +647,76 @@ if os.path.exists(esc_src):
         else:
             print("[-] String escapes suite: FAIL")
 
+# Piece Table Text Buffer (Feature #67) regression suite
+pt_ok = False
+pt_src = os.path.join(base_dir, "tests", "test_piece_table.nex")
+if os.path.exists(pt_src):
+    subprocess.run([nexprep, pt_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_pt = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "PIECE_TABLE_TEST_PASS" in out_pt:
+            log_pass("[+] Piece table suite: Feature #67 (insert, delete, coalesce, undo/redo) PASS")
+            pt_ok = True
+        else:
+            print("[-] Piece table suite: FAIL")
+
+# Syntax Ergonomics Bundle (Features #30, #35, #36) regression suite
+syn_ok = False
+syn_src = os.path.join(base_dir, "tests", "test_syntax_v83.nex")
+if os.path.exists(syn_src):
+    subprocess.run([nexprep, syn_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_syn = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "ALL SYNTAX V83 TESTS PASSED" in out_syn:
+            log_pass("[+] Syntax suite: Features #30, #35, #36 (0o octals, ++/--, ternary) PASS")
+            syn_ok = True
+        else:
+            print("[-] Syntax suite: FAIL")
+
+# Modern Loop & Range Ergonomics Bundle (Features #37, #50, #59) regression suite
+range_ok = False
+range_src = os.path.join(base_dir, "tests", "test_loop_ranges_v84.nex")
+if os.path.exists(range_src):
+    subprocess.run([nexprep, range_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_range = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "ALL MODERN LOOP & RANGE TESTS PASSED" in out_range:
+            log_pass("[+] Loop & Range suite: Features #37, #50, #59 (const, 0..N ranges, ??) PASS")
+            range_ok = True
+        else:
+            print("[-] Loop & Range suite: FAIL")
+
 s_ok = "PASS" if stdlib_ok else "FAIL"
 o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
 i_ok = "PASS" if ide_ok else "FAIL"
 h_ok = "PASS" if hydron_correct_ok else "FAIL"
 e_ok = "PASS" if str_escapes_ok else "FAIL"
+p_ok = "PASS" if pt_ok else "FAIL"
+syn_status = "PASS" if syn_ok else "FAIL"
+range_status = "PASS" if range_ok else "FAIL"
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}")
 '
         ;;
     self-host)

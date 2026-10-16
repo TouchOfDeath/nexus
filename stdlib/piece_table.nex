@@ -1,0 +1,941 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: piece_table.nex
+#             Piece Table Text Buffer for High-Performance Editors
+# ==============================================================================
+#
+# A Piece Table is an efficient, non-contiguous data structure for text editors
+# and IDEs (as used in Microsoft Word, Bravo, and Visual Studio Code).
+#
+# It maintains two immutable/append-only character buffers:
+#   1. Original Buffer (orig_buf): Initial document loaded from disk (read-only)
+#   2. Add Buffer (add_buf): Dynamically-grown append-only buffer for user edits
+#
+# The document is represented as a doubly-linked chain of Piece Nodes:
+#   Piece Node (40 bytes):
+#     offset 0:  buf_type   - 0 for orig_buf, 1 for add_buf
+#     offset 8:  offset     - byte offset within that buffer
+#     offset 16: length     - byte count represented by this piece
+#     offset 24: prev       - pointer to previous piece node (0 if head)
+#     offset 32: next       - pointer to next piece node (0 if tail)
+#
+# Piece Table Master Struct (80 bytes):
+#     offset 0:  orig_buf   - pointer to original buffer
+#     offset 8:  orig_len   - byte length of original buffer
+#     offset 16: add_buf    - pointer to append buffer
+#     offset 24: add_len    - current byte write head in add_buf
+#     offset 32: add_cap    - allocated capacity of add_buf
+#     offset 40: head       - pointer to first piece node (0 if empty)
+#     offset 48: tail       - pointer to last piece node (0 if empty)
+#     offset 56: total_len  - total logical length of document
+#     offset 64: piece_cnt  - number of piece nodes
+#     offset 72: dirty      - 1 if modified since clean, 0 otherwise
+#
+# CALLING CONVENTION:
+#   Standard NEXUS conventions:
+#     nx_i0..nx_i3 = input arguments
+#     nx_r0, nx_r1 = return values
+#   Internal variables use the _pt_* prefix to prevent naming collisions.
+# ==============================================================================
+
+# Buffer type constants
+let NX_PT_BUF_ORIG = 0
+let NX_PT_BUF_ADD  = 1
+
+# ------------------------------------------------------------------------------
+# fn _pt_node_alloc : internal helper to allocate a 40-byte piece node
+#   Inputs: _pt_n_type, _pt_n_off, _pt_n_len
+#   Output: _pt_n_ptr (pointer to new node)
+# ------------------------------------------------------------------------------
+let _pt_n_type = 0
+let _pt_n_off = 0
+let _pt_n_len = 0
+let _pt_n_ptr = 0
+
+fn _pt_node_alloc {
+    let _pt_tmp_alloc = alloc 40
+    store64 [_pt_tmp_alloc + 0] _pt_n_type
+    store64 [_pt_tmp_alloc + 8] _pt_n_off
+    store64 [_pt_tmp_alloc + 16] _pt_n_len
+    store64 [_pt_tmp_alloc + 24] 0
+    store64 [_pt_tmp_alloc + 32] 0
+    let _pt_n_ptr = _pt_tmp_alloc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_new : create a new Piece Table
+#   nx_i0 = initial buffer / string pointer (0 if empty)
+#   nx_i1 = initial buffer length (0 if empty)
+#   nx_r0 = pointer to Piece Table master struct
+# ------------------------------------------------------------------------------
+fn nx_pt_new {
+    let _pt_orig = nx_i0
+    let _pt_olen = nx_i1
+    let _pt_tbl = alloc 80
+
+    store64 [_pt_tbl + 0] _pt_orig
+    store64 [_pt_tbl + 8] _pt_olen
+
+    # Allocate initial Add Buffer (4096 bytes)
+    let _pt_init_acap = 4096
+    let _pt_abuf = alloc _pt_init_acap
+    store64 [_pt_tbl + 16] _pt_abuf
+    store64 [_pt_tbl + 24] 0
+    store64 [_pt_tbl + 32] _pt_init_acap
+
+    if _pt_olen > 0 {
+        let _pt_n_type = 0
+        let _pt_n_off = 0
+        let _pt_n_len = _pt_olen
+        call _pt_node_alloc
+        let _pt_fst = _pt_n_ptr
+
+        store64 [_pt_tbl + 40] _pt_fst
+        store64 [_pt_tbl + 48] _pt_fst
+        store64 [_pt_tbl + 56] _pt_olen
+        store64 [_pt_tbl + 64] 1
+    } else {
+        store64 [_pt_tbl + 40] 0
+        store64 [_pt_tbl + 48] 0
+        store64 [_pt_tbl + 56] 0
+        store64 [_pt_tbl + 64] 0
+    }
+    store64 [_pt_tbl + 72] 0
+    let nx_r0 = _pt_tbl
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_len : get total logical document length in bytes
+#   nx_i0 = Piece Table pointer
+#   nx_r0 = document length
+# ------------------------------------------------------------------------------
+fn nx_pt_len {
+    let nx_r0 = load64 [nx_i0 + 56]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_piece_count : get number of active piece nodes
+#   nx_i0 = Piece Table pointer
+#   nx_r0 = piece count
+# ------------------------------------------------------------------------------
+fn nx_pt_piece_count {
+    let nx_r0 = load64 [nx_i0 + 64]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_is_dirty : check if table has unsaved edits
+#   nx_i0 = Piece Table pointer
+#   nx_r0 = 1 if dirty, 0 if clean
+# ------------------------------------------------------------------------------
+fn nx_pt_is_dirty {
+    let nx_r0 = load64 [nx_i0 + 72]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_set_clean : clear the dirty flag
+#   nx_i0 = Piece Table pointer
+# ------------------------------------------------------------------------------
+fn nx_pt_set_clean {
+    store64 [nx_i0 + 72] 0
+}
+
+# ------------------------------------------------------------------------------
+# fn _pt_ensure_add_cap : internal helper to grow add_buf if needed
+#   _pt_ins_pt    = Piece Table pointer
+#   _pt_req_bytes = bytes required
+# ------------------------------------------------------------------------------
+let _pt_req_bytes = 0
+
+fn _pt_ensure_add_cap {
+    let _pt_e_pt = _pt_ins_pt
+    let _pt_cur_alen = load64 [_pt_e_pt + 24]
+    let _pt_cur_acap = load64 [_pt_e_pt + 32]
+    let _pt_need_cap = _pt_cur_alen + _pt_req_bytes
+
+    if _pt_need_cap > _pt_cur_acap {
+        let _pt_new_cap = _pt_cur_acap * 2
+        while _pt_new_cap < _pt_need_cap {
+            let _pt_new_cap = _pt_new_cap * 2
+        }
+        let _pt_new_buf = alloc _pt_new_cap
+        let _pt_old_buf = load64 [_pt_e_pt + 16]
+
+        let _pt_cp_i = 0
+        while _pt_cp_i < _pt_cur_alen {
+            let _pt_b = load [_pt_old_buf + _pt_cp_i]
+            store [_pt_new_buf + _pt_cp_i] _pt_b
+            let _pt_cp_i = _pt_cp_i + 1
+        }
+        store64 [_pt_e_pt + 16] _pt_new_buf
+        store64 [_pt_e_pt + 32] _pt_new_cap
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_insert : insert text into Piece Table at logical byte offset
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = logical byte offset (0 <= pos <= total_len)
+#   nx_i2 = pointer to text bytes to insert
+#   nx_i3 = number of bytes to insert
+#   nx_r0 = new total document length
+# ------------------------------------------------------------------------------
+let _pt_ins_pt = 0
+let _pt_ins_pos = 0
+let _pt_ins_src = 0
+let _pt_ins_len = 0
+
+fn nx_pt_insert {
+    let _pt_ins_pt = nx_i0
+    let _pt_ins_pos = nx_i1
+    let _pt_ins_src = nx_i2
+    let _pt_ins_len = nx_i3
+
+    let _pt_tot = load64 [_pt_ins_pt + 56]
+    let nx_r0 = _pt_tot
+
+    if _pt_ins_len <= 0 {
+        return
+    }
+
+    # Clamp pos to [0, total_len]
+    if _pt_ins_pos < 0 {
+        let _pt_ins_pos = 0
+    }
+    if _pt_ins_pos > _pt_tot {
+        let _pt_ins_pos = _pt_tot
+    }
+
+    # Step A: Append text to add_buf
+    let _pt_req_bytes = _pt_ins_len
+    call _pt_ensure_add_cap
+
+    let _pt_abuf = load64 [_pt_ins_pt + 16]
+    let _pt_alen = load64 [_pt_ins_pt + 24]
+    let _pt_new_off = _pt_alen
+
+    let _pt_wr_dest = _pt_abuf + _pt_alen
+    let _pt_wr_i = 0
+    while _pt_wr_i < _pt_ins_len {
+        let _pt_wb = load [_pt_ins_src + _pt_wr_i]
+        store [_pt_wr_dest + _pt_wr_i] _pt_wb
+        let _pt_wr_i = _pt_wr_i + 1
+    }
+    let _pt_alen = _pt_alen + _pt_ins_len
+    store64 [_pt_ins_pt + 24] _pt_alen
+
+    # Step B: Insert or coalesce piece node
+    let _pt_hd = load64 [_pt_ins_pt + 40]
+    let _pt_tl = load64 [_pt_ins_pt + 48]
+    let _pt_cnt = load64 [_pt_ins_pt + 64]
+
+    # Case 1: Document is empty
+    if _pt_hd == 0 {
+        let _pt_n_type = 1
+        let _pt_n_off = _pt_new_off
+        let _pt_n_len = _pt_ins_len
+        call _pt_node_alloc
+        let _pt_nn = _pt_n_ptr
+
+        store64 [_pt_ins_pt + 40] _pt_nn
+        store64 [_pt_ins_pt + 48] _pt_nn
+        store64 [_pt_ins_pt + 56] _pt_ins_len
+        store64 [_pt_ins_pt + 64] 1
+        store64 [_pt_ins_pt + 72] 1
+        let nx_r0 = _pt_ins_len
+        return
+    }
+
+    # Case 2: Append at end with coalescing check
+    if _pt_ins_pos == _pt_tot {
+        let _pt_tl_type = load64 [_pt_tl + 0]
+        let _pt_tl_off = load64 [_pt_tl + 8]
+        let _pt_tl_len = load64 [_pt_tl + 16]
+        let _pt_can_coalesce = 0
+        if _pt_tl_type == 1 {
+            let _pt_tl_end = _pt_tl_off + _pt_tl_len
+            if _pt_tl_end == _pt_new_off {
+                let _pt_can_coalesce = 1
+            }
+        }
+        if _pt_can_coalesce == 1 {
+            let _pt_coalesced_len = _pt_tl_len + _pt_ins_len
+            store64 [_pt_tl + 16] _pt_coalesced_len
+            let _pt_tot = _pt_tot + _pt_ins_len
+            store64 [_pt_ins_pt + 56] _pt_tot
+            store64 [_pt_ins_pt + 72] 1
+            let nx_r0 = _pt_tot
+            return
+        }
+
+        # Append new node after tail
+        let _pt_n_type = 1
+        let _pt_n_off = _pt_new_off
+        let _pt_n_len = _pt_ins_len
+        call _pt_node_alloc
+        let _pt_nn = _pt_n_ptr
+
+        store64 [_pt_nn + 24] _pt_tl
+        store64 [_pt_tl + 32] _pt_nn
+        store64 [_pt_ins_pt + 48] _pt_nn
+        let _pt_cnt = _pt_cnt + 1
+        store64 [_pt_ins_pt + 64] _pt_cnt
+        let _pt_tot = _pt_tot + _pt_ins_len
+        store64 [_pt_ins_pt + 56] _pt_tot
+        store64 [_pt_ins_pt + 72] 1
+        let nx_r0 = _pt_tot
+        return
+    }
+
+    # Case 3: Insert at the very beginning (pos == 0)
+    if _pt_ins_pos == 0 {
+        let _pt_n_type = 1
+        let _pt_n_off = _pt_new_off
+        let _pt_n_len = _pt_ins_len
+        call _pt_node_alloc
+        let _pt_nn = _pt_n_ptr
+
+        store64 [_pt_nn + 32] _pt_hd
+        store64 [_pt_hd + 24] _pt_nn
+        store64 [_pt_ins_pt + 40] _pt_nn
+        let _pt_cnt = _pt_cnt + 1
+        store64 [_pt_ins_pt + 64] _pt_cnt
+        let _pt_tot = _pt_tot + _pt_ins_len
+        store64 [_pt_ins_pt + 56] _pt_tot
+        store64 [_pt_ins_pt + 72] 1
+        let nx_r0 = _pt_tot
+        return
+    }
+
+    # Case 4: General insertion - locate piece covering pos
+    let _pt_curr = _pt_hd
+    let _pt_accum = 0
+    let _pt_found = 0
+    let _pt_off_in_p = 0
+
+    while _pt_curr != 0 {
+        let _pt_plen = load64 [_pt_curr + 16]
+        let _pt_next_accum = _pt_accum + _pt_plen
+        if _pt_ins_pos < _pt_next_accum {
+            let _pt_off_in_p = _pt_ins_pos - _pt_accum
+            let _pt_found = 1
+            break
+        }
+        let _pt_accum = _pt_next_accum
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+
+    if _pt_found == 0 {
+        return
+    }
+
+    # Subcase A: pos falls at the start of _pt_curr
+    if _pt_off_in_p == 0 {
+        let _pt_n_type = 1
+        let _pt_n_off = _pt_new_off
+        let _pt_n_len = _pt_ins_len
+        call _pt_node_alloc
+        let _pt_nn = _pt_n_ptr
+
+        let _pt_prev = load64 [_pt_curr + 24]
+        store64 [_pt_nn + 24] _pt_prev
+        store64 [_pt_nn + 32] _pt_curr
+        store64 [_pt_curr + 24] _pt_nn
+        if _pt_prev != 0 {
+            store64 [_pt_prev + 32] _pt_nn
+        } else {
+            store64 [_pt_ins_pt + 40] _pt_nn
+        }
+        let _pt_cnt = _pt_cnt + 1
+        store64 [_pt_ins_pt + 64] _pt_cnt
+        let _pt_tot = _pt_tot + _pt_ins_len
+        store64 [_pt_ins_pt + 56] _pt_tot
+        store64 [_pt_ins_pt + 72] 1
+        let nx_r0 = _pt_tot
+        return
+    }
+
+    # Subcase B: pos splits _pt_curr into left and right
+    let _pt_orig_type = load64 [_pt_curr + 0]
+    let _pt_orig_off  = load64 [_pt_curr + 8]
+    let _pt_orig_len  = load64 [_pt_curr + 16]
+
+    let _pt_left_len  = _pt_off_in_p
+    let _pt_right_off = _pt_orig_off + _pt_off_in_p
+    let _pt_right_len = _pt_orig_len - _pt_off_in_p
+
+    # Update _pt_curr as left piece
+    store64 [_pt_curr + 16] _pt_left_len
+
+    # Allocate new middle node
+    let _pt_n_type = 1
+    let _pt_n_off = _pt_new_off
+    let _pt_n_len = _pt_ins_len
+    call _pt_node_alloc
+    let _pt_mid_node = _pt_n_ptr
+
+    # Allocate right node
+    let _pt_n_type = _pt_orig_type
+    let _pt_n_off = _pt_right_off
+    let _pt_n_len = _pt_right_len
+    call _pt_node_alloc
+    let _pt_right_node = _pt_n_ptr
+
+    let _pt_curr_next = load64 [_pt_curr + 32]
+
+    # Link: curr <-> mid <-> right <-> curr_next
+    store64 [_pt_curr + 32] _pt_mid_node
+    store64 [_pt_mid_node + 24] _pt_curr
+    store64 [_pt_mid_node + 32] _pt_right_node
+    store64 [_pt_right_node + 24] _pt_mid_node
+    store64 [_pt_right_node + 32] _pt_curr_next
+
+    if _pt_curr_next != 0 {
+        store64 [_pt_curr_next + 24] _pt_right_node
+    } else {
+        store64 [_pt_ins_pt + 48] _pt_right_node
+    }
+
+    let _pt_cnt = _pt_cnt + 2
+    store64 [_pt_ins_pt + 64] _pt_cnt
+    let _pt_tot = _pt_tot + _pt_ins_len
+    store64 [_pt_ins_pt + 56] _pt_tot
+    store64 [_pt_ins_pt + 72] 1
+    let nx_r0 = _pt_tot
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_insert_char : convenience helper to insert single byte character
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = byte offset
+#   nx_i2 = ASCII char code (0..255)
+#   nx_r0 = new total length
+# ------------------------------------------------------------------------------
+fn nx_pt_insert_char {
+    let _pt_ich_pt = nx_i0
+    let _pt_ich_pos = nx_i1
+    let _pt_ich_c = nx_i2
+
+    let _pt_ich_tmp = alloc 8
+    store [_pt_ich_tmp + 0] _pt_ich_c
+    store [_pt_ich_tmp + 1] 0
+
+    let nx_i0 = _pt_ich_pt
+    let nx_i1 = _pt_ich_pos
+    let nx_i2 = _pt_ich_tmp
+    let nx_i3 = 1
+    call nx_pt_insert
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_delete : delete range of bytes from Piece Table
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = start logical byte offset
+#   nx_i2 = count of bytes to delete
+#   nx_r0 = new total document length
+# ------------------------------------------------------------------------------
+let _pt_del_pt = 0
+let _pt_del_pos = 0
+let _pt_del_cnt = 0
+
+fn nx_pt_delete {
+    let _pt_del_pt = nx_i0
+    let _pt_del_pos = nx_i1
+    let _pt_del_cnt = nx_i2
+
+    let _pt_tot = load64 [_pt_del_pt + 56]
+    let nx_r0 = _pt_tot
+
+    if _pt_del_cnt <= 0 {
+        return
+    }
+    if _pt_tot <= 0 {
+        return
+    }
+    if _pt_del_pos < 0 {
+        let _pt_del_pos = 0
+    }
+    if _pt_del_pos >= _pt_tot {
+        return
+    }
+    let _pt_del_reach = _pt_del_pos + _pt_del_cnt
+    if _pt_del_reach > _pt_tot {
+        let _pt_del_cnt = _pt_tot - _pt_del_pos
+    }
+    if _pt_del_cnt <= 0 {
+        return
+    }
+
+    let _pt_del_start = _pt_del_pos
+    let _pt_del_end = _pt_del_pos + _pt_del_cnt
+
+    let _pt_curr = load64 [_pt_del_pt + 40]
+    let _pt_curr_start = 0
+
+    while _pt_curr != 0 {
+        let _pt_plen = load64 [_pt_curr + 16]
+        let _pt_curr_end = _pt_curr_start + _pt_plen
+        let _pt_next = load64 [_pt_curr + 32]
+
+        if _pt_curr_end <= _pt_del_start {
+            # Strictly before delete range
+            let _pt_curr_start = _pt_curr_end
+            let _pt_curr = _pt_next
+        } else {
+            if _pt_curr_start >= _pt_del_end {
+                # Strictly after delete range
+                break
+            } else {
+                # Overlap detected
+                if _pt_del_start > _pt_curr_start {
+                    if _pt_del_end < _pt_curr_end {
+                        # Case A: Delete range strictly inside _pt_curr -> split
+                        let _pt_orig_type = load64 [_pt_curr + 0]
+                        let _pt_orig_off  = load64 [_pt_curr + 8]
+
+                        let _pt_left_len  = _pt_del_start - _pt_curr_start
+                        let _pt_del_in_p  = _pt_del_end - _pt_curr_start
+                        let _pt_right_off = _pt_orig_off + _pt_del_in_p
+                        let _pt_right_len = _pt_curr_end - _pt_del_end
+
+                        # Update curr as left piece
+                        store64 [_pt_curr + 16] _pt_left_len
+
+                        # Allocate right piece
+                        let _pt_n_type = _pt_orig_type
+                        let _pt_n_off = _pt_right_off
+                        let _pt_n_len = _pt_right_len
+                        call _pt_node_alloc
+                        let _pt_rn = _pt_n_ptr
+
+                        store64 [_pt_rn + 24] _pt_curr
+                        store64 [_pt_rn + 32] _pt_next
+                        store64 [_pt_curr + 32] _pt_rn
+                        if _pt_next != 0 {
+                            store64 [_pt_next + 24] _pt_rn
+                        } else {
+                            store64 [_pt_del_pt + 48] _pt_rn
+                        }
+
+                        let _pt_cnt = load64 [_pt_del_pt + 64]
+                        let _pt_cnt = _pt_cnt + 1
+                        store64 [_pt_del_pt + 64] _pt_cnt
+                        break
+                    } else {
+                        # Case B: Delete range covers tail of _pt_curr
+                        let _pt_keep_len = _pt_del_start - _pt_curr_start
+                        store64 [_pt_curr + 16] _pt_keep_len
+                        let _pt_curr_start = _pt_curr_end
+                        let _pt_curr = _pt_next
+                    }
+                } else {
+                    if _pt_del_end < _pt_curr_end {
+                        # Case C: Delete range covers head of _pt_curr
+                        let _pt_trim_cnt = _pt_del_end - _pt_curr_start
+                        let _pt_new_hd_off = _pt_cur_off + _pt_trim_cnt
+                        let _pt_new_hd_len = _pt_cur_len - _pt_trim_cnt
+                        store64 [_pt_curr + 8] _pt_new_hd_off
+                        store64 [_pt_curr + 16] _pt_new_hd_len
+                        break
+                    } else {
+                        # Case D: Delete range completely covers _pt_curr -> unlink
+                        let _pt_prv = load64 [_pt_curr + 24]
+                        if _pt_prv != 0 {
+                            store64 [_pt_prv + 32] _pt_next
+                        } else {
+                            store64 [_pt_del_pt + 40] _pt_next
+                        }
+                        if _pt_next != 0 {
+                            store64 [_pt_next + 24] _pt_prv
+                        } else {
+                            store64 [_pt_del_pt + 48] _pt_prv
+                        }
+                        let _pt_cnt = load64 [_pt_del_pt + 64]
+                        let _pt_cnt = _pt_cnt - 1
+                        store64 [_pt_del_pt + 64] _pt_cnt
+
+                        let _pt_curr_start = _pt_curr_end
+                        let _pt_curr = _pt_next
+                    }
+                }
+            }
+        }
+    }
+
+    let _pt_tot = _pt_tot - _pt_del_cnt
+    store64 [_pt_del_pt + 56] _pt_tot
+    store64 [_pt_del_pt + 72] 1
+    let nx_r0 = _pt_tot
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_delete_char : delete a single character at pos
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = logical byte offset
+#   nx_r0 = new total length
+# ------------------------------------------------------------------------------
+fn nx_pt_delete_char {
+    let nx_i2 = 1
+    call nx_pt_delete
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_get_char : retrieve character byte at logical offset pos
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = logical byte offset
+#   nx_r0 = char code (0..255) or -1 if invalid
+# ------------------------------------------------------------------------------
+fn nx_pt_get_char {
+    let _pt_gc_pt = nx_i0
+    let _pt_gc_pos = nx_i1
+    let _pt_tot = load64 [_pt_gc_pt + 56]
+    let nx_r0 = 0 - 1
+
+    if _pt_gc_pos < 0 {
+        return
+    }
+    if _pt_gc_pos >= _pt_tot {
+        return
+    }
+
+    let _pt_curr = load64 [_pt_gc_pt + 40]
+    let _pt_accum = 0
+
+    while _pt_curr != 0 {
+        let _pt_plen = load64 [_pt_curr + 16]
+        let _pt_next_accum = _pt_accum + _pt_plen
+        if _pt_gc_pos < _pt_next_accum {
+            let _pt_in_off = _pt_gc_pos - _pt_accum
+            let _pt_type = load64 [_pt_curr + 0]
+            let _pt_off  = load64 [_pt_curr + 8]
+            let _pt_bptr = 0
+            if _pt_type == 0 {
+                let _pt_bptr = load64 [_pt_gc_pt + 0]
+            } else {
+                let _pt_bptr = load64 [_pt_gc_pt + 16]
+            }
+            let _pt_src_base = _pt_bptr + _pt_off
+            let _pt_ch = load [_pt_src_base + _pt_in_off]
+            let nx_r0 = _pt_ch
+            return
+        }
+        let _pt_accum = _pt_next_accum
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_export_to_buf : export entire document into contiguous destination buffer
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = destination buffer pointer
+#   nx_i2 = max bytes capacity of destination buffer
+#   nx_r0 = total bytes written (excluding null terminator)
+# ------------------------------------------------------------------------------
+fn nx_pt_export_to_buf {
+    let _pt_exp_pt = nx_i0
+    let _pt_exp_dst = nx_i1
+    let _pt_exp_max = nx_i2
+
+    let _pt_obuf = load64 [_pt_exp_pt + 0]
+    let _pt_abuf = load64 [_pt_exp_pt + 16]
+
+    let _pt_curr = load64 [_pt_exp_pt + 40]
+    let _pt_out_i = 0
+    let _pt_limit = _pt_exp_max - 1
+
+    while _pt_curr != 0 {
+        let _pt_type = load64 [_pt_curr + 0]
+        let _pt_off  = load64 [_pt_curr + 8]
+        let _pt_plen = load64 [_pt_curr + 16]
+
+        let _pt_bptr = _pt_obuf
+        if _pt_type == 1 {
+            let _pt_bptr = _pt_abuf
+        }
+
+        let _pt_src_base = _pt_bptr + _pt_off
+        let _pt_k = 0
+        while _pt_k < _pt_plen {
+            if _pt_out_i >= _pt_limit {
+                break
+            }
+            let _pt_b = load [_pt_src_base + _pt_k]
+            store [_pt_exp_dst + _pt_out_i] _pt_b
+            let _pt_out_i = _pt_out_i + 1
+            let _pt_k = _pt_k + 1
+        }
+        if _pt_out_i >= _pt_limit {
+            break
+        }
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+
+    store [_pt_exp_dst + _pt_out_i] 0
+    let nx_r0 = _pt_out_i
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_export_slice : export slice [start_pos, start_pos + count) to buffer
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = start position
+#   nx_i2 = byte count
+#   nx_i3 = destination buffer pointer
+#   nx_r0 = bytes written
+# ------------------------------------------------------------------------------
+fn nx_pt_export_slice {
+    let _pt_sl_pt = nx_i0
+    let _pt_sl_start = nx_i1
+    let _pt_sl_cnt = nx_i2
+    let _pt_sl_dst = nx_i3
+
+    let _pt_tot = load64 [_pt_sl_pt + 56]
+    let nx_r0 = 0
+
+    if _pt_sl_start < 0 {
+        let _pt_sl_start = 0
+    }
+    if _pt_sl_start >= _pt_tot {
+        store [_pt_sl_dst + 0] 0
+        return
+    }
+    let _pt_sl_end = _pt_sl_start + _pt_sl_cnt
+    if _pt_sl_end > _pt_tot {
+        let _pt_sl_cnt = _pt_tot - _pt_sl_start
+    }
+    if _pt_sl_cnt <= 0 {
+        store [_pt_sl_dst + 0] 0
+        return
+    }
+
+    let _pt_obuf = load64 [_pt_sl_pt + 0]
+    let _pt_abuf = load64 [_pt_sl_pt + 16]
+
+    let _pt_target_end = _pt_sl_start + _pt_sl_cnt
+    let _pt_curr = load64 [_pt_sl_pt + 40]
+    let _pt_curr_start = 0
+    let _pt_wr_idx = 0
+
+    while _pt_curr != 0 {
+        let _pt_plen = load64 [_pt_curr + 16]
+        let _pt_curr_end = _pt_curr_start + _pt_plen
+
+        if _pt_curr_end <= _pt_sl_start {
+            let _pt_curr_start = _pt_curr_end
+            let _pt_curr = load64 [_pt_curr + 32]
+        } else {
+            if _pt_curr_start >= _pt_target_end {
+                break
+            } else {
+                let _pt_type = load64 [_pt_curr + 0]
+                let _pt_off  = load64 [_pt_curr + 8]
+                let _pt_bptr = _pt_obuf
+                if _pt_type == 1 {
+                    let _pt_bptr = _pt_abuf
+                }
+
+                # Overlap range inside piece
+                let _pt_sub_start = 0
+                if _pt_sl_start > _pt_curr_start {
+                    let _pt_sub_start = _pt_sl_start - _pt_curr_start
+                }
+                let _pt_sub_end = _pt_plen
+                if _pt_target_end < _pt_curr_end {
+                    let _pt_sub_end = _pt_target_end - _pt_curr_start
+                }
+
+                let _pt_src_base = _pt_bptr + _pt_off
+                let _pt_idx = _pt_sub_start
+                while _pt_idx < _pt_sub_end {
+                    let _pt_b = load [_pt_src_base + _pt_idx]
+                    store [_pt_sl_dst + _pt_wr_idx] _pt_b
+                    let _pt_wr_idx = _pt_wr_idx + 1
+                    let _pt_idx = _pt_idx + 1
+                }
+
+                let _pt_curr_start = _pt_curr_end
+                let _pt_curr = load64 [_pt_curr + 32]
+            }
+        }
+    }
+
+    store [_pt_sl_dst + _pt_wr_idx] 0
+    let nx_r0 = _pt_wr_idx
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_line_count : count total lines in document (newline count + 1)
+#   nx_i0 = Piece Table pointer
+#   nx_r0 = line count
+# ------------------------------------------------------------------------------
+fn nx_pt_line_count {
+    let _pt_lc_pt = nx_i0
+    let _pt_tot = load64 [_pt_lc_pt + 56]
+    if _pt_tot <= 0 {
+        let nx_r0 = 0
+        return
+    }
+
+    let _pt_obuf = load64 [_pt_lc_pt + 0]
+    let _pt_abuf = load64 [_pt_lc_pt + 16]
+    let _pt_curr = load64 [_pt_lc_pt + 40]
+    let _pt_lines = 1
+
+    while _pt_curr != 0 {
+        let _pt_type = load64 [_pt_curr + 0]
+        let _pt_off  = load64 [_pt_curr + 8]
+        let _pt_plen = load64 [_pt_curr + 16]
+        let _pt_bptr = _pt_obuf
+        if _pt_type == 1 {
+            let _pt_bptr = _pt_abuf
+        }
+
+        let _pt_src_base = _pt_bptr + _pt_off
+        let _pt_i = 0
+        while _pt_i < _pt_plen {
+            let _pt_b = load [_pt_src_base + _pt_i]
+            if _pt_b == 10 {
+                let _pt_lines = _pt_lines + 1
+            }
+            let _pt_i = _pt_i + 1
+        }
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+    let nx_r0 = _pt_lines
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_line_to_offset : get byte offset of start of line (1-based line number)
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = target line (1-indexed)
+#   nx_r0 = byte offset of line start
+# ------------------------------------------------------------------------------
+fn nx_pt_line_to_offset {
+    let _pt_l2o_pt = nx_i0
+    let _pt_l2o_target = nx_i1
+    let nx_r0 = 0
+
+    if _pt_l2o_target <= 1 {
+        return
+    }
+
+    let _pt_obuf = load64 [_pt_l2o_pt + 0]
+    let _pt_abuf = load64 [_pt_l2o_pt + 16]
+    let _pt_curr = load64 [_pt_l2o_pt + 40]
+
+    let _pt_cur_line = 1
+    let _pt_cur_off = 0
+
+    while _pt_curr != 0 {
+        let _pt_type = load64 [_pt_curr + 0]
+        let _pt_off  = load64 [_pt_curr + 8]
+        let _pt_plen = load64 [_pt_curr + 16]
+        let _pt_bptr = _pt_obuf
+        if _pt_type == 1 {
+            let _pt_bptr = _pt_abuf
+        }
+
+        let _pt_src_base = _pt_bptr + _pt_off
+        let _pt_i = 0
+        while _pt_i < _pt_plen {
+            let _pt_b = load [_pt_src_base + _pt_i]
+            let _pt_cur_off = _pt_cur_off + 1
+            if _pt_b == 10 {
+                let _pt_cur_line = _pt_cur_line + 1
+                if _pt_cur_line == _pt_l2o_target {
+                    let nx_r0 = _pt_cur_off
+                    return
+                }
+            }
+            let _pt_i = _pt_i + 1
+        }
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+    let nx_r0 = _pt_cur_off
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_snapshot : create an O(1) snapshot of piece chain for undo/redo
+#   nx_i0 = Piece Table pointer
+#   nx_r0 = snapshot pointer
+# ------------------------------------------------------------------------------
+fn nx_pt_snapshot {
+    let _pt_snp_pt = nx_i0
+    let _pt_snap = alloc 40
+
+    let _pt_curr = load64 [_pt_snp_pt + 40]
+    let _pt_snap_head = 0
+    let _pt_snap_tail = 0
+
+    while _pt_curr != 0 {
+        let _pt_n_type = load64 [_pt_curr + 0]
+        let _pt_n_off  = load64 [_pt_curr + 8]
+        let _pt_n_len  = load64 [_pt_curr + 16]
+        call _pt_node_alloc
+        let _pt_copy = _pt_n_ptr
+
+        if _pt_snap_head == 0 {
+            let _pt_snap_head = _pt_copy
+            let _pt_snap_tail = _pt_copy
+        } else {
+            store64 [_pt_copy + 24] _pt_snap_tail
+            store64 [_pt_snap_tail + 32] _pt_copy
+            let _pt_snap_tail = _pt_copy
+        }
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+
+    store64 [_pt_snap + 0] _pt_snap_head
+    store64 [_pt_snap + 8] _pt_snap_tail
+    let _pt_s_tot = load64 [_pt_snp_pt + 56]
+    let _pt_s_cnt = load64 [_pt_snp_pt + 64]
+    let _pt_s_alen = load64 [_pt_snp_pt + 24]
+    store64 [_pt_snap + 16] _pt_s_tot
+    store64 [_pt_snap + 24] _pt_s_cnt
+    store64 [_pt_snap + 32] _pt_s_alen
+
+    let nx_r0 = _pt_snap
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pt_restore : restore piece chain from snapshot (atomic O(1) undo/redo)
+#   nx_i0 = Piece Table pointer
+#   nx_i1 = snapshot pointer
+#   nx_r0 = 1 on success
+# ------------------------------------------------------------------------------
+fn nx_pt_restore {
+    let _pt_rst_pt = nx_i0
+    let _pt_rst_snap = nx_i1
+
+    let _pt_curr = load64 [_pt_rst_snap + 0]
+    let _pt_new_head = 0
+    let _pt_new_tail = 0
+
+    while _pt_curr != 0 {
+        let _pt_n_type = load64 [_pt_curr + 0]
+        let _pt_n_off  = load64 [_pt_curr + 8]
+        let _pt_n_len  = load64 [_pt_curr + 16]
+        call _pt_node_alloc
+        let _pt_copy = _pt_n_ptr
+
+        if _pt_new_head == 0 {
+            let _pt_new_head = _pt_copy
+            let _pt_new_tail = _pt_copy
+        } else {
+            store64 [_pt_copy + 24] _pt_new_tail
+            store64 [_pt_new_tail + 32] _pt_copy
+            let _pt_new_tail = _pt_copy
+        }
+        let _pt_curr = load64 [_pt_curr + 32]
+    }
+
+    store64 [_pt_rst_pt + 40] _pt_new_head
+    store64 [_pt_rst_pt + 48] _pt_new_tail
+
+    let _pt_r_tot = load64 [_pt_rst_snap + 16]
+    let _pt_r_cnt = load64 [_pt_rst_snap + 24]
+    let _pt_r_alen = load64 [_pt_rst_snap + 32]
+    store64 [_pt_rst_pt + 56] _pt_r_tot
+    store64 [_pt_rst_pt + 64] _pt_r_cnt
+    store64 [_pt_rst_pt + 24] _pt_r_alen
+    store64 [_pt_rst_pt + 72] 1
+
+    let nx_r0 = 1
+}
