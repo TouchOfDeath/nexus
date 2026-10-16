@@ -186,13 +186,13 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 129. **Regex In-Place Replacement with Group Substitution**: Replacing matches using `$1`, `$2`, and `\g<name>` capture references.
 130. **String Interpolation Syntax**: Format strings `f"Line {cursor_line}, Col {cursor_col}"` evaluated cleanly without string builder chaining.
 131. **Printf-Style Format Specifiers**: Low-level string formatting (`%08x`, `%10.2f`, `%-20s`) for compiler diagnostic listings.
-132. **String Trimming Utilities**: Functions removing leading/trailing ASCII and Unicode whitespace (`trim`, `trim_start`, `trim_end`).
+132. **String Trimming Utilities** *(PARTIAL)*: `nx_str_trim` removes leading/trailing ASCII space and control whitespace (bytes 9–13); Unicode whitespace and separate `trim_start`/`trim_end` functions remain unimplemented.
 133. **String Splitting by Delimiter / Predicate**: Zero-copy iterator yielding slices split by characters or substrings.
 134. **String Joining with Separator**: Concatenating arrays or iterators of strings with a delimiter into a single allocation.
 135. **String Case Transformations**: Methods converting strings to lowercase, uppercase, title case, snake_case, camelCase, and kebab-case.
 136. **String Padding & Alignment**: Methods padding strings with arbitrary fill characters to fixed visual column widths.
 137. **Substring Replacement Utilities**: Methods replacing all or first N occurrences of a substring with another string.
-138. **String Prefix & Suffix Checking**: Optimized `starts_with()` and `ends_with()` routines avoiding full string comparisons.
+138. **String Prefix & Suffix Checking** *(COMPLETED)*: `nx_str_starts_with` and `nx_str_ends_with` in `stdlib/strings.nex`, including empty and overlong match edge cases.
 139. **Levenshtein Edit Distance Algorithm**: Fuzzy string metric for 'Did you mean?' typo suggestions on compiler keyword errors.
 140. **Jaro-Winkler Similarity Metric**: Fuzzy matching algorithm favoring matching prefixes for IDE autocomplete ranking.
 141. **Fuzzy Subsequence Matcher**: Subsequence scoring algorithm (like fzf) for fast file switching (`Ctrl+P`) and symbol search.
@@ -201,8 +201,8 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 144. **Base64 Encoder & Decoder**: Encoding binary data to Base64 and vice versa for embedding images in documentation and web protocols.
 145. **URL / Percent-Encoding Utilities**: Encoding and decoding file URIs (`file:///path/to/code.nex`) for LSP interactions.
 146. **Escape Character Unescaping Parser** *(COMPLETED)*: Transforming string literal escape codes (`\n`, `\t`, `\r`, `\0`, `\xHH`, `\e`, `\\`, `\"`) into binary bytes.
-147. **Escape Character Escaper**: Escaping arbitrary raw text into valid string literal representations.
-148. **Line Ending Normalizer**: Converting mixed CRLF (`\r\n`), LF (`\n`), and CR (`\r`) line endings to a consistent document format.
+147. **Escape Character Escaper** *(COMPLETED)*: `nx_str_escape_literal` writes quoted NEXUS literals with short escapes for quote, backslash, tab, CR, and LF; other non-printable bytes are emitted as `\xHH`.
+148. **Line Ending Normalizer** *(COMPLETED)*: `nx_str_normalize_newlines` converts CRLF and lone CR to LF, preserves existing LF, and supports in-place normalization of mutable buffers.
 149. **Indentation Detection Engine**: Analyzing buffer lines to automatically detect whether a file uses tabs or spaces, and the tab width.
 150. **Tab-to-Space and Space-to-Tab Converter**: Utility converting between tab characters and aligned spaces based on tab stop positions.
 151. **Wildcard / Glob Pattern Matcher**: File path matching using `*`, `?`, and `**` patterns for `.gitignore` and project search exclusions.

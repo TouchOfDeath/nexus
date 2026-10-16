@@ -4792,6 +4792,25 @@ static int prec_tokenize(const char *s, prec_tok *tk, int max) {
     return n;
 }
 
+
+/* Precedence-sensitivity probe shared by the folding and precedence passes.
+ * Returns 1 when the raw infix chain mixes an additive operator with a
+ * multiplicative one, i.e. when left-to-right evaluation would give a
+ * different answer from precedence-correct evaluation.  Returns 0 for
+ * flat chains, for anything unparseable, and for empty input.            */
+static int prec_mixed_chain(const char *rhs) {
+    prec_tok tk[PREC_MAXTOK];
+    int n = prec_tokenize(rhs, tk, PREC_MAXTOK);
+    if (n < 3) return 0;
+    int has_add = 0, has_mul = 0;
+    for (int i = 1; i < n; i += 2) {
+        char o = tk[i].tok[0];
+        if (o == '+' || o == '-') has_add = 1;
+        else if (o == '*' || o == '/' || o == '%') has_mul = 1;
+    }
+    return has_add && has_mul;
+}
+
 /* Does the token list contain a multiplicative operator? */
 static int prec_has_mul(const prec_tok *tk, int n) {
     for (int i = 1; i < n; i += 2) {
@@ -4982,6 +5001,11 @@ static int desugar_constant_folding(const char *in, char *out, size_t cap) {
         *sc = '\0';
     }
     trim_ws(rhs_copy);
+
+    /* A chain that mixes + / - with * / / / % must be rewritten with correct
+     * precedence rather than folded left-to-right; leave it for the
+     * desugar_precedence pass that runs immediately afterwards.          */
+    if (prec_mixed_chain(rhs_copy)) return 0;
 
     int64_t res = 0;
     const char *end = NULL;

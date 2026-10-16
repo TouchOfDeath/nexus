@@ -519,6 +519,18 @@ let s_num = "1234"
 let s_neg = "-56"
 let s_zero = "007"
 let s_zero1 = "0"
+let s_long_prefix = "abcd"
+let s_trim_input = " \t\nhello\r "
+let s_ws_only = " \t\r\n"
+let s_newline_mixed = "one\r\ntwo\rthree\n"
+let s_newline_expected = "one\ntwo\nthree\n"
+let s_crlf_only = "\r\n"
+let s_inplace_newlines = "x\r\ny"
+let s_escape_input = "A\"\\\n\tB"
+let s_escape_expected = "\"A\\\"\\\\\\n\\tB\""
+let s_escape_empty_expected = "\"\""
+let s_escape_ctrl_expected = "\"A\\x7FB\""
+let raw_escape_ctrl = alloc 8
 let buf_s = alloc 64
 
 # ------------------------------ nx_str_len -----------------------------------
@@ -606,6 +618,196 @@ let nx_i1 = 122
 call nx_str_chr
 let nx_i0 = nx_r0
 let nx_i1 = 0 - 1
+call check_eq
+
+# ------------------------------ nx_str_starts_with ---------------------------
+print "[strings] nx_str_starts_with"
+let nx_i0 = s_hello
+let nx_i1 = "he"
+call nx_str_starts_with
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_abc
+let nx_i1 = s_abc
+call nx_str_starts_with
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_hello
+let nx_i1 = "ha"
+call nx_str_starts_with
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_hello
+let nx_i1 = s_empty
+call nx_str_starts_with
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_abc
+let nx_i1 = s_long_prefix
+call nx_str_starts_with
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_ends_with -----------------------------
+print "[strings] nx_str_ends_with"
+let nx_i0 = s_hello
+let nx_i1 = "lo"
+call nx_str_ends_with
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_abc
+let nx_i1 = s_abc
+call nx_str_ends_with
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_hello
+let nx_i1 = "he"
+call nx_str_ends_with
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_hello
+let nx_i1 = s_empty
+call nx_str_ends_with
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = s_abc
+let nx_i1 = s_long_prefix
+call nx_str_ends_with
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_trim ---------------------------------
+print "[strings] nx_str_trim"
+let nx_i0 = s_trim_input
+let nx_i1 = buf_s
+call nx_str_trim
+let nx_i0 = nx_r0
+let nx_i1 = 5
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_hello
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_ws_only
+let nx_i1 = buf_s
+call nx_str_trim
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_empty
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_normalize_newlines --------------------
+print "[strings] nx_str_normalize_newlines"
+let nx_i0 = s_newline_mixed
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 14
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_newline_expected
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_crlf_only
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 1
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = "\n"
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_empty
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_empty
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_inplace_newlines
+let nx_i1 = buf_s
+call nx_str_copy
+let nx_i0 = buf_s
+let nx_i1 = buf_s
+call nx_str_normalize_newlines
+let nx_i0 = nx_r0
+let nx_i1 = 3
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = "x\ny"
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+
+# ------------------------------ nx_str_escape_literal ------------------------
+print "[strings] nx_str_escape_literal"
+let nx_i0 = s_escape_input
+let nx_i1 = buf_s
+call nx_str_escape_literal
+let nx_i0 = nx_r0
+let nx_i1 = 12
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_escape_expected
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+let nx_i0 = s_empty
+let nx_i1 = buf_s
+call nx_str_escape_literal
+let nx_i0 = nx_r0
+let nx_i1 = 2
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_escape_empty_expected
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
+call check_eq
+store [raw_escape_ctrl + 0] 65
+store [raw_escape_ctrl + 1] 127
+store [raw_escape_ctrl + 2] 66
+store [raw_escape_ctrl + 3] 0
+let nx_i0 = raw_escape_ctrl
+let nx_i1 = buf_s
+call nx_str_escape_literal
+let nx_i0 = nx_r0
+let nx_i1 = 8
+call check_eq
+let nx_i0 = buf_s
+let nx_i1 = s_escape_ctrl_expected
+call nx_str_cmp
+let nx_i0 = nx_r0
+let nx_i1 = 0
 call check_eq
 
 # ------------------------------ nx_str_to_int --------------------------------

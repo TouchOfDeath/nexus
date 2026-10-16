@@ -5,7 +5,7 @@
 #   exact fractions (rationals), and statistics.
 # ==============================================================================
 
-include "stdlib/nstdlib.nex"
+include "stdlib/math.nex"
 include "stdlib/combinatorics.nex"
 include "stdlib/sets.nex"
 include "stdlib/number_theory.nex"

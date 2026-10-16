@@ -1,6 +1,13 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.5 — Modern Loop & Range Ergonomics Bundle: Features #37, #50, #59 (current)
+## v8.5 — Modern Loop & Range Ergonomics Bundle & Standard Library Additions (current)
+
+### 0. Standard Library String Utilities: Features #132, #138, #147, #148
+- Added `nx_str_starts_with` and `nx_str_ends_with` to `stdlib/strings.nex`, including correct empty and too-long prefix/suffix behavior.
+- Added `nx_str_trim` to copy a string without leading/trailing ASCII whitespace (space and bytes 9–13); Unicode whitespace is not currently supported.
+- Added `nx_str_normalize_newlines` to normalize CRLF and CR to LF while preserving LF, with support for mutable in-place buffers.
+- Added `nx_str_escape_literal` to render quoted NEXUS literals, using short escapes for common characters and `\xHH` for other non-printable bytes.
+- Extended the standard-library regression suite from 94 to 122 assertions and documented the new APIs.
 
 Major language ergonomics release delivering three high-impact syntax features from Category 1 of the 500-feature roadmap: Compile-Time Constants (`const`) (#37), Range Expressions in Loops (`0..N`, `0..=N`, `step S`) (#50), and Null Coalescing Operator (`??`) (#59).
 
