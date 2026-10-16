@@ -325,7 +325,7 @@ Highlights:
 | bitwise ops | `stdlib/bitwise.nex`: `&`, `\|`, `^`, `~`, `<<`, `>>` |
 | async I/O / epoll | `stdlib/poll.nex`: `nx_poll`, `nx_epoll_create`, `nx_epoll_wait` |
 | byte arrays | `nx_arr_fill`, `nx_arr_sum`, `nx_arr_max`, `nx_arr_reverse`... |
-| strings | `nx_str_len`, `nx_str_copy`, `nx_str_cmp`, `nx_str_concat`, `nx_str_chr`, `nx_str_starts_with`, `nx_str_ends_with`, `nx_str_trim`, `nx_str_normalize_newlines` |
+| strings | `nx_str_len`, `nx_str_copy`, `nx_str_cmp`, `nx_str_concat`, `nx_str_chr`, `nx_str_starts_with`, `nx_str_ends_with`, `nx_str_trim`, `nx_str_normalize_newlines`, `nx_str_escape_literal` |
 | conversions | `nx_str_to_int`, `nx_int_to_str` |
 
 Rule: never name your own variables with the `nx_` prefix — those slots belong

@@ -5,7 +5,8 @@
 - Added `nx_str_starts_with` and `nx_str_ends_with` to `stdlib/strings.nex`, including correct empty and too-long prefix/suffix behavior.
 - Added `nx_str_trim` to copy a string without leading/trailing ASCII whitespace (space and bytes 9–13); Unicode whitespace is not currently supported.
 - Added `nx_str_normalize_newlines` to normalize CRLF and CR to LF while preserving LF, with support for mutable in-place buffers.
-- Extended the standard-library regression suite from 94 to 116 assertions and documented the new APIs.
+- Added `nx_str_escape_literal` to render quoted NEXUS literals, using short escapes for common characters and `\xHH` for other non-printable bytes.
+- Extended the standard-library regression suite from 94 to 122 assertions and documented the new APIs.
 
 ## v8.2+ — Phase 1: String Escapes & Universal Escape Decoding (current)
 

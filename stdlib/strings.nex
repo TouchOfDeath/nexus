@@ -316,6 +316,90 @@ fn nx_str_normalize_newlines {
 }
 
 # ------------------------------------------------------------------------------
+# fn nx_str_escape_literal : write a quoted, escaped NEXUS string literal from
+#                            nx_i0 into nx_i1. Returns output byte length,
+#                            excluding the terminator. Destination needs at
+#                            least 4 * input length + 3 bytes. NUL terminates
+#                            input, so embedded NUL bytes are not representable.
+# ------------------------------------------------------------------------------
+fn nx_str_escape_literal {
+    let s0 = nx_i0
+    let s1 = nx_i1
+    let s2 = 0
+    let s3 = 0
+    store [s1 + s3] 34
+    let s3 = s3 + 1
+    let s4 = load [s0 + s2]
+    while s4 != 0 {
+        if s4 == 10 {
+            store [s1 + s3] 92
+            let s3 = s3 + 1
+            store [s1 + s3] 110
+            let s3 = s3 + 1
+        } else if s4 == 13 {
+            store [s1 + s3] 92
+            let s3 = s3 + 1
+            store [s1 + s3] 114
+            let s3 = s3 + 1
+        } else if s4 == 9 {
+            store [s1 + s3] 92
+            let s3 = s3 + 1
+            store [s1 + s3] 116
+            let s3 = s3 + 1
+        } else if s4 == 92 {
+            store [s1 + s3] 92
+            let s3 = s3 + 1
+            store [s1 + s3] 92
+            let s3 = s3 + 1
+        } else if s4 == 34 {
+            store [s1 + s3] 92
+            let s3 = s3 + 1
+            store [s1 + s3] 34
+            let s3 = s3 + 1
+        } else {
+            let s5 = 0
+            if s4 < 32 {
+                let s5 = 1
+            }
+            if s4 > 126 {
+                let s5 = 1
+            }
+            if s5 == 1 {
+                store [s1 + s3] 92
+                let s3 = s3 + 1
+                store [s1 + s3] 120
+                let s3 = s3 + 1
+                let s6 = s4 / 16
+                let s7 = s4 % 16
+                if s6 < 10 {
+                    let s6 = s6 + 48
+                } else {
+                    let s6 = s6 + 55
+                }
+                if s7 < 10 {
+                    let s7 = s7 + 48
+                } else {
+                    let s7 = s7 + 55
+                }
+                store [s1 + s3] s6
+                let s3 = s3 + 1
+                store [s1 + s3] s7
+                let s3 = s3 + 1
+            } else {
+                store [s1 + s3] s4
+                let s3 = s3 + 1
+            }
+        }
+        let s2 = s2 + 1
+        let s4 = load [s0 + s2]
+    }
+    store [s1 + s3] 34
+    let s3 = s3 + 1
+    store [s1 + s3] 0
+    let nx_r0 = s3
+}
+
+# ------------------------------------------------------------------------------
 # fn nx_str_to_int : nx_r0 = decimal integer parsed from string nx_i0
 #                    Accepts an optional leading '-'. Non-digit characters
 #                    are ignored. Stops at the null terminator.
