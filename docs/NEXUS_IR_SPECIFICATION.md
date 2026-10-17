@@ -216,4 +216,13 @@ $$\text{Interpreter} \equiv \text{nexc (-O0)} \equiv \text{nexc (HYDRON)} \equiv
 
 Every randomized and regression test program confirms 100% bit-for-bit semantic identity across all 7 execution engines.
 
+### 6.4 Activation Stack Frames, Recursion & Direct VM Execution
+The N-IR VM implementation in [`tools/nexir.c`](file:///home/lifelonglearner/nexus_project/tools/nexir.c) features:
+- **Dynamic Activation Stack**: Frame depth of up to 2,048 activation records (`VMFrame`), storing caller basic block pointers, return instruction offsets, and target return registers.
+- **Lexical Parameter Binding & Variable Isolation**: Callee parameters are evaluated in the caller context and bound to the callee's activation frame, ensuring caller local variables (e.g., induction variables in loops) remain completely isolated.
+- **Arbitrary Expression Calls**: Nested function calls (e.g. `call f(call g(x))`) and expression arguments (e.g. `call f(n - 1)`) are automatically lowered to SSA temporaries and resolved through CFG blocks.
+- **Deep Recursion**: Full support for deep recursive call graphs including Factorial, Fibonacci, Euclidean GCD, and Ackermann $A(m, n)$.
+- **Multi-Width Memory & Floating-Point Operations**: Byte, 16-bit word, 32-bit dword, and 64-bit qword load/store semantics, alongside IEEE 754 double precision float arithmetic (`+.`, `-.`, `*.`, `/.`, `print_float`).
+
+
 

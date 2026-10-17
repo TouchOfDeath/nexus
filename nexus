@@ -1013,6 +1013,22 @@ if os.path.exists(search_src):
         else:
             print("[-] Binary search suite: FAIL")
 
+# N-IR Engine & VM Verification Suite
+nir_ok = False
+nexir_bin = os.path.join(base_dir, "bin", "nexir")
+if not os.path.exists(nexir_bin) or os.path.getmtime(os.path.join(base_dir, "tools", "nexir.c")) > os.path.getmtime(nexir_bin):
+    subprocess.run(["gcc", "-O2", os.path.join(base_dir, "tools", "nexir.c"), "-o", nexir_bin], check=True)
+
+res_param = subprocess.run([nexir_bin, "--opt", "--run", os.path.join(base_dir, "examples", "parameterized_functions.nex")], capture_output=True, text=True)
+res_rec = subprocess.run([nexir_bin, "--opt", "--run", os.path.join(base_dir, "examples", "recursion_showcase.nex")], capture_output=True, text=True)
+
+if ("49" in res_param.stdout and "216" in res_param.stdout and "15.000000" in res_param.stdout and
+    "5040" in res_rec.stdout and "150" in res_rec.stdout and "All Recursive Functions Executed Successfully!" in res_rec.stdout):
+    log_pass("[+] N-IR VM & Optimizer suite: Full stack frames, recursion, & closures PASS")
+    nir_ok = True
+else:
+    print("[-] N-IR VM suite: FAIL")
+
 s_ok = "PASS" if stdlib_ok else "FAIL"
 o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
@@ -1036,10 +1052,11 @@ arena_status = "PASS" if arena_ok else "FAIL"
 utf_status = "PASS" if utf_ok else "FAIL"
 splitjoin_status = "PASS" if splitjoin_ok else "FAIL"
 search_status = "PASS" if search_ok else "FAIL"
+nir_status = "PASS" if nir_ok else "FAIL"
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle, memory_bundle, byte_buffer_bundle, bit_stream_bundle, priority_queue_bundle, linked_list_bundle, trie_bundle, lru_bundle, arena_bundle, unicode_bundle, split_join_bundle, binary_search_bundle (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle, memory_bundle, byte_buffer_bundle, bit_stream_bundle, priority_queue_bundle, linked_list_bundle, trie_bundle, lru_bundle, arena_bundle, unicode_bundle, split_join_bundle, binary_search_bundle, nir_bundle (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}, memory={mem_status}, byte_buffer={bb_status}, bit_stream={bitstream_status}, priority_queue={pq_status}, linked_list={ll_status}, trie={trie_status}, lru={lru_status}, arena={arena_status}, unicode={utf_status}, split_join={splitjoin_status}, binary_search={search_status}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}, memory={mem_status}, byte_buffer={bb_status}, bit_stream={bitstream_status}, priority_queue={pq_status}, linked_list={ll_status}, trie={trie_status}, lru={lru_status}, arena={arena_status}, unicode={utf_status}, split_join={splitjoin_status}, binary_search={search_status}, nir={nir_status}")
 '
         ;;
     self-host)

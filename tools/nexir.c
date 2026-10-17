@@ -50,7 +50,7 @@ typedef enum {
     OP_LOAD64, OP_LOAD32, OP_LOAD16, OP_LOAD8,
     OP_STORE64, OP_STORE32, OP_STORE16, OP_STORE8,
     OP_BR, OP_BR_COND, OP_RET, OP_CALL,
-    OP_PRINT, OP_PRINT_STR, OP_ASSERT_EQ
+    OP_PRINT, OP_PRINT_STR, OP_PRINT_FLOAT, OP_ASSERT_EQ
 } IROp;
 
 typedef struct {
@@ -108,14 +108,16 @@ typedef struct {
 } IRModule;
 
 /* Context stack for nested control flow structures */
-typedef enum { CTX_WHILE, CTX_IF } CtxKind;
+typedef enum { CTX_WHILE, CTX_IF, CTX_FOR } CtxKind;
 
 typedef struct {
     CtxKind kind;
     char cond_bb[64];
     char body_bb[64];
+    char step_bb[64];
     char exit_bb[64];
     char else_bb[64];
+    char step_stmt[128];
     int has_else;
 } BlockContext;
 
@@ -172,6 +174,7 @@ static const char *op_to_str(IROp op) {
         case OP_CALL: return "call";
         case OP_PRINT: return "print";
         case OP_PRINT_STR: return "print_str";
+        case OP_PRINT_FLOAT: return "print_float";
         case OP_ASSERT_EQ: return "assert_eq";
         default: return "unknown";
     }
@@ -201,6 +204,7 @@ static void dump_inst(FILE *f, const IRInst *inst) {
             break;
         case OP_ADD: case OP_SUB: case OP_MUL: case OP_SDIV: case OP_SREM:
         case OP_SHL: case OP_SAR: case OP_AND: case OP_OR: case OP_XOR:
+        case OP_FADD: case OP_FSUB: case OP_FMUL: case OP_FDIV:
         case OP_ICMP_EQ: case OP_ICMP_NE: case OP_ICMP_SLT: case OP_ICMP_SLE:
         case OP_ICMP_SGT: case OP_ICMP_SGE:
             print_operand(f, &inst->dst);
@@ -274,6 +278,10 @@ static void dump_inst(FILE *f, const IRInst *inst) {
             fprintf(f, "print_str ");
             print_operand(f, &inst->src1);
             break;
+        case OP_PRINT_FLOAT:
+            fprintf(f, "print_float ");
+            print_operand(f, &inst->src1);
+            break;
         case OP_ASSERT_EQ:
             fprintf(f, "assert_eq ");
             print_operand(f, &inst->src1);
@@ -344,6 +352,15 @@ static IROperand make_const_i64(int64_t val) {
     return op;
 }
 
+static IROperand make_const_f64(double val) {
+    IROperand op;
+    memset(&op, 0, sizeof(op));
+    op.is_const = 1;
+    op.fval = val;
+    op.type = TYPE_F64;
+    return op;
+}
+
 static IROperand make_var(const char *name, IRType type) {
     IROperand op;
     memset(&op, 0, sizeof(op));
@@ -403,6 +420,16 @@ void ir_pass_constant_folding(IRModule *mod) {
                         if (strcmp(in->src2.name, const_table[i].name) == 0) {
                             in->src2 = make_const_i64(const_table[i].val);
                             break;
+                        }
+                    }
+                }
+                for (int a = 0; a < in->num_args; a++) {
+                    if (!in->args[a].is_const && in->args[a].name[0]) {
+                        for (int i = 0; i < num_consts; i++) {
+                            if (strcmp(in->args[a].name, const_table[i].name) == 0) {
+                                in->args[a] = make_const_i64(const_table[i].val);
+                                break;
+                            }
                         }
                     }
                 }
@@ -730,9 +757,55 @@ static IROperand new_temp_i64(void) {
 static IROperand parse_atom(const char *tok) {
     while (*tok == ' ' || *tok == '\t') tok++;
     if (isdigit(tok[0]) || (tok[0] == '-' && isdigit(tok[1]))) {
+        if (strchr(tok, '.')) {
+            return make_const_f64(atof(tok));
+        }
         return make_const_i64(atoll(tok));
     }
     return make_var(tok, TYPE_I64);
+}
+
+static int parse_call_args(const char *arg_str, char args_out[MAX_PARAMS][256]) {
+    int count = 0;
+    int depth = 0;
+    int in_str = 0;
+    char buf[256];
+    int bidx = 0;
+
+    for (int i = 0; arg_str[i] != '\0'; i++) {
+        char c = arg_str[i];
+        if (c == '"') in_str = !in_str;
+        else if (!in_str) {
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') depth--;
+            else if (c == ',' && depth == 0) {
+                buf[bidx] = '\0';
+                char *s = buf;
+                while (*s == ' ' || *s == '\t') s++;
+                int len = strlen(s);
+                while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) s[--len] = '\0';
+                if (len > 0 && count < MAX_PARAMS) {
+                    safe_strcpy(args_out[count++], s, 256);
+                }
+                bidx = 0;
+                continue;
+            }
+        }
+        if (bidx < (int)sizeof(buf) - 1) {
+            buf[bidx++] = c;
+        }
+    }
+    if (bidx > 0) {
+        buf[bidx] = '\0';
+        char *s = buf;
+        while (*s == ' ' || *s == '\t') s++;
+        int len = strlen(s);
+        while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) s[--len] = '\0';
+        if (len > 0 && count < MAX_PARAMS) {
+            safe_strcpy(args_out[count++], s, 256);
+        }
+    }
+    return count;
 }
 
 static IROperand lower_expression(IRBlock *bb, const char *expr, const char *target_var) {
@@ -743,8 +816,88 @@ static IROperand lower_expression(IRBlock *bb, const char *expr, const char *tar
     char *nl = strchr(p, '\n');
     if (nl) *nl = '\0';
 
-    /* Memory load: load64 [ptr + off] */
-    if (strncmp(p, "load64 [", 8) == 0 || strncmp(p, "load [", 6) == 0) {
+    /* Function call: call fname(args) or fname(args) */
+    const char *call_str = NULL;
+    if (strncmp(p, "call ", 5) == 0 || strncmp(p, "call\t", 5) == 0) {
+        call_str = p + 5;
+    } else {
+        char *paren = strchr(p, '(');
+        if (paren && paren > p) {
+            char *end_p = p + strlen(p) - 1;
+            while (end_p > paren && (*end_p == ' ' || *end_p == '\t')) end_p--;
+            if (*end_p == ')') {
+                int is_id = 1;
+                for (const char *c = p; c < paren; c++) {
+                    if (!isalnum(*c) && *c != '_') { is_id = 0; break; }
+                }
+                if (is_id) call_str = p;
+            }
+        }
+    }
+
+    if (call_str) {
+        while (*call_str == ' ' || *call_str == '\t') call_str++;
+        char fname[64] = "";
+        char args_str[512] = "";
+        char *paren = strchr(call_str, '(');
+        if (paren) {
+            size_t nlen = paren - call_str;
+            if (nlen >= sizeof(fname)) nlen = sizeof(fname) - 1;
+            strncpy(fname, call_str, nlen);
+            fname[nlen] = '\0';
+            char *fn_end = fname + strlen(fname) - 1;
+            while (fn_end >= fname && (*fn_end == ' ' || *fn_end == '\t')) *fn_end-- = '\0';
+
+            int pdepth = 1;
+            char *pclose = NULL;
+            for (char *c = paren + 1; *c; c++) {
+                if (*c == '(') pdepth++;
+                else if (*c == ')') {
+                    pdepth--;
+                    if (pdepth == 0) { pclose = c; break; }
+                }
+            }
+            if (pclose) {
+                size_t alen = pclose - (paren + 1);
+                if (alen >= sizeof(args_str)) alen = sizeof(args_str) - 1;
+                strncpy(args_str, paren + 1, alen);
+                args_str[alen] = '\0';
+            }
+        } else {
+            sscanf(call_str, "%63s", fname);
+        }
+
+        if (fname[0] != '\0') {
+            IRInst *in = calloc(1, sizeof(IRInst));
+            in->op = OP_CALL;
+            safe_strcpy(in->target_then, fname, sizeof(in->target_then));
+            if (target_var && target_var[0]) {
+                in->dst = make_var(target_var, TYPE_I64);
+            } else {
+                in->dst = new_temp_i64();
+            }
+
+            if (args_str[0] != '\0') {
+                char split_args[MAX_PARAMS][256];
+                int nargs = parse_call_args(args_str, split_args);
+                for (int a = 0; a < nargs && in->num_args < MAX_PARAMS; a++) {
+                    in->args[in->num_args++] = lower_expression(bb, split_args[a], NULL);
+                }
+            }
+            append_inst(bb, in);
+            return in->dst;
+        }
+    }
+
+    /* Memory load: load64/load32/load16/load8 [ptr + off] */
+    if (strncmp(p, "load64 [", 8) == 0 || strncmp(p, "load [", 6) == 0 ||
+        strncmp(p, "load32 [", 8) == 0 || strncmp(p, "load16 [", 8) == 0 ||
+        strncmp(p, "load8 [", 7) == 0) {
+        IROp lop = OP_LOAD64;
+        if (strncmp(p, "load32 [", 8) == 0) lop = OP_LOAD32;
+        else if (strncmp(p, "load16 [", 8) == 0) lop = OP_LOAD16;
+        else if (strncmp(p, "load8 [", 7) == 0) lop = OP_LOAD8;
+
         char *bracket = strchr(p, '[');
         char *close_b = strchr(bracket, ']');
         if (bracket && close_b) {
@@ -755,7 +908,7 @@ static IROperand lower_expression(IRBlock *bb, const char *expr, const char *tar
             if (sscanf(inner, "%63s + %lld", ptr_name, (long long *)&off) >= 1) {
                 IROperand dst = (target_var && target_var[0]) ? make_var(target_var, TYPE_I64) : new_temp_i64();
                 IRInst *in = calloc(1, sizeof(IRInst));
-                in->op = OP_LOAD64;
+                in->op = lop;
                 in->dst = dst;
                 in->src1 = make_var(ptr_name, TYPE_PTR);
                 in->src2 = make_const_i64(off);
@@ -788,7 +941,10 @@ static IROperand lower_expression(IRBlock *bb, const char *expr, const char *tar
         if (strcmp(token, "+") == 0 || strcmp(token, "-") == 0 ||
             strcmp(token, "*") == 0 || strcmp(token, "/") == 0 ||
             strcmp(token, "%") == 0 || strcmp(token, "<<") == 0 ||
-            strcmp(token, ">>") == 0) {
+            strcmp(token, ">>") == 0 || strcmp(token, "&") == 0 ||
+            strcmp(token, "|") == 0 || strcmp(token, "^") == 0 ||
+            strcmp(token, "+.") == 0 || strcmp(token, "-.") == 0 ||
+            strcmp(token, "*.") == 0 || strcmp(token, "/.") == 0) {
             safe_strcpy(ops[num_ops++], token, 8);
         } else {
             safe_strcpy(tokens[num_toks++], token, 64);
@@ -830,6 +986,13 @@ static IROperand lower_expression(IRBlock *bb, const char *expr, const char *tar
         else if (strcmp(ops[i], "%") == 0) in->op = OP_SREM;
         else if (strcmp(ops[i], "<<") == 0) in->op = OP_SHL;
         else if (strcmp(ops[i], ">>") == 0) in->op = OP_SAR;
+        else if (strcmp(ops[i], "&") == 0) in->op = OP_AND;
+        else if (strcmp(ops[i], "|") == 0) in->op = OP_OR;
+        else if (strcmp(ops[i], "^") == 0) in->op = OP_XOR;
+        else if (strcmp(ops[i], "+.") == 0) { in->op = OP_FADD; in->dst.type = TYPE_F64; dst.type = TYPE_F64; }
+        else if (strcmp(ops[i], "-.") == 0) { in->op = OP_FSUB; in->dst.type = TYPE_F64; dst.type = TYPE_F64; }
+        else if (strcmp(ops[i], "*.") == 0) { in->op = OP_FMUL; in->dst.type = TYPE_F64; dst.type = TYPE_F64; }
+        else if (strcmp(ops[i], "/.") == 0) { in->op = OP_FDIV; in->dst.type = TYPE_F64; dst.type = TYPE_F64; }
         else in->op = OP_ADD;
         append_inst(bb, in);
         cur = dst;
@@ -886,7 +1049,22 @@ IRModule *build_ir_from_nexus(const char *path) {
     while (fgets(line, sizeof(line), f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
-        if (*p == '\0' || *p == '\n' || *p == '#' || *p == ';') continue;
+
+        /* Strip inline comments outside of string literals */
+        int in_str = 0;
+        for (char *c = p; *c; c++) {
+            if (*c == '"') in_str = !in_str;
+            else if (!in_str && (*c == '#' || *c == ';')) {
+                *c = '\0';
+                break;
+            }
+        }
+        /* Trim trailing whitespace and newlines */
+        int plen = strlen(p);
+        while (plen > 0 && (p[plen - 1] == ' ' || p[plen - 1] == '\t' || p[plen - 1] == '\r' || p[plen - 1] == '\n')) {
+            p[--plen] = '\0';
+        }
+        if (plen == 0) continue;
 
         /* Function declaration: fn name(a, b) { */
         if (strncmp(p, "fn ", 3) == 0 && strstr(p, "{")) {
@@ -895,9 +1073,20 @@ IRModule *build_ir_from_nexus(const char *path) {
             if (paren) {
                 *paren = '\0';
                 sscanf(p + 3, "%63s", fname);
-                IRFunction *fn = calloc(1, sizeof(IRFunction));
-                safe_strcpy(fn->name, fname, sizeof(fn->name));
-                fn->ret_type = TYPE_I64;
+                IRFunction *fn = NULL;
+                if (strcmp(fname, "main") == 0) {
+                    fn = main_fn;
+                    fn->num_params = 0;
+                } else {
+                    fn = calloc(1, sizeof(IRFunction));
+                    safe_strcpy(fn->name, fname, sizeof(fn->name));
+                    fn->ret_type = TYPE_I64;
+                    IRBlock *fn_entry = create_block("entry");
+                    fn->entry_bb = fn_entry;
+                    fn->last_bb = fn_entry;
+                    fn->next = mod->functions;
+                    mod->functions = fn;
+                }
 
                 char *params_end = strchr(paren + 1, ')');
                 if (params_end) {
@@ -908,32 +1097,100 @@ IRModule *build_ir_from_nexus(const char *path) {
                         tok = strtok(NULL, ", ");
                     }
                 }
-                IRBlock *fn_entry = create_block("entry");
-                fn->entry_bb = fn_entry;
-                fn->last_bb = fn_entry;
-
-                fn->next = mod->functions;
-                mod->functions = fn;
-
                 cur_fn = fn;
-                cur_bb = fn_entry;
+                cur_bb = fn->entry_bb;
+                cur_fn->last_bb = cur_bb;
                 continue;
             } else {
                 char *brace = strchr(p, '{');
                 if (brace) *brace = '\0';
                 sscanf(p + 3, "%63s", fname);
-                IRFunction *fn = calloc(1, sizeof(IRFunction));
-                safe_strcpy(fn->name, fname, sizeof(fn->name));
-                fn->ret_type = TYPE_I64;
-                IRBlock *fn_entry = create_block("entry");
-                fn->entry_bb = fn_entry;
-                fn->last_bb = fn_entry;
-
-                fn->next = mod->functions;
-                mod->functions = fn;
-
+                IRFunction *fn = NULL;
+                if (strcmp(fname, "main") == 0) {
+                    fn = main_fn;
+                    fn->num_params = 0;
+                } else {
+                    fn = calloc(1, sizeof(IRFunction));
+                    safe_strcpy(fn->name, fname, sizeof(fn->name));
+                    fn->ret_type = TYPE_I64;
+                    IRBlock *fn_entry = create_block("entry");
+                    fn->entry_bb = fn_entry;
+                    fn->last_bb = fn_entry;
+                    fn->next = mod->functions;
+                    mod->functions = fn;
+                }
                 cur_fn = fn;
-                cur_bb = fn_entry;
+                cur_bb = fn->entry_bb;
+                cur_fn->last_bb = cur_bb;
+                continue;
+            }
+        }
+
+        /* For loop: for init, cond, step { */
+        if (strncmp(p, "for ", 4) == 0 && strstr(p, "{")) {
+            loop_counter++;
+            char header[512];
+            char *brace = strchr(p, '{');
+            *brace = '\0';
+            safe_strcpy(header, p + 4, sizeof(header));
+
+            char *c1 = strchr(header, ',');
+            char *c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+            if (c1 && c2) {
+                *c1 = '\0';
+                *c2 = '\0';
+                char *init_str = header;
+                char *cond_str = c1 + 1;
+                char *step_str = c2 + 1;
+
+                while (*init_str == ' ' || *init_str == '\t') init_str++;
+                while (*cond_str == ' ' || *cond_str == '\t') cond_str++;
+                while (*step_str == ' ' || *step_str == '\t') step_str++;
+
+                /* Execute init statement in cur_bb */
+                char *init_eq = strchr(init_str, '=');
+                if (init_eq) {
+                    *init_eq = '\0';
+                    char vname[64];
+                    sscanf(init_str, "%63s", vname);
+                    lower_expression(cur_bb, init_eq + 1, vname);
+                }
+
+                char cond_name[64], body_name[64], step_name[64], exit_name[64];
+                snprintf(cond_name, sizeof(cond_name), "for_cond_%d", loop_counter);
+                snprintf(body_name, sizeof(body_name), "for_body_%d", loop_counter);
+                snprintf(step_name, sizeof(step_name), "for_step_%d", loop_counter);
+                snprintf(exit_name, sizeof(exit_name), "for_exit_%d", loop_counter);
+
+                IRInst *br = calloc(1, sizeof(IRInst));
+                br->op = OP_BR;
+                safe_strcpy(br->target_then, cond_name, sizeof(br->target_then));
+                append_inst(cur_bb, br);
+
+                IRBlock *cond_bb = create_block(cond_name);
+                cur_bb->next = cond_bb;
+
+                IROperand cond_val = lower_condition(cond_bb, cond_str);
+
+                IRInst *br_c = calloc(1, sizeof(IRInst));
+                br_c->op = OP_BR_COND;
+                br_c->src1 = cond_val;
+                safe_strcpy(br_c->target_then, body_name, sizeof(br_c->target_then));
+                safe_strcpy(br_c->target_else, exit_name, sizeof(br_c->target_else));
+                append_inst(cond_bb, br_c);
+
+                IRBlock *body_bb = create_block(body_name);
+                cond_bb->next = body_bb;
+                cur_bb = body_bb;
+                cur_fn->last_bb = cur_bb;
+
+                BlockContext *ctx = &ctx_stack[ctx_depth++];
+                ctx->kind = CTX_FOR;
+                safe_strcpy(ctx->cond_bb, cond_name, sizeof(ctx->cond_bb));
+                safe_strcpy(ctx->body_bb, body_name, sizeof(ctx->body_bb));
+                safe_strcpy(ctx->step_bb, step_name, sizeof(ctx->step_bb));
+                safe_strcpy(ctx->exit_bb, exit_name, sizeof(ctx->exit_bb));
+                safe_strcpy(ctx->step_stmt, step_str, sizeof(ctx->step_stmt));
                 continue;
             }
         }
@@ -971,6 +1228,7 @@ IRModule *build_ir_from_nexus(const char *path) {
             IRBlock *body_bb = create_block(body_name);
             cond_bb->next = body_bb;
             cur_bb = body_bb;
+            cur_fn->last_bb = cur_bb;
 
             BlockContext *ctx = &ctx_stack[ctx_depth++];
             ctx->kind = CTX_WHILE;
@@ -1005,6 +1263,7 @@ IRModule *build_ir_from_nexus(const char *path) {
             IRBlock *then_bb = create_block(then_name);
             cur_bb->next = then_bb;
             cur_bb = then_bb;
+            cur_fn->last_bb = cur_bb;
 
             BlockContext *ctx = &ctx_stack[ctx_depth++];
             ctx->kind = CTX_IF;
@@ -1029,12 +1288,13 @@ IRModule *build_ir_from_nexus(const char *path) {
                 IRBlock *else_bb = create_block(ctx->else_bb);
                 cur_bb->next = else_bb;
                 cur_bb = else_bb;
+                cur_fn->last_bb = cur_bb;
                 continue;
             }
         }
 
         /* Closing brace: } */
-        if (strcmp(p, "}\n") == 0 || strcmp(p, "}") == 0) {
+        if (strcmp(p, "}") == 0) {
             if (ctx_depth > 0) {
                 BlockContext ctx = ctx_stack[--ctx_depth];
                 if (ctx.kind == CTX_WHILE) {
@@ -1046,6 +1306,7 @@ IRModule *build_ir_from_nexus(const char *path) {
                     IRBlock *exit_bb = create_block(ctx.exit_bb);
                     cur_bb->next = exit_bb;
                     cur_bb = exit_bb;
+                    cur_fn->last_bb = cur_bb;
                 } else if (ctx.kind == CTX_IF) {
                     IRInst *br_join = calloc(1, sizeof(IRInst));
                     br_join->op = OP_BR;
@@ -1065,6 +1326,64 @@ IRModule *build_ir_from_nexus(const char *path) {
                     IRBlock *join_bb = create_block(ctx.exit_bb);
                     cur_bb->next = join_bb;
                     cur_bb = join_bb;
+                    cur_fn->last_bb = cur_bb;
+                } else if (ctx.kind == CTX_FOR) {
+                    IRInst *br_step = calloc(1, sizeof(IRInst));
+                    br_step->op = OP_BR;
+                    safe_strcpy(br_step->target_then, ctx.step_bb, sizeof(br_step->target_then));
+                    append_inst(cur_bb, br_step);
+
+                    IRBlock *step_bb = create_block(ctx.step_bb);
+                    cur_bb->next = step_bb;
+                    cur_bb = step_bb;
+
+                    char sbuf[128];
+                    safe_strcpy(sbuf, ctx.step_stmt, sizeof(sbuf));
+                    char *plus_eq = strstr(sbuf, "+=");
+                    char *minus_eq = strstr(sbuf, "-=");
+                    char *plus_plus = strstr(sbuf, "++");
+                    char *minus_minus = strstr(sbuf, "--");
+                    char *eq = strchr(sbuf, '=');
+
+                    if (plus_eq) {
+                        *plus_eq = '\0';
+                        char v[64]; sscanf(sbuf, "%63s", v);
+                        char expr[128];
+                        snprintf(expr, sizeof(expr), "%s + %s", v, plus_eq + 2);
+                        lower_expression(step_bb, expr, v);
+                    } else if (minus_eq) {
+                        *minus_eq = '\0';
+                        char v[64]; sscanf(sbuf, "%63s", v);
+                        char expr[128];
+                        snprintf(expr, sizeof(expr), "%s - %s", v, minus_eq + 2);
+                        lower_expression(step_bb, expr, v);
+                    } else if (plus_plus) {
+                        *plus_plus = '\0';
+                        char v[64]; sscanf(sbuf, "%63s", v);
+                        char expr[128];
+                        snprintf(expr, sizeof(expr), "%s + 1", v);
+                        lower_expression(step_bb, expr, v);
+                    } else if (minus_minus) {
+                        *minus_minus = '\0';
+                        char v[64]; sscanf(sbuf, "%63s", v);
+                        char expr[128];
+                        snprintf(expr, sizeof(expr), "%s - 1", v);
+                        lower_expression(step_bb, expr, v);
+                    } else if (eq) {
+                        *eq = '\0';
+                        char v[64]; sscanf(sbuf, "%63s", v);
+                        lower_expression(step_bb, eq + 1, v);
+                    }
+
+                    IRInst *br_cond = calloc(1, sizeof(IRInst));
+                    br_cond->op = OP_BR;
+                    safe_strcpy(br_cond->target_then, ctx.cond_bb, sizeof(br_cond->target_then));
+                    append_inst(step_bb, br_cond);
+
+                    IRBlock *exit_bb = create_block(ctx.exit_bb);
+                    cur_bb->next = exit_bb;
+                    cur_bb = exit_bb;
+                    cur_fn->last_bb = cur_bb;
                 }
                 continue;
             } else {
@@ -1077,6 +1396,20 @@ IRModule *build_ir_from_nexus(const char *path) {
                 }
                 continue;
             }
+        }
+
+        /* Print float statement: print_float <expr> */
+        if (strncmp(p, "print_float ", 12) == 0 || strncmp(p, "print_float\t", 12) == 0) {
+            char val_str[512];
+            safe_strcpy(val_str, p + 12, sizeof(val_str));
+            char *nl = strchr(val_str, '\n');
+            if (nl) *nl = '\0';
+            IRInst *in = calloc(1, sizeof(IRInst));
+            in->op = OP_PRINT_FLOAT;
+            in->src1 = parse_atom(val_str);
+            append_inst(cur_bb, in);
+            cur_fn->last_bb = cur_bb;
+            continue;
         }
 
         /* Print statement */
@@ -1100,6 +1433,7 @@ IRModule *build_ir_from_nexus(const char *path) {
                 in->src1 = parse_atom(val_str);
             }
             append_inst(cur_bb, in);
+            cur_fn->last_bb = cur_bb;
             continue;
         }
 
@@ -1113,6 +1447,7 @@ IRModule *build_ir_from_nexus(const char *path) {
             in->op = OP_PRINT_STR;
             in->src1 = parse_atom(val_str);
             append_inst(cur_bb, in);
+            cur_fn->last_bb = cur_bb;
             continue;
         }
 
@@ -1125,12 +1460,20 @@ IRModule *build_ir_from_nexus(const char *path) {
                 in->src1 = parse_atom(left);
                 in->src2 = parse_atom(right);
                 append_inst(cur_bb, in);
+                cur_fn->last_bb = cur_bb;
                 continue;
             }
         }
 
-        /* Memory store: store64 [ptr + off] val */
-        if (strncmp(p, "store64 [", 9) == 0 || strncmp(p, "store [", 7) == 0) {
+        /* Memory store: store64/store32/store16/store8 [ptr + off] val */
+        if (strncmp(p, "store64 [", 9) == 0 || strncmp(p, "store [", 7) == 0 ||
+            strncmp(p, "store32 [", 9) == 0 || strncmp(p, "store16 [", 9) == 0 ||
+            strncmp(p, "store8 [", 8) == 0) {
+            IROp sop = OP_STORE64;
+            if (strncmp(p, "store32 [", 9) == 0) sop = OP_STORE32;
+            else if (strncmp(p, "store16 [", 9) == 0) sop = OP_STORE16;
+            else if (strncmp(p, "store8 [", 8) == 0) sop = OP_STORE8;
+
             char *bracket = strchr(p, '[');
             char *close_b = strchr(bracket, ']');
             if (bracket && close_b) {
@@ -1146,45 +1489,21 @@ IRModule *build_ir_from_nexus(const char *path) {
                 sscanf(inner, "%63s + %lld", ptr_name, (long long *)&off);
 
                 IRInst *in = calloc(1, sizeof(IRInst));
-                in->op = OP_STORE64;
+                in->op = sop;
                 in->src1 = make_var(ptr_name, TYPE_PTR);
                 in->src2 = make_const_i64(off);
                 in->dst = parse_atom(val_part);
                 append_inst(cur_bb, in);
+                cur_fn->last_bb = cur_bb;
                 continue;
             }
         }
 
         /* Call statement: call name(args) or call name */
-        if (strncmp(p, "call ", 5) == 0) {
-            char fname[64];
-            char *paren = strchr(p, '(');
-            if (paren) {
-                *paren = '\0';
-                sscanf(p + 5, "%63s", fname);
-                IRInst *in = calloc(1, sizeof(IRInst));
-                in->op = OP_CALL;
-                safe_strcpy(in->target_then, fname, sizeof(in->target_then));
-
-                char *params_end = strchr(paren + 1, ')');
-                if (params_end) {
-                    *params_end = '\0';
-                    char *tok = strtok(paren + 1, ", ");
-                    while (tok && in->num_args < MAX_PARAMS) {
-                        in->args[in->num_args++] = parse_atom(tok);
-                        tok = strtok(NULL, ", ");
-                    }
-                }
-                append_inst(cur_bb, in);
-                continue;
-            } else {
-                sscanf(p + 5, "%63s", fname);
-                IRInst *in = calloc(1, sizeof(IRInst));
-                in->op = OP_CALL;
-                safe_strcpy(in->target_then, fname, sizeof(in->target_then));
-                append_inst(cur_bb, in);
-                continue;
-            }
+        if (strncmp(p, "call ", 5) == 0 || strncmp(p, "call\t", 5) == 0) {
+            lower_expression(cur_bb, p, NULL);
+            cur_fn->last_bb = cur_bb;
+            continue;
         }
 
         /* Return statement */
@@ -1200,10 +1519,11 @@ IRModule *build_ir_from_nexus(const char *path) {
                 in->src1 = lower_expression(cur_bb, rest, NULL);
             }
             append_inst(cur_bb, in);
+            cur_fn->last_bb = cur_bb;
             continue;
         }
 
-        /* Variable assignment: let v = expr or v = expr */
+        /* Variable assignment: let v = expr, local v = expr, or v = expr */
         if (strncmp(p, "let ", 4) == 0 || strncmp(p, "local ", 6) == 0 || strchr(p, '=')) {
             char vname[64];
             char *eq = strchr(p, '=');
@@ -1218,6 +1538,7 @@ IRModule *build_ir_from_nexus(const char *path) {
                 while (*rhs == ' ') rhs++;
 
                 lower_expression(cur_bb, rhs, vname);
+                cur_fn->last_bb = cur_bb;
                 continue;
             }
         }
@@ -1243,37 +1564,123 @@ IRModule *build_ir_from_nexus(const char *path) {
  *                     N-IR DIRECT EXECUTION VM ENGINE
  * ============================================================================== */
 
+#define MAX_CALL_DEPTH 2048
+#define MAX_FRAME_VARS 256
+
 typedef struct {
     char name[64];
     int64_t ival;
+    double fval;
+    int is_float;
 } VMVar;
+
+typedef struct {
+    IRFunction *fn;
+    IRBlock *return_bb;
+    IRInst *return_inst;
+    IROperand dst;
+    VMVar vars[MAX_FRAME_VARS];
+    int num_vars;
+} VMFrame;
 
 typedef struct {
     uint8_t memory[VM_MEM_SIZE];
     uint64_t heap_ptr;
-    VMVar vars[MAX_VARS];
-    int num_vars;
+    VMVar globals[MAX_VARS];
+    int num_globals;
+    VMFrame frames[MAX_CALL_DEPTH];
+    int frame_depth;
     int assertions_passed;
 } VMState;
 
-static VMVar *vm_find_or_create_var(VMState *vm, const char *name) {
-    for (int i = 0; i < vm->num_vars; i++) {
-        if (strcmp(vm->vars[i].name, name) == 0) return &vm->vars[i];
+static VMVar *vm_find_var(VMState *vm, const char *name) {
+    if (name[0] == '%') name++;
+    if (vm->frame_depth >= 0 && vm->frame_depth < MAX_CALL_DEPTH) {
+        VMFrame *frame = &vm->frames[vm->frame_depth];
+        for (int i = 0; i < frame->num_vars; i++) {
+            if (strcmp(frame->vars[i].name, name) == 0) return &frame->vars[i];
+        }
     }
-    if (vm->num_vars >= MAX_VARS) {
-        fprintf(stderr, "[-] Fatal VM error: register variable table overflow\n");
+    for (int i = 0; i < vm->num_globals; i++) {
+        if (strcmp(vm->globals[i].name, name) == 0) return &vm->globals[i];
+    }
+    return NULL;
+}
+
+static VMVar *vm_find_or_create_var(VMState *vm, const char *name) {
+    if (name[0] == '%') name++;
+    if (vm->frame_depth >= 0 && vm->frame_depth < MAX_CALL_DEPTH) {
+        VMFrame *frame = &vm->frames[vm->frame_depth];
+        for (int i = 0; i < frame->num_vars; i++) {
+            if (strcmp(frame->vars[i].name, name) == 0) return &frame->vars[i];
+        }
+    }
+    for (int i = 0; i < vm->num_globals; i++) {
+        if (strcmp(vm->globals[i].name, name) == 0) return &vm->globals[i];
+    }
+
+    if (vm->frame_depth > 0 && vm->frame_depth < MAX_CALL_DEPTH) {
+        VMFrame *frame = &vm->frames[vm->frame_depth];
+        if (frame->num_vars >= MAX_FRAME_VARS) {
+            fprintf(stderr, "[-] Fatal VM error: frame variable table overflow\n");
+            exit(1);
+        }
+        VMVar *v = &frame->vars[frame->num_vars++];
+        safe_strcpy(v->name, name, sizeof(v->name));
+        v->ival = 0;
+        v->fval = 0.0;
+        v->is_float = 0;
+        return v;
+    }
+
+    VMFrame *frame = &vm->frames[0];
+    if (frame->num_vars >= MAX_FRAME_VARS || vm->num_globals >= MAX_VARS) {
+        fprintf(stderr, "[-] Fatal VM error: variable table overflow\n");
         exit(1);
     }
-    VMVar *v = &vm->vars[vm->num_vars++];
+    VMVar *v = &frame->vars[frame->num_vars++];
     safe_strcpy(v->name, name, sizeof(v->name));
     v->ival = 0;
+    v->fval = 0.0;
+    v->is_float = 0;
+
+    VMVar *gv = &vm->globals[vm->num_globals++];
+    safe_strcpy(gv->name, name, sizeof(gv->name));
+    gv->ival = 0;
+    gv->fval = 0.0;
+    gv->is_float = 0;
     return v;
 }
 
 static int64_t vm_eval_operand(VMState *vm, const IROperand *op) {
-    if (op->is_const) return op->ival;
+    if (op->is_const) {
+        if (op->type == TYPE_F64) return (int64_t)op->fval;
+        return op->ival;
+    }
     if (op->name[0] == '\0') return 0;
-    return vm_find_or_create_var(vm, op->name)->ival;
+    VMVar *v = vm_find_var(vm, op->name);
+    if (!v) return 0;
+    if (v->is_float) return (int64_t)v->fval;
+    return v->ival;
+}
+
+static double vm_eval_float(VMState *vm, const IROperand *op) {
+    if (op->is_const) {
+        if (op->type == TYPE_F64) return op->fval;
+        return (double)op->ival;
+    }
+    if (op->name[0] == '\0') return 0.0;
+    VMVar *v = vm_find_var(vm, op->name);
+    if (!v) return 0.0;
+    if (v->is_float) return v->fval;
+    return (double)v->ival;
+}
+
+static int vm_is_float(VMState *vm, const IROperand *op) {
+    if (op->is_const) return (op->type == TYPE_F64);
+    if (op->name[0] == '\0') return 0;
+    VMVar *v = vm_find_var(vm, op->name);
+    return v ? v->is_float : 0;
 }
 
 static uint64_t vm_alloc(VMState *vm, uint64_t size) {
@@ -1288,6 +1695,10 @@ static uint64_t vm_alloc(VMState *vm, uint64_t size) {
 
 int run_ir_vm(IRModule *mod) {
     VMState *vm = calloc(1, sizeof(VMState));
+    if (!vm) {
+        fprintf(stderr, "[-] Fatal: failed to allocate VM state memory\n");
+        return 1;
+    }
     vm->heap_ptr = 4096;
 
     IRFunction *main_fn = NULL;
@@ -1303,179 +1714,393 @@ int run_ir_vm(IRModule *mod) {
         return 1;
     }
 
+    vm->frame_depth = 0;
+    vm->frames[0].fn = main_fn;
+
     IRBlock *cur_bb = main_fn->entry_bb;
+    IRInst *in = cur_bb ? cur_bb->first : NULL;
     int64_t exit_code = 0;
 
     while (cur_bb) {
-        IRInst *in = cur_bb->first;
+        if (!in) {
+            if (cur_bb->next) {
+                cur_bb = cur_bb->next;
+                in = cur_bb->first;
+                continue;
+            } else if (vm->frame_depth > 0) {
+                vm->frame_depth--;
+                VMFrame *caller = &vm->frames[vm->frame_depth];
+                cur_bb = caller->return_bb;
+                in = caller->return_inst;
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        if (in->op == OP_NOP) { in = in->next; continue; }
+
+        IRFunction *cur_fn = (vm->frame_depth > 0) ? vm->frames[vm->frame_depth].fn : main_fn;
+        int64_t s1 = vm_eval_operand(vm, &in->src1);
+        int64_t s2 = vm_eval_operand(vm, &in->src2);
+        int64_t res = 0;
         IRBlock *next_bb = NULL;
 
-        while (in) {
-            if (in->op == OP_NOP) { in = in->next; continue; }
-
-            int64_t s1 = vm_eval_operand(vm, &in->src1);
-            int64_t s2 = vm_eval_operand(vm, &in->src2);
-            int64_t res = 0;
-
-            switch (in->op) {
-                case OP_ASSIGN:
+        switch (in->op) {
+            case OP_ASSIGN:
+                if (in->dst.type == TYPE_F64 || vm_is_float(vm, &in->src1)) {
+                    double fres = vm_eval_float(vm, &in->src1);
+                    if (in->dst.name[0]) {
+                        VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                        v->fval = fres; v->ival = (int64_t)fres; v->is_float = 1;
+                    }
+                } else {
                     res = s1;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ADD:
-                    res = s1 + s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_SUB:
-                    res = s1 - s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_MUL:
-                    res = s1 * s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_SDIV:
-                    res = (s2 != 0) ? (s1 / s2) : 0;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_SREM:
-                    res = (s2 != 0) ? (s1 % s2) : 0;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_SHL:
-                    res = s1 << s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_SAR:
-                    res = s1 >> s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_AND:
-                    res = s1 & s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_OR:
-                    res = s1 | s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_XOR:
-                    res = s1 ^ s2;
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ICMP_EQ:
-                    res = (s1 == s2);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ICMP_NE:
-                    res = (s1 != s2);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ICMP_SLT:
-                    res = (s1 < s2);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ICMP_SLE:
-                    res = (s1 <= s2);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ICMP_SGT:
-                    res = (s1 > s2);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ICMP_SGE:
-                    res = (s1 >= s2);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_ALLOC:
-                    res = vm_alloc(vm, s1);
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
-                case OP_STORE64: {
-                    uint64_t addr = (uint64_t)s1 + in->src2.ival;
-                    int64_t val = vm_eval_operand(vm, &in->dst);
-                    if (addr + 8 <= VM_MEM_SIZE) {
-                        memcpy(&vm->memory[addr], &val, 8);
+                    if (in->dst.name[0]) {
+                        VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                        v->ival = res; v->fval = (double)res; v->is_float = 0;
                     }
-                    break;
                 }
-                case OP_LOAD64: {
-                    uint64_t addr = (uint64_t)s1 + in->src2.ival;
-                    if (addr + 8 <= VM_MEM_SIZE) {
-                        memcpy(&res, &vm->memory[addr], 8);
-                    }
-                    if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
-                    break;
+                break;
+            case OP_ADD:
+                res = s1 + s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
                 }
-                case OP_PRINT:
+                break;
+            case OP_SUB:
+                res = s1 - s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_MUL:
+                res = s1 * s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_SDIV:
+                res = (s2 != 0) ? (s1 / s2) : 0;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_SREM:
+                res = (s2 != 0) ? (s1 % s2) : 0;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_SHL:
+                res = s1 << s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_SAR:
+                res = s1 >> s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_AND:
+                res = s1 & s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_OR:
+                res = s1 | s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_XOR:
+                res = s1 ^ s2;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->ival = res; v->fval = (double)res; v->is_float = 0;
+                }
+                break;
+            case OP_FADD: {
+                double fres = vm_eval_float(vm, &in->src1) + vm_eval_float(vm, &in->src2);
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->fval = fres; v->ival = (int64_t)fres; v->is_float = 1;
+                }
+                break;
+            }
+            case OP_FSUB: {
+                double fres = vm_eval_float(vm, &in->src1) - vm_eval_float(vm, &in->src2);
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->fval = fres; v->ival = (int64_t)fres; v->is_float = 1;
+                }
+                break;
+            }
+            case OP_FMUL: {
+                double fres = vm_eval_float(vm, &in->src1) * vm_eval_float(vm, &in->src2);
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->fval = fres; v->ival = (int64_t)fres; v->is_float = 1;
+                }
+                break;
+            }
+            case OP_FDIV: {
+                double d2 = vm_eval_float(vm, &in->src2);
+                double fres = (d2 != 0.0) ? (vm_eval_float(vm, &in->src1) / d2) : 0.0;
+                if (in->dst.name[0]) {
+                    VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                    v->fval = fres; v->ival = (int64_t)fres; v->is_float = 1;
+                }
+                break;
+            }
+            case OP_ICMP_EQ:
+                res = (s1 == s2);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_ICMP_NE:
+                res = (s1 != s2);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_ICMP_SLT:
+                res = (s1 < s2);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_ICMP_SLE:
+                res = (s1 <= s2);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_ICMP_SGT:
+                res = (s1 > s2);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_ICMP_SGE:
+                res = (s1 >= s2);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_ALLOC:
+                res = vm_alloc(vm, s1);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            case OP_STORE64: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                int64_t val = vm_eval_operand(vm, &in->dst);
+                if (addr + 8 <= VM_MEM_SIZE) memcpy(&vm->memory[addr], &val, 8);
+                break;
+            }
+            case OP_STORE32: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                int32_t val = (int32_t)vm_eval_operand(vm, &in->dst);
+                if (addr + 4 <= VM_MEM_SIZE) memcpy(&vm->memory[addr], &val, 4);
+                break;
+            }
+            case OP_STORE16: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                int16_t val = (int16_t)vm_eval_operand(vm, &in->dst);
+                if (addr + 2 <= VM_MEM_SIZE) memcpy(&vm->memory[addr], &val, 2);
+                break;
+            }
+            case OP_STORE8: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                uint8_t val = (uint8_t)vm_eval_operand(vm, &in->dst);
+                if (addr < VM_MEM_SIZE) vm->memory[addr] = val;
+                break;
+            }
+            case OP_LOAD64: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                if (addr + 8 <= VM_MEM_SIZE) memcpy(&res, &vm->memory[addr], 8);
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            }
+            case OP_LOAD32: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                int32_t val = 0;
+                if (addr + 4 <= VM_MEM_SIZE) memcpy(&val, &vm->memory[addr], 4);
+                res = val;
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            }
+            case OP_LOAD16: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                int16_t val = 0;
+                if (addr + 2 <= VM_MEM_SIZE) memcpy(&val, &vm->memory[addr], 2);
+                res = val;
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            }
+            case OP_LOAD8: {
+                uint64_t addr = (uint64_t)s1 + in->src2.ival;
+                uint8_t val = 0;
+                if (addr < VM_MEM_SIZE) val = vm->memory[addr];
+                res = val;
+                if (in->dst.name[0]) vm_find_or_create_var(vm, in->dst.name)->ival = res;
+                break;
+            }
+            case OP_PRINT:
+                if (vm_is_float(vm, &in->src1)) {
+                    printf("%f\n", vm_eval_float(vm, &in->src1));
+                } else {
                     printf("%lld\n", (long long)s1);
-                    break;
-                case OP_PRINT_STR: {
-                    if (in->src1.name[0] == '@') {
-                        for (int i = 0; i < mod->num_strings; i++) {
-                            if (strcmp(mod->strings[i].id, in->src1.name) == 0) {
-                                printf("%s\n", mod->strings[i].text);
-                                break;
-                            }
-                        }
-                    } else {
-                        uint64_t ptr = (uint64_t)s1;
-                        if (ptr < VM_MEM_SIZE) {
-                            printf("%s\n", (char *)&vm->memory[ptr]);
+                }
+                break;
+            case OP_PRINT_FLOAT:
+                printf("%f\n", vm_eval_float(vm, &in->src1));
+                break;
+            case OP_PRINT_STR: {
+                if (in->src1.name[0] == '@') {
+                    for (int i = 0; i < mod->num_strings; i++) {
+                        if (strcmp(mod->strings[i].id, in->src1.name) == 0) {
+                            printf("%s\n", mod->strings[i].text);
+                            break;
                         }
                     }
+                } else {
+                    uint64_t ptr = (uint64_t)s1;
+                    if (ptr < VM_MEM_SIZE) {
+                        printf("%s\n", (char *)&vm->memory[ptr]);
+                    }
+                }
+                break;
+            }
+            case OP_ASSERT_EQ:
+                if (s1 != s2) {
+                    fprintf(stderr, "[-] N-IR Assertion Failed: %lld != %lld\n", (long long)s1, (long long)s2);
+                    free(vm);
+                    return 1;
+                }
+                vm->assertions_passed++;
+                break;
+            case OP_CALL: {
+                IRFunction *target_fn = NULL;
+                for (IRFunction *f = mod->functions; f; f = f->next) {
+                    if (strcmp(f->name, in->target_then) == 0) {
+                        target_fn = f;
+                        break;
+                    }
+                }
+                if (!target_fn) {
+                    if (in->dst.name[0]) {
+                        VMVar *v = vm_find_or_create_var(vm, in->dst.name);
+                        v->ival = 0; v->fval = 0.0; v->is_float = 0;
+                    }
+                    in = in->next;
+                    continue;
+                }
+
+                if (vm->frame_depth + 1 >= MAX_CALL_DEPTH) {
+                    fprintf(stderr, "[-] Fatal VM error: call stack overflow\n");
+                    free(vm);
+                    return 1;
+                }
+
+                int64_t a_ivals[MAX_PARAMS];
+                double a_fvals[MAX_PARAMS];
+                int a_is_flt[MAX_PARAMS];
+                int nargs = in->num_args;
+                for (int a = 0; a < nargs && a < MAX_PARAMS; a++) {
+                    a_ivals[a] = vm_eval_operand(vm, &in->args[a]);
+                    a_fvals[a] = vm_eval_float(vm, &in->args[a]);
+                    a_is_flt[a] = (in->args[a].type == TYPE_F64) || vm_is_float(vm, &in->args[a]);
+                }
+
+                vm->frames[vm->frame_depth].return_bb = cur_bb;
+                vm->frames[vm->frame_depth].return_inst = in->next;
+                vm->frames[vm->frame_depth].dst = in->dst;
+
+                vm->frame_depth++;
+                VMFrame *callee = &vm->frames[vm->frame_depth];
+                memset(callee, 0, sizeof(VMFrame));
+                callee->fn = target_fn;
+
+                for (int p = 0; p < target_fn->num_params && p < nargs; p++) {
+                    VMVar *pv = &callee->vars[callee->num_vars++];
+                    safe_strcpy(pv->name, target_fn->params[p], sizeof(pv->name));
+                    pv->ival = a_ivals[p];
+                    pv->fval = a_fvals[p];
+                    pv->is_float = a_is_flt[p];
+                }
+
+                cur_bb = target_fn->entry_bb;
+                in = cur_bb ? cur_bb->first : NULL;
+                continue;
+            }
+            case OP_RET: {
+                int64_t ret_i = vm_eval_operand(vm, &in->src1);
+                double ret_f = vm_eval_float(vm, &in->src1);
+                int ret_is_flt = (in->src1.type == TYPE_F64) || vm_is_float(vm, &in->src1);
+
+                if (vm->frame_depth == 0) {
+                    exit_code = ret_i;
+                    cur_bb = NULL;
+                    in = NULL;
                     break;
                 }
-                case OP_ASSERT_EQ:
-                    if (s1 != s2) {
-                        fprintf(stderr, "[-] N-IR Assertion Failed: %lld != %lld\n", (long long)s1, (long long)s2);
-                        free(vm);
-                        return 1;
+
+                vm->frame_depth--;
+                VMFrame *caller = &vm->frames[vm->frame_depth];
+                IRBlock *ret_bb = caller->return_bb;
+                IRInst *ret_inst = caller->return_inst;
+                IROperand caller_dst = caller->dst;
+
+                if (caller_dst.name[0] != '\0') {
+                    VMVar *dv = vm_find_or_create_var(vm, caller_dst.name);
+                    dv->ival = ret_i;
+                    dv->fval = ret_f;
+                    dv->is_float = ret_is_flt;
+                }
+
+                cur_bb = ret_bb;
+                in = ret_inst;
+                continue;
+            }
+            case OP_BR:
+                for (IRBlock *b = cur_fn->entry_bb; b; b = b->next) {
+                    if (strcmp(b->name, in->target_then) == 0) {
+                        next_bb = b;
+                        break;
                     }
-                    vm->assertions_passed++;
-                    break;
-                case OP_BR:
-                    for (IRBlock *b = main_fn->entry_bb; b; b = b->next) {
+                }
+                break;
+            case OP_BR_COND:
+                if (s1) {
+                    for (IRBlock *b = cur_fn->entry_bb; b; b = b->next) {
                         if (strcmp(b->name, in->target_then) == 0) {
                             next_bb = b;
                             break;
                         }
                     }
-                    break;
-                case OP_BR_COND:
-                    if (s1) {
-                        for (IRBlock *b = main_fn->entry_bb; b; b = b->next) {
-                            if (strcmp(b->name, in->target_then) == 0) {
-                                next_bb = b;
-                                break;
-                            }
-                        }
-                    } else {
-                        for (IRBlock *b = main_fn->entry_bb; b; b = b->next) {
-                            if (strcmp(b->name, in->target_else) == 0) {
-                                next_bb = b;
-                                break;
-                            }
+                } else {
+                    for (IRBlock *b = cur_fn->entry_bb; b; b = b->next) {
+                        if (strcmp(b->name, in->target_else) == 0) {
+                            next_bb = b;
+                            break;
                         }
                     }
-                    break;
-                case OP_RET:
-                    exit_code = s1;
-                    cur_bb = NULL;
-                    next_bb = NULL;
-                    break;
-                default:
-                    break;
-            }
-
-            if (next_bb || !cur_bb) break;
-            in = in->next;
+                }
+                break;
+            default:
+                break;
         }
 
         if (next_bb) {
             cur_bb = next_bb;
-        } else if (cur_bb) {
-            cur_bb = cur_bb->next;
+            in = cur_bb->first;
+            next_bb = NULL;
+            continue;
         }
+        if (!cur_bb) break;
+        in = in->next;
     }
 
     free(vm);
