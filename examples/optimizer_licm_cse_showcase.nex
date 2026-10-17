@@ -1,0 +1,40 @@
+# ==============================================================================
+#            NEXUS SHOWCASE: CSE & LICM OPTIMIZATION PIPELINE
+# ==============================================================================
+
+fn run_cse_licm(a, b) {
+    # Common Subexpression Elimination test
+    let ab1 = a * b
+    let ab2 = a * b
+    let c1 = ab1 + ab2
+    print c1
+
+    let sum_ab1 = a + b
+    let sum_ab2 = b + a
+    let c2 = sum_ab1 + sum_ab2
+    print c2
+
+    # Loop-Invariant Code Motion (while loop)
+    let sum = 0
+    let i = 0
+    while i < 10 {
+        let inv_factor = a * 3
+        let inv_offset = inv_factor + 5
+        sum = sum + inv_offset
+        i = i + 1
+    }
+    print sum
+
+    # Loop-Invariant Code Motion (for loop)
+    let total = 0
+    for j = 0, j < 8, j++ {
+        let step_scale = b * 4
+        total = total + step_scale
+    }
+    print total
+    return c1
+}
+
+print "--- LICM & CSE Optimization Showcase ---"
+let test_res = call run_cse_licm(15, 7)
+print "=== LICM & CSE DEMO SUCCESSFUL ==="

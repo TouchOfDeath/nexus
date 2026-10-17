@@ -26,8 +26,9 @@ flowchart TD
         RAW_NIR --> P1["Pass 1: Constant Propagation & Folding"]
         P1 --> P2["Pass 2: Algebraic Identities & Strength Reduction"]
         P2 --> P3["Pass 3: Common Subexpression Elimination (CSE)"]
-        P3 --> P4["Pass 4: Dead Code Elimination (DCE)"]
-        P4 --> P5["Pass 5: HYDRON IR Recurrence & Loop Analyzer"]
+        P3 --> P4["Pass 4: Loop-Invariant Code Motion (LICM)"]
+        P4 --> P5["Pass 5: HYDRON IR Recurrence & Attractor Solver"]
+        P5 --> P6["Pass 6: Dead Code Elimination (DCE)"]
     end
     
     OPT --> OPT_NIR["Optimized N-IR"]
@@ -166,25 +167,44 @@ function @factorial(%n:i64) -> i64 {
 
 ---
 
-## 5. HYDRON Integration as an IR Pass
+## 5. Optimization Passes Pipeline
 
-In the v8 architecture, **HYDRON** transitions from string pattern matching into an **IR Loop Optimization Pass**:
+The N-IR compiler applies a multi-pass optimization pipeline across all basic blocks and loop nests:
 
+### Pass 1: Constant Propagation & Folding
+Scans basic blocks sequentially, maintaining a local constant symbol table. Directly folds binary and relational operations on constant literals (`10 + 20 -> 30`) and propagates known constant bindings across variable references.
+
+### Pass 2: Algebraic Identities & Strength Reduction
+Applies algebraic simplification identities:
+- $x + 0 \rightarrow x$, $x - 0 \rightarrow x$
+- $x \times 1 \rightarrow x$, $x \times 0 \rightarrow 0$
+- $x \div 1 \rightarrow x$
+- $x \times 2^k \rightarrow x \ll k$ (strength reduction)
+- $x \ \& \ 0 \rightarrow 0$, $x \oplus x \rightarrow 0$
+
+### Pass 3: Common Subexpression Elimination (CSE)
+Maintains an available expressions table tracking pure operations (`OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_SDIV`, `OP_SHL`, `OP_SAR`, `OP_AND`, `OP_OR`, `OP_XOR`, `OP_ICMP_*`, `OP_FADD`, etc.). Normalizes commutative operands so that `a + b` matches `b + a`. Replaces redundant evaluations with register copies (`OP_ASSIGN`), and invalidates cached entries upon variable mutation.
+
+### Pass 4: Loop-Invariant Code Motion (LICM)
+Performs loop analysis across `while` and `for` control flow structures:
+- Identifies loop headers (`while_cond_*`, `for_cond_*`), bodies, step blocks, exits, and preheader blocks.
+- Constructs mutation sets (`written_vars`) to determine which values remain loop-invariant.
+- Hoists invariant computations and dependent instruction trees out of loop bodies into preheader blocks, ensuring invariant expressions execute exactly once before loop entry.
+
+### Pass 5: HYDRON IR Recurrence & Attractor Solver
+In the v8 architecture, **HYDRON** operates directly on CFG loops:
 ```text
 Loop Basic Block: ^loop.body
   Induction Variable: %i (step $1, limit $lim)
   Recurrence Chain:   %acc_next = sdiv (add %acc, %i), $2
 ```
-
-1. **Detection**: The pass scans loop headers and extracts the recurrence recurrence matrix $[A, B, C]$.
+1. **Detection**: Scans loop headers and extracts the recurrence matrix $[A, B, C]$.
 2. **Attractor Analysis**: Computes fixed point $acc^* = i - 2$.
-3. **CFG Restructuring**:
-   - Inserts preamble block `^preamble` (64 convergence iterations).
-   - Inserts invariance test `^guard`: `icmp_eq %acc, (sub %i, $2)`.
-   - Inserts closed-form exit `^closed_form`: `%acc_final = sub $lim, $2`.
-   - Links fallback loop `^fallback` in case guard fails.
+3. **CFG Restructuring**: Replaces recurrence loops with $O(1)$ closed-form closed expressions (`acc_final = lim - 2`).
+4. **Induction Loop Solving**: Solves linear induction loops (`sum += step; i++`) directly to `sum = sum + limit * step`.
 
-This guarantees that HYDRON operates deterministically regardless of whether the source code was formatted with intermediate variables, complex expressions, or custom nesting.
+### Pass 6: Dead Code Elimination (DCE)
+Performs mark-sweep reachability analysis from `^entry` to remove unreachable basic blocks. Unlinks unused intermediate compiler temporaries (`_t*`), eliminating redundant register pressure.
 
 ---
 
@@ -202,7 +222,7 @@ The reference implementation of the NEXUS v8 N-IR engine and direct native machi
 ### 6.2 Toolchain Commands:
 ```bash
 ./nexus ir <file.nex> [out.nir]                  # Lower source to typed CFG N-IR
-./nexus ir --opt <file.nex> [out.nir]            # Run 4-pass optimizer (Fold, Algebraic, HYDRON, DCE)
+./nexus ir --opt <file.nex> [out.nir]            # Run 6-pass optimizer (ConstFold, AlgSimp, CSE, LICM, HYDRON, DCE)
 ./nexus ir --run <file.nex>                      # Execute source directly via 64-bit N-IR VM
 ./nexus ir --opt --run <file.nex>                # Execute optimized N-IR directly via VM
 ./nexus ir --emit-elf <file.nex> [app.elf]       # Compile directly to standalone native Linux ELF64 binary

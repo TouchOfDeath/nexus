@@ -1021,10 +1021,12 @@ if not os.path.exists(nexir_bin) or os.path.getmtime(os.path.join(base_dir, "too
 
 res_param = subprocess.run([nexir_bin, "--opt", "--run", os.path.join(base_dir, "examples", "parameterized_functions.nex")], capture_output=True, text=True)
 res_rec = subprocess.run([nexir_bin, "--opt", "--run", os.path.join(base_dir, "examples", "recursion_showcase.nex")], capture_output=True, text=True)
+res_opt = subprocess.run([nexir_bin, "--opt", "--run", os.path.join(base_dir, "examples", "optimizer_licm_cse_showcase.nex")], capture_output=True, text=True)
 
 if ("49" in res_param.stdout and "216" in res_param.stdout and "15.000000" in res_param.stdout and
-    "5040" in res_rec.stdout and "150" in res_rec.stdout and "All Recursive Functions Executed Successfully!" in res_rec.stdout):
-    log_pass("[+] N-IR VM & Optimizer suite: Full stack frames, recursion, & closures PASS")
+    "5040" in res_rec.stdout and "150" in res_rec.stdout and "All Recursive Functions Executed Successfully!" in res_rec.stdout and
+    "210" in res_opt.stdout and "44" in res_opt.stdout and "500" in res_opt.stdout and "224" in res_opt.stdout):
+    log_pass("[+] N-IR VM & Optimizer suite: Full stack frames, recursion, CSE & LICM PASS")
     nir_ok = True
 else:
     print("[-] N-IR VM suite: FAIL")

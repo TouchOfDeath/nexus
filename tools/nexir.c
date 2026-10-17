@@ -103,6 +103,8 @@ typedef struct {
     int num_strings;
     int opt_constants_folded;
     int opt_algebraic_simplified;
+    int opt_cse_eliminated;
+    int opt_licm_hoisted;
     int opt_dce_removed;
     int opt_hydron_loops_solved;
 } IRModule;
@@ -343,6 +345,38 @@ static void append_inst(IRBlock *bb, IRInst *inst) {
     }
 }
 
+static void unlink_inst(IRBlock *bb, IRInst *inst) {
+    if (!inst || !bb) return;
+    if (inst->prev) {
+        inst->prev->next = inst->next;
+    } else {
+        bb->first = inst->next;
+    }
+    if (inst->next) {
+        inst->next->prev = inst->prev;
+    } else {
+        bb->last = inst->prev;
+    }
+    inst->next = NULL;
+    inst->prev = NULL;
+}
+
+static void insert_inst_before(IRBlock *bb, IRInst *before, IRInst *inst) {
+    if (!bb || !inst) return;
+    if (!before) {
+        append_inst(bb, inst);
+        return;
+    }
+    inst->next = before;
+    inst->prev = before->prev;
+    if (before->prev) {
+        before->prev->next = inst;
+    } else {
+        bb->first = inst;
+    }
+    before->prev = inst;
+}
+
 static IROperand make_const_i64(int64_t val) {
     IROperand op;
     memset(&op, 0, sizeof(op));
@@ -556,7 +590,366 @@ void ir_pass_algebraic_simplification(IRModule *mod) {
     }
 }
 
-/* Pass 3: Dead Code Elimination (DCE) on Unreachable Blocks & Pure Temps */
+/* ==============================================================================
+ *                     PASS 3: COMMON SUBEXPRESSION ELIMINATION (CSE)
+ * ============================================================================== */
+
+typedef struct {
+    IROp op;
+    IROperand src1;
+    IROperand src2;
+    IROperand dst;
+} CSEEvalEntry;
+
+static int is_cse_candidate_op(IROp op) {
+    switch (op) {
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_SDIV: case OP_SREM:
+        case OP_SHL: case OP_SAR: case OP_AND: case OP_OR: case OP_XOR:
+        case OP_NEG:
+        case OP_FADD: case OP_FSUB: case OP_FMUL: case OP_FDIV:
+        case OP_FSQRT: case OP_FNEG: case OP_ITOF: case OP_FTOI:
+        case OP_ICMP_EQ: case OP_ICMP_NE: case OP_ICMP_SLT:
+        case OP_ICMP_SLE: case OP_ICMP_SGT: case OP_ICMP_SGE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int is_op_commutative(IROp op) {
+    switch (op) {
+        case OP_ADD:
+        case OP_MUL:
+        case OP_AND:
+        case OP_OR:
+        case OP_XOR:
+        case OP_FADD:
+        case OP_FMUL:
+        case OP_ICMP_EQ:
+        case OP_ICMP_NE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int is_unary_op(IROp op) {
+    return (op == OP_NEG || op == OP_FNEG || op == OP_FSQRT || op == OP_ITOF || op == OP_FTOI);
+}
+
+static int operand_equal(const IROperand *a, const IROperand *b) {
+    if (a->is_const != b->is_const) return 0;
+    if (a->type != b->type) return 0;
+    if (a->is_const) {
+        if (a->type == TYPE_F64) return a->fval == b->fval;
+        return a->ival == b->ival;
+    }
+    return (strcmp(a->name, b->name) == 0);
+}
+
+static void cse_invalidate_var(CSEEvalEntry *table, int *num_entries, const char *var_name) {
+    if (!var_name || !var_name[0]) return;
+    int i = 0;
+    while (i < *num_entries) {
+        int references_var = 0;
+        if (!table[i].src1.is_const && strcmp(table[i].src1.name, var_name) == 0) references_var = 1;
+        if (!table[i].src2.is_const && strcmp(table[i].src2.name, var_name) == 0) references_var = 1;
+        if (!table[i].dst.is_const && strcmp(table[i].dst.name, var_name) == 0) references_var = 1;
+        if (references_var) {
+            table[i] = table[--(*num_entries)];
+        } else {
+            i++;
+        }
+    }
+}
+
+void ir_pass_cse(IRModule *mod) {
+    for (IRFunction *fn = mod->functions; fn; fn = fn->next) {
+        for (IRBlock *bb = fn->entry_bb; bb; bb = bb->next) {
+            CSEEvalEntry table[256];
+            int num_entries = 0;
+
+            for (IRInst *in = bb->first; in; in = in->next) {
+                if (in->op == OP_NOP) continue;
+
+                if (is_cse_candidate_op(in->op) && in->dst.name[0]) {
+                    int match_idx = -1;
+                    for (int i = 0; i < num_entries; i++) {
+                        if (table[i].op == in->op) {
+                            int operands_match = 0;
+                            if (is_unary_op(in->op)) {
+                                if (operand_equal(&table[i].src1, &in->src1)) {
+                                    operands_match = 1;
+                                }
+                            } else if (is_op_commutative(in->op)) {
+                                if ((operand_equal(&table[i].src1, &in->src1) && operand_equal(&table[i].src2, &in->src2)) ||
+                                    (operand_equal(&table[i].src1, &in->src2) && operand_equal(&table[i].src2, &in->src1))) {
+                                    operands_match = 1;
+                                }
+                            } else {
+                                if (operand_equal(&table[i].src1, &in->src1) && operand_equal(&table[i].src2, &in->src2)) {
+                                    operands_match = 1;
+                                }
+                            }
+                            if (operands_match) {
+                                match_idx = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (match_idx != -1) {
+                        IROperand prev_dst = table[match_idx].dst;
+                        char dst_name[64];
+                        safe_strcpy(dst_name, in->dst.name, sizeof(dst_name));
+
+                        if (strcmp(prev_dst.name, dst_name) == 0) {
+                            in->op = OP_NOP;
+                        } else {
+                            in->op = OP_ASSIGN;
+                            in->src1 = prev_dst;
+                            memset(&in->src2, 0, sizeof(in->src2));
+                            in->num_args = 0;
+                        }
+                        mod->opt_cse_eliminated++;
+
+                        cse_invalidate_var(table, &num_entries, dst_name);
+                    } else {
+                        cse_invalidate_var(table, &num_entries, in->dst.name);
+
+                        if (num_entries < 256) {
+                            table[num_entries].op = in->op;
+                            table[num_entries].src1 = in->src1;
+                            table[num_entries].src2 = in->src2;
+                            table[num_entries].dst = in->dst;
+                            num_entries++;
+                        }
+                    }
+                } else if (in->dst.name[0]) {
+                    cse_invalidate_var(table, &num_entries, in->dst.name);
+                }
+            }
+        }
+    }
+}
+
+/* ==============================================================================
+ *                     PASS 4: LOOP-INVARIANT CODE MOTION (LICM)
+ * ============================================================================== */
+
+static int is_licm_candidate_op(const IRInst *in) {
+    switch (in->op) {
+        case OP_ASSIGN:
+        case OP_ADD:
+        case OP_SUB:
+        case OP_MUL:
+        case OP_SHL:
+        case OP_SAR:
+        case OP_AND:
+        case OP_OR:
+        case OP_XOR:
+        case OP_NEG:
+        case OP_FADD:
+        case OP_FSUB:
+        case OP_FMUL:
+        case OP_FSQRT:
+        case OP_FNEG:
+        case OP_ITOF:
+        case OP_FTOI:
+        case OP_ICMP_EQ:
+        case OP_ICMP_NE:
+        case OP_ICMP_SLT:
+        case OP_ICMP_SLE:
+        case OP_ICMP_SGT:
+        case OP_ICMP_SGE:
+            return 1;
+        case OP_SDIV:
+        case OP_SREM:
+            return in->src2.is_const && (in->src2.ival != 0);
+        case OP_FDIV:
+            return in->src2.is_const && (in->src2.fval != 0.0);
+        default:
+            return 0;
+    }
+}
+
+static int var_used_in_block(const IRBlock *bb, const char *var_name) {
+    if (!bb || !var_name || !var_name[0]) return 0;
+    for (const IRInst *in = bb->first; in; in = in->next) {
+        if (!in->src1.is_const && strcmp(in->src1.name, var_name) == 0) return 1;
+        if (!in->src2.is_const && strcmp(in->src2.name, var_name) == 0) return 1;
+        for (int a = 0; a < in->num_args; a++) {
+            if (!in->args[a].is_const && strcmp(in->args[a].name, var_name) == 0) return 1;
+        }
+    }
+    return 0;
+}
+
+static int var_used_before_inst_in_block(const IRBlock *bb, const IRInst *target_in, const char *var_name) {
+    if (!bb || !target_in || !var_name || !var_name[0]) return 0;
+    for (const IRInst *in = bb->first; in && in != target_in; in = in->next) {
+        if (!in->src1.is_const && strcmp(in->src1.name, var_name) == 0) return 1;
+        if (!in->src2.is_const && strcmp(in->src2.name, var_name) == 0) return 1;
+        for (int a = 0; a < in->num_args; a++) {
+            if (!in->args[a].is_const && strcmp(in->args[a].name, var_name) == 0) return 1;
+        }
+    }
+    return 0;
+}
+
+static int is_var_live_after_loop(const IRFunction *fn, const IRBlock *exit_bb, const char *var_name) {
+    (void)fn;
+    if (!exit_bb || !var_name || !var_name[0]) return 0;
+    if (var_name[0] == '_' && var_name[1] == 't') return 0;
+
+    for (const IRBlock *b = exit_bb; b; b = b->next) {
+        if (var_used_in_block(b, var_name)) return 1;
+    }
+    return 0;
+}
+
+static int is_operand_invariant(const IROperand *op, char written_vars[][64], int num_written, char hoisted_vars[][64], int num_hoisted) {
+    if (op->is_const) return 1;
+    if (!op->name[0]) return 1;
+
+    for (int i = 0; i < num_hoisted; i++) {
+        if (strcmp(hoisted_vars[i], op->name) == 0) return 1;
+    }
+
+    for (int i = 0; i < num_written; i++) {
+        if (strcmp(written_vars[i], op->name) == 0) return 0;
+    }
+
+    return 1;
+}
+
+void ir_pass_licm(IRModule *mod) {
+    for (IRFunction *fn = mod->functions; fn; fn = fn->next) {
+        for (IRBlock *cond_bb = fn->entry_bb; cond_bb; cond_bb = cond_bb->next) {
+            if (strncmp(cond_bb->name, "while_cond", 10) != 0 &&
+                strncmp(cond_bb->name, "for_cond", 8) != 0) {
+                continue;
+            }
+
+            IRInst *br_cond = NULL;
+            for (IRInst *in = cond_bb->first; in; in = in->next) {
+                if (in->op == OP_BR_COND) {
+                    br_cond = in;
+                    break;
+                }
+            }
+            if (!br_cond || !br_cond->target_then[0] || !br_cond->target_else[0]) continue;
+
+            IRBlock *body_bb = NULL;
+            IRBlock *exit_bb = NULL;
+            for (IRBlock *b = fn->entry_bb; b; b = b->next) {
+                if (strcmp(b->name, br_cond->target_then) == 0) body_bb = b;
+                if (strcmp(b->name, br_cond->target_else) == 0) exit_bb = b;
+            }
+            if (!body_bb || !exit_bb) continue;
+
+            /* Preheader is a block preceding cond_bb that branches to cond_bb */
+            IRBlock *preheader_bb = NULL;
+            for (IRBlock *b = fn->entry_bb; b && b != cond_bb; b = b->next) {
+                if (b->last && b->last->op == OP_BR && strcmp(b->last->target_then, cond_bb->name) == 0) {
+                    preheader_bb = b;
+                }
+            }
+            if (!preheader_bb) continue;
+
+            char written_vars[512][64];
+            int def_counts[512];
+            int num_written = 0;
+
+            #define LICM_RECORD_DEF(vname) do { \
+                if ((vname)[0]) { \
+                    int found = 0; \
+                    for (int i = 0; i < num_written; i++) { \
+                        if (strcmp(written_vars[i], (vname)) == 0) { \
+                            def_counts[i]++; \
+                            found = 1; \
+                            break; \
+                        } \
+                    } \
+                    if (!found && num_written < 512) { \
+                        safe_strcpy(written_vars[num_written], (vname), sizeof(written_vars[num_written])); \
+                        def_counts[num_written] = 1; \
+                        num_written++; \
+                    } \
+                } \
+            } while (0)
+
+            for (IRInst *in = cond_bb->first; in; in = in->next) {
+                LICM_RECORD_DEF(in->dst.name);
+            }
+
+            for (IRBlock *b = body_bb; b && b != exit_bb; b = b->next) {
+                for (IRInst *in = b->first; in; in = in->next) {
+                    LICM_RECORD_DEF(in->dst.name);
+                }
+            }
+
+            char hoisted_vars[256][64];
+            int num_hoisted = 0;
+
+            int progress = 1;
+            while (progress) {
+                progress = 0;
+                IRInst *in = body_bb->first;
+                while (in) {
+                    IRInst *next_in = in->next;
+
+                    if (in->op == OP_BR || in->op == OP_BR_COND) break;
+
+                    if (is_licm_candidate_op(in) && in->dst.name[0]) {
+                        int def_cnt = 0;
+                        for (int i = 0; i < num_written; i++) {
+                            if (strcmp(written_vars[i], in->dst.name) == 0) {
+                                def_cnt = def_counts[i];
+                                break;
+                            }
+                        }
+
+                        if (def_cnt == 1 &&
+                            !is_var_live_after_loop(fn, exit_bb, in->dst.name) &&
+                            !var_used_in_block(cond_bb, in->dst.name) &&
+                            !var_used_before_inst_in_block(body_bb, in, in->dst.name) &&
+                            is_operand_invariant(&in->src1, written_vars, num_written, hoisted_vars, num_hoisted) &&
+                            is_operand_invariant(&in->src2, written_vars, num_written, hoisted_vars, num_hoisted)) {
+
+                            unlink_inst(body_bb, in);
+                            if (preheader_bb->last &&
+                                (preheader_bb->last->op == OP_BR || preheader_bb->last->op == OP_BR_COND)) {
+                                insert_inst_before(preheader_bb, preheader_bb->last, in);
+                            } else {
+                                append_inst(preheader_bb, in);
+                            }
+
+                            if (num_hoisted < 256) {
+                                safe_strcpy(hoisted_vars[num_hoisted++], in->dst.name, sizeof(hoisted_vars[0]));
+                            }
+
+                            for (int i = 0; i < num_written; i++) {
+                                if (strcmp(written_vars[i], in->dst.name) == 0) {
+                                    written_vars[i][0] = '\0';
+                                    def_counts[i] = 0;
+                                    break;
+                                }
+                            }
+
+                            mod->opt_licm_hoisted++;
+                            progress = 1;
+                        }
+                    }
+                    in = next_in;
+                }
+            }
+            #undef LICM_RECORD_DEF
+        }
+    }
+}
+
+/* Pass 5: Dead Code Elimination (DCE) on Unreachable Blocks & Pure Temps */
 void ir_pass_dead_code_elimination(IRModule *mod) {
     for (IRFunction *fn = mod->functions; fn; fn = fn->next) {
         if (!fn->entry_bb) continue;
@@ -1152,7 +1545,14 @@ IRModule *build_ir_from_nexus(const char *path) {
                 if (init_eq) {
                     *init_eq = '\0';
                     char vname[64];
-                    sscanf(init_str, "%63s", vname);
+                    char *ilhs = init_str;
+                    while (*ilhs == ' ' || *ilhs == '\t') ilhs++;
+                    if (strncmp(ilhs, "var ", 4) == 0) ilhs += 4;
+                    else if (strncmp(ilhs, "let ", 4) == 0) ilhs += 4;
+                    while (*ilhs == ' ' || *ilhs == '\t') ilhs++;
+                    sscanf(ilhs, "%63s", vname);
+                    char *colon = strchr(vname, ':');
+                    if (colon) *colon = '\0';
                     lower_expression(cur_bb, init_eq + 1, vname);
                 }
 
@@ -1523,16 +1923,21 @@ IRModule *build_ir_from_nexus(const char *path) {
             continue;
         }
 
-        /* Variable assignment: let v = expr, local v = expr, or v = expr */
-        if (strncmp(p, "let ", 4) == 0 || strncmp(p, "local ", 6) == 0 || strchr(p, '=')) {
+        /* Variable assignment: let v = expr, local v = expr, var v = expr, or v = expr */
+        if (strncmp(p, "let ", 4) == 0 || strncmp(p, "local ", 6) == 0 || strncmp(p, "var ", 4) == 0 || strchr(p, '=')) {
             char vname[64];
             char *eq = strchr(p, '=');
             if (eq) {
                 *eq = '\0';
                 char *lhs = p;
+                while (*lhs == ' ' || *lhs == '\t') lhs++;
                 if (strncmp(lhs, "let ", 4) == 0) lhs += 4;
                 else if (strncmp(lhs, "local ", 6) == 0) lhs += 6;
+                else if (strncmp(lhs, "var ", 4) == 0) lhs += 4;
+                while (*lhs == ' ' || *lhs == '\t') lhs++;
                 sscanf(lhs, "%63s", vname);
+                char *colon = strchr(vname, ':');
+                if (colon) *colon = '\0';
 
                 char *rhs = eq + 1;
                 while (*rhs == ' ') rhs++;
@@ -3560,7 +3965,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s [--opt|-O2] [--run|--emit-elf|--emit-aarch64-elf|--emit-aarch64-macho] <source.nex> [output]\n", argv[0]);
         fprintf(stderr, "Commands:\n");
         fprintf(stderr, "  %s <file.nex> [out.nir]                  Emit raw lowered N-IR\n", argv[0]);
-        fprintf(stderr, "  %s --opt <file.nex> [out.nir]            Run 4 optimization passes\n", argv[0]);
+        fprintf(stderr, "  %s --opt <file.nex> [out.nir]            Run 6 optimization passes (ConstFold, AlgSimp, CSE, LICM, Hydron, DCE)\n", argv[0]);
         fprintf(stderr, "  %s --run <file.nex>                      Execute source directly via N-IR VM\n", argv[0]);
         fprintf(stderr, "  %s --opt --run <file.nex>                Execute optimized N-IR via VM\n", argv[0]);
         fprintf(stderr, "  %s --emit-elf <file.nex> [app.elf]       Compile to native Linux x86-64 ELF64 binary\n", argv[0]);
@@ -3577,6 +3982,10 @@ int main(int argc, char **argv) {
     }
 
     if (run_opt) {
+        ir_pass_constant_folding(mod);
+        ir_pass_algebraic_simplification(mod);
+        ir_pass_cse(mod);
+        ir_pass_licm(mod);
         ir_pass_constant_folding(mod);
         ir_pass_algebraic_simplification(mod);
         ir_pass_hydron_loop_solver(mod);
@@ -3629,6 +4038,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[*] N-IR Optimization Telemetry:\n");
         fprintf(stderr, "    Constant Expressions Folded:     %d\n", mod->opt_constants_folded);
         fprintf(stderr, "    Algebraic Simplifications:       %d\n", mod->opt_algebraic_simplified);
+        fprintf(stderr, "    Common Subexpressions Eliminated:%d\n", mod->opt_cse_eliminated);
+        fprintf(stderr, "    Loop-Invariant Ops Hoisted:      %d\n", mod->opt_licm_hoisted);
         fprintf(stderr, "    HYDRON Loop Attractors Solved:   %d\n", mod->opt_hydron_loops_solved);
         fprintf(stderr, "    Dead Code Eliminations:          %d\n", mod->opt_dce_removed);
     }
