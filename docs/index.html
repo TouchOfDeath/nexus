@@ -358,7 +358,7 @@
         <div class="nav-container">
             <a href="#" class="logo">
                 ⚡ NEXUS
-                <span class="logo-tag">v6.9</span>
+                <span class="logo-tag">v8.6</span>
             </a>
             <ul class="nav-links">
                 <li><a href="#features">Features</a></li>
@@ -436,32 +436,29 @@
                         <div class="code-dot"></div>
                         <div class="code-dot"></div>
                     </div>
-                    <span>showcase.nex (NEXUS v6.9)</span>
+                    <span>showcase.nex (NEXUS v8.6)</span>
                     <span>100% Native Code</span>
                 </div>
                 <pre><code><span class="kw">include</span> <span class="str">"stdlib/nstdlib.nex"</span>
+<span class="kw">include</span> <span class="str">"stdlib/ring_buffer.nex"</span>
 
-<span class="comment"># 1. Parameterized functions with expression return and default arguments</span>
-<span class="kw">fn</span> <span class="fn">greet</span>(name, times = <span class="num">1</span>) {
-    <span class="kw">let</span> i = <span class="num">0</span>
-    <span class="kw">while</span> i &lt; times {
-        <span class="kw">print</span> name
-        <span class="kw">let</span> i = i + <span class="num">1</span>
-    }
-    <span class="kw">return</span> times
+<span class="comment"># 1. Compile-time constants and operator precedence (* before +)</span>
+<span class="kw">const</span> MAX_CAP = <span class="num">65536</span>
+<span class="kw">const</span> OCT_PERM = <span class="num">0o755</span>
+<span class="kw">let</span> calc = <span class="num">1</span> + <span class="num">2</span> * <span class="num">3</span>              <span class="comment"># Evaluates to 7 (standard precedence)</span>
+
+<span class="comment"># 2. Modern range loops and null coalescing</span>
+<span class="kw">let</span> opt_title = <span class="num">0</span>
+<span class="kw">let</span> title = opt_title ?? <span class="str">"NEXUS v8.6"</span>
+<span class="kw">for</span> i <span class="kw">in</span> <span class="num">0</span>..=<span class="num">10</span> <span class="kw">step</span> <span class="num">2</span> {
+    <span class="comment"># Iterates through 0, 2, 4, 6, 8, 10</span>
 }
 
-<span class="comment"># 2. Closures & anonymous functions (Lambdas with environment capture)</span>
+<span class="comment"># 3. Closures & anonymous functions (Lambdas with environment capture)</span>
 <span class="kw">let</span> factor = <span class="num">10</span>
 <span class="kw">let</span> offset = <span class="num">7</span>
 <span class="kw">let</span> affine = |x| x * factor + offset
 <span class="kw">let</span> r_aff = affine(<span class="num">4</span>)             <span class="comment"># Evaluates to 47</span>
-
-<span class="comment"># 3. Higher-order functions accepting closures</span>
-<span class="kw">fn</span> <span class="fn">apply_twice</span>(f, val) {
-    <span class="kw">return</span> f(f(val))
-}
-<span class="kw">let</span> res = apply_twice(|x| x * <span class="num">2</span>, <span class="num">5</span>)  <span class="comment"># Evaluates to 20</span>
 
 <span class="comment"># 4. Multiple return values and tuple destructuring</span>
 <span class="kw">fn</span> <span class="fn">divmod</span>(a, b) {
@@ -469,20 +466,13 @@
 }
 <span class="kw">let</span> quotient, remainder = divmod(<span class="num">14</span>, <span class="num">3</span>)
 
-<span class="comment"># 5. Lexical local scoping and block shadowing</span>
-<span class="kw">let</span> x = <span class="num">10</span>
-<span class="kw">if</span> x &gt; <span class="num">5</span> {
-    <span class="kw">local</span> x = <span class="num">999</span>                 <span class="comment"># Strictly bounded to this { ... } block</span>
-    <span class="kw">print</span> x                       <span class="comment"># Prints 999</span>
-}
-<span class="kw">print</span> x                           <span class="comment"># Automatically unshadowed: prints 10</span>
+<span class="comment"># 5. Standard library data structures (Circular Ring Buffer / Deque)</span>
+<span class="kw">let</span> rb = nx_rb_new(<span class="num">8</span>)
+nx_rb_push_back(rb, <span class="num">100</span>)
+nx_rb_push_front(rb, <span class="num">50</span>)
+<span class="kw">let</span> front_val = nx_rb_pop_front(rb) <span class="comment"># 50</span>
 
-<span class="comment"># 6. Array literals and hardware indexing</span>
-<span class="kw">let</span> primes = [<span class="num">2</span>, <span class="num">3</span>, <span class="num">5</span>, <span class="num">7</span>, <span class="num">11</span>, <span class="num">13</span>]
-primes[<span class="num">0</span>] = <span class="num">42</span>
-<span class="kw">let</span> first = primes[<span class="num">0</span>]
-
-<span class="kw">print</span> <span class="str">"[+] NEXUS v6.9 execution successful!"</span></code></pre>
+<span class="kw">print</span> <span class="str">"[+] NEXUS v8.6 execution successful!"</span></code></pre>
             </div>
         </section>
 
@@ -502,8 +492,8 @@ primes[<span class="num">0</span>] = <span class="num">42</span>
                     <p>NEXUS does not invoke GCC, Clang, or NASM. It synthesizes x86-64 machine instructions and ELF/PE headers byte by byte directly in memory.</p>
                 </div>
                 <div class="card">
-                    <h3>28 Test Suites Passing</h3>
-                    <p>Full automated regression testing validates 25 sample programs, 13/13 compiler diagnostics, 48 foundation tests, 94 stdlib assertions, and 52 optimizer rules.</p>
+                    <h3>53+ Test Suites Passing</h3>
+                    <p>Full automated regression testing validates 27 sample programs, 13/13 compiler diagnostics, 50 foundation tests, 122 stdlib assertions, and 26 stdlib regression suites.</p>
                 </div>
             </div>
         </section>
@@ -520,9 +510,9 @@ primes[<span class="num">0</span>] = <span class="num">42</span>
                         <th>Feature / Metric</th>
                         <th>v1.0 (Seed)</th>
                         <th>v5.0 (Self-Host)</th>
-                        <th>v6.0 (Arrays)</th>
-                        <th>v6.5 (Scope)</th>
-                        <th>v6.9 (Current)</th>
+                        <th>v6.9 (Closures)</th>
+                        <th>v7.3 (HYDRON)</th>
+                        <th>v8.6 (Current)</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -538,57 +528,57 @@ primes[<span class="num">0</span>] = <span class="num">42</span>
                         <td><strong>Binary Outputs</strong></td>
                         <td>Windows PE32+</td>
                         <td>Windows PE32+</td>
-                        <td>Dual: PE + ELF64</td>
-                        <td>Tri: PE + ELF + Mach-O</td>
-                        <td><strong>Linux ELF + PE + ARM64</strong></td>
+                        <td>Linux ELF + PE + ARM64</td>
+                        <td>Linux ELF + PE + ARM64</td>
+                        <td><strong>Tri-Platform (ELF, PE, Mach-O)</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Operator Precedence</strong></td>
+                        <td>Left-to-right</td>
+                        <td>Left-to-right</td>
+                        <td>Left-to-right</td>
+                        <td>Left-to-right</td>
+                        <td><strong>Standard (*, /, % over +, -)</strong></td>
                     </tr>
                     <tr>
                         <td><strong>Functions & Returns</strong></td>
                         <td>None</td>
                         <td>Hardware ret</td>
-                        <td>Hardware ret</td>
-                        <td>fn add(a, b)</td>
-                        <td><strong>Parameterized + Multi-Return</strong></td>
+                        <td>Parameterized + Multi-Return</td>
+                        <td>Parameterized + Multi-Return</td>
+                        <td><strong>Defaults + Named Args + Tuples</strong></td>
                     </tr>
                     <tr>
                         <td><strong>Closures & Lambdas</strong></td>
                         <td>No</td>
                         <td>No</td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td><strong>Yes (|x| expr + Env Capture)</strong></td>
+                        <td>Yes (|x| expr + Env Capture)</td>
+                        <td>Yes (|x| expr + Env Capture)</td>
+                        <td><strong>First-Class Closures & Factories</strong></td>
                     </tr>
                     <tr>
-                        <td><strong>Frame Pointers</strong></td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td>Reentrant frames</td>
-                        <td><strong>Linked _nx_fp + 1MB Stack</strong></td>
+                        <td><strong>Language Ergonomics</strong></td>
+                        <td>None</td>
+                        <td>Basic if/while</td>
+                        <td>Local scoping</td>
+                        <td>Bitwise ops</td>
+                        <td><strong>const, 0..N, ??, ++/--, ? :</strong></td>
                     </tr>
                     <tr>
-                        <td><strong>Default & Named Args</strong></td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td>Named args</td>
-                        <td><strong>Default (p=v) + Named (k=v)</strong></td>
+                        <td><strong>Standard Library</strong></td>
+                        <td>None</td>
+                        <td>Arrays</td>
+                        <td>Math, Graphics</td>
+                        <td>Vec, HashMap, Poll</td>
+                        <td><strong>30+ Packages (Arena, Trie, LRU, UTF8)</strong></td>
                     </tr>
                     <tr>
-                        <td><strong>Local Scoping</strong></td>
-                        <td>Global only</td>
-                        <td>Global only</td>
-                        <td>Global only</td>
-                        <td>Block { ... }</td>
-                        <td><strong>local x + Shadowing</strong></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Pure Native IDE</strong></td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td>No</td>
-                        <td><strong>Yes (./nexus ide, 100% NEXUS)</strong></td>
+                        <td><strong>Optimization Engine</strong></td>
+                        <td>None</td>
+                        <td>None</td>
+                        <td>Basic folding</td>
+                        <td>Turbines 1–7 (SCEV Attractor)</td>
+                        <td><strong>HYDRON + Statement Fusion</strong></td>
                     </tr>
                 </tbody>
             </table>

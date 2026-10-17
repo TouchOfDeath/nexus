@@ -45,21 +45,26 @@ The three commands you will use most:
 Create `scratch/step1.nex`:
 
 ```nex
-let price = 120         # Decimal integer (also supports 0x78 hex, 0b1111000 binary)
+let price = 120         # Decimal integer (also supports 0x78 hex, 0b1111000 bin, 0o170 octal)
 let quantity = 4
 let total = price * quantity
 total += 20             # Compound assignment: +=, -=, *=, /=, %=
 print total
 print "total computed\n"
+
+# Arithmetic precedence: * and / bind tighter than + and -
+let expr1 = 1 + 2 * 3   # 7 (not 9)
+let expr2 = (1 + 2) * 3 # 9 (parentheses supported for grouping)
 ```
 
 Run it: `./nexus run scratch/step1.nex` → prints `500`.
 
 Key facts:
 - `let` declares AND assigns. Re-assigning can be done with `let var = val` or `var = val`.
-- Integer literals support Decimal (`120`), Hexadecimal (`0x78`, `0xFF00`), and Binary (`0b1010`).
-- Arithmetic chains run left to right: `2 + 3 * 4` is 20, not 14.
-- There are no parentheses — split complex math into intermediate `let`s.
+- `const` declares compile-time immutable values: `const TAX_RATE = 5`.
+- Integer literals support Decimal (`120`), Hexadecimal (`0x78`), Binary (`0b1010`), and Octal (`0o755`).
+- Arithmetic expressions follow standard operator precedence: `*`, `/`, `%` precede `+`, `-`.
+- Parentheses `(...)` are supported for explicit sub-expression grouping.
 
 ---
 
@@ -322,10 +327,20 @@ Highlights:
 | primality, fibonacci | `nx_is_prime`, `nx_fib` |
 | dynamic vectors | `stdlib/vec.nex`: `nx_vec_new`, `nx_vec_push`, `nx_vec_get`, `nx_vec_pop` |
 | hash maps | `stdlib/hashmap.nex`: `nx_hashmap_new`, `nx_hashmap_put`, `nx_hashmap_get` |
+| hash sets | `stdlib/hashset.nex`: `nx_hashset_new`, `nx_hashset_add`, `nx_hashset_contains` |
+| ring buffer & deque | `stdlib/ring_buffer.nex`: `nx_rb_new`, `nx_rb_push_back`, `nx_rb_pop_front` |
+| priority queue | `stdlib/priority_queue.nex`: `nx_pq_new`, `nx_pq_push`, `nx_pq_pop` |
+| byte buffer | `stdlib/byte_buffer.nex`: `nx_buf_new`, `nx_buf_write_u32`, `nx_buf_read_u32` |
+| bit stream | `stdlib/bit_stream.nex`: `nx_bit_writer_new`, `nx_bit_write`, `nx_bit_flush` |
+| bump arena allocator | `stdlib/arena.nex`: `nx_arena_new`, `nx_arena_alloc`, `nx_arena_reset` |
+| UTF-8 codec | `stdlib/unicode.nex`: `nx_utf8_validate`, `nx_utf8_decode_next`, `nx_utf8_encode` |
+| binary search | `stdlib/search.nex`: `nx_bsearch_exact`, `nx_bsearch_lower_bound` |
+| piece table | `stdlib/piece_table.nex`: `nx_pt_new`, `nx_pt_insert`, `nx_pt_delete` |
+| fast memory | `stdlib/memory.nex`: `nx_memmove`, `nx_memcpy`, `nx_memset`, `nx_memzero` |
 | bitwise ops | `stdlib/bitwise.nex`: `&`, `\|`, `^`, `~`, `<<`, `>>` |
 | async I/O / epoll | `stdlib/poll.nex`: `nx_poll`, `nx_epoll_create`, `nx_epoll_wait` |
 | byte arrays | `nx_arr_fill`, `nx_arr_sum`, `nx_arr_max`, `nx_arr_reverse`... |
-| strings | `nx_str_len`, `nx_str_copy`, `nx_str_cmp`, `nx_str_concat`, `nx_str_chr`, `nx_str_starts_with`, `nx_str_ends_with`, `nx_str_trim`, `nx_str_normalize_newlines`, `nx_str_escape_literal` |
+| strings | `nx_str_split`, `nx_str_join`, `nx_str_trim`, `nx_str_starts_with`, `nx_str_ends_with`, `nx_str_normalize_newlines`, `nx_str_escape_literal` |
 | conversions | `nx_str_to_int`, `nx_int_to_str` |
 
 Rule: never name your own variables with the `nx_` prefix — those slots belong
@@ -376,16 +391,21 @@ Workflow commands:
 ./nexus fmt idea.nex            # normalize formatting (idempotent)
 ./nexus new myproject           # scaffold a project with vendored stdlib
 ./nexus test --file tests/x.nex # run one test file (assert_eq macros)
-./nexus test                    # runs all 41 regression test suites
-./nexus build                   # the full 10-stage self-hosting pipeline
+./nexus test                    # runs all 53 regression test suites
+./nexus self-host               # verifies bit-for-bit self-hosting parity
+./nexus bench                   # raw AOT code-generation benchmark (50M physical iters)
+./nexus hydron                  # semantic recurrence-attractor elimination benchmark
 ```
 
 ---
 
 ## Where to go next
 
-- `docs/LANGUAGE_REFERENCE.md` — the complete grammar, operator rules, and string escapes
+- `docs/README.md` — central documentation navigation hub
+- `docs/LANGUAGE_REFERENCE.md` — complete grammar, semantics, operator precedence, and memory ops
 - `docs/BUILTINS.md` — compiler built-ins, multi-width memory ops, and stdlib API reference
-- `examples/` — 15 runnable programs, from fibonacci to prime sieves
-- `compiler/nexc.nex` — the compiler source, written in NEXUS itself
-- `tests/` — 41 comprehensive test suites validating every language feature
+- `docs/NEXUS_IR_SPECIFICATION.md` — N-IR intermediate representation architecture
+- `docs/TECHNICAL_AUDIT.md` — technical audit and engineering priorities
+- `examples/` — 27 runnable programs, from fibonacci and raycasters to GUI Flappy Bird
+- `compiler/nexc.nex` — the self-hosted compiler source, written in NEXUS itself
+- `tests/` — comprehensive regression test suites validating every language and stdlib feature

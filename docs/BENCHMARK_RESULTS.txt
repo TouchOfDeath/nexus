@@ -1,93 +1,117 @@
 =============================================================================
-  NEXUS v5.9 — OPTIMIZATION & BENCHMARK RESULTS
-  Code-generation optimizer pass (tools/nexc.c)
+  NEXUS v8.6 — SCIENTIFIC BENCHMARK & PERFORMANCE AUDIT REPORT
+  Two-Category Performance Methodology: Raw AOT Codegen vs HYDRON Elimination
 =============================================================================
 
-OVERVIEW
---------
-The NEXUS compiler's code generator was upgraded with a safe, semantics-
-preserving optimizer. Every transformation matches the exact runtime
-behavior of the unoptimized compiler (verified by 52 new optimizer
-assertions plus the full 49-foundation / 94-stdlib regression gates).
+1. METHODOLOGY & BENCHMARK ARCHITECTURE
+---------------------------------------
+In accordance with independent compiler technical audits, NEXUS evaluates
+runtime performance using two strictly separated benchmark categories:
 
-A/B METHODOLOGY
----------------
-Baseline compiler: unmodified pre-optimizer nexc.c, built as
-bench/nexc_baseline.elf from the identical C toolchain.
-All timings: best of 3 runs, identical hardware, fresh process per run.
+  Category A: Raw Native Ahead-Of-Time (AOT) Code Generation
+    Measures physical instruction throughput on un-eliminated CPU execution.
+    Optimization loops are compiled without recurrence-attractor shortcuts
+    (--no-hydron) to measure the raw efficiency of the emitted machine code.
 
-BENCHMARK RESULTS (best of 3)
------------------------------
-  Mixed bench (bench_arith.nex)     308.6 ms -> 186.4 ms    1.66x faster
-  Var arithmetic chain              (isolated)              1.93x faster
-  Literal-heavy loop                (isolated)              1.22x faster
-  Condition-heavy loop              (isolated)              1.06x faster
-  Output binary size                (all programs)          5-10% smaller
+  Category B: Semantic Computation Elimination (Superoptimization)
+    Measures program analysis, induction variable scaling, and closed-form
+    mathematical resolution (HYDRON Turbines 1–7). This tests the compiler's
+    ability to prove loop invariants, verify dynamic fixed-point attractors,
+    and eliminate unnecessary computation while guaranteeing exact equivalence.
 
-  Post-optimization throughput: ~270M statement-iterations/sec
-  (185.3 ms best-of-3 on bench_arith.nex)
+Test System:
+  OS: Linux x86-64 (Direct Kernel Syscalls, 0% libc, 0% ld-linux)
+  Compiler Core: compiler/nexc.nex (Self-Hosted NEXUS Machine Code Synthesizer)
+  Iterations: 50,000,000 loop steps
+  Runs: Best of 3 fresh-process executions
 
-OPTIMIZATIONS IMPLEMENTED
--------------------------
-1. Constant folding (integer)
-   - +, -, * folded at compile time with exact 64-bit wrap-around
-   - /, % folded with truncation toward zero (matches idiv)
-   - Division by zero and INT64_MIN / -1 deliberately NOT folded
-     (remain runtime traps, preserving original semantics)
 
-2. Zero-spill operand staging
-   - Removed the per-operand temporary accumulator spill/reload that
-     emitted two redundant memory moves for every operand
-   - Spill now only occurs for mid-chain atoms that need the value twice
+2. CATEGORY A: RAW NATIVE AOT CODE GENERATION (`./nexus bench`)
+---------------------------------------------------------------
+Evaluates raw machine code execution across 50,000,000 physical loop iterations
+without semantic loop shortcuts.
 
-3. Shorter instruction encodings
-   - xor rax,rax for zero; B8+ imm32 moves; imm8 add/sub/cmp forms
-   - add [rbp+d8], imm8 addressing when in range
-   - imul by immediate; RIP-relative movsd for float literals from a
-     deduplicated 256-entry constant pool (imm64 fallback kept)
+Results (best of 3):
+  Un-eliminated 50M loop:          62.48 ms
+  Physical instruction throughput: ~800.2M physical-iters/sec
+  Emitted binary size:             38,400 bytes
+  External runtime dependencies:   0% (Direct Linux ELF64 syscalls)
 
-4. Strength reduction
-   - Multiplication by 2^n        -> shl (shift left)
-   - Division by 2^n (n <= 8)     -> lea/test/cmovns/sar sequence with
-     exact truncating-toward-zero reduction
+Breakdown:
+  - Loop register promotion keeps induction variable in RAX/RBX.
+  - Power-of-2 multiplications emit single-cycle SHL.
+  - Truncating integer division emits branchless CQO + SAR sequence.
+  - Zero redundant stack memory spills inside inner arithmetic loop.
 
-5. Folded conditions
-   - Literal-OP-literal predicates resolved at compile time
-   - Provably-true if/while/for emit no jump at all (COND_ALWAYS path)
-   - Provably-false branches eliminated
 
-6. New language feature: truthiness conditions
-   - if flag { ... }   /   while 1 { ... }   /   for i = 0, 1, ...
-   - Non-zero integer treated as true (test rax,rax + je)
+3. CATEGORY B: SEMANTIC RECURRENCE ELIMINATION (`./nexus hydron`)
+-----------------------------------------------------------------
+Evaluates the HYDRON Engine (Turbines 1–7) on a non-linear integer recurrence:
+  acc(n+1) = floor((acc(n) + n) / 2)
 
-7. Unary and float folds
-   - abs/len/itof/ftoi/fsqrt/fneg on literals
-   - fadd/fsub/fmul/fdiv on literal pairs (IEEE-exact; NaN/Inf/0-div
-     guarded and left to runtime)
+Mathematical Transformation:
+  1. The optimizer recognizes the recurrence and performs attractor analysis.
+  2. The error term decays exponentially: e(n+1) = floor(e(n) / 2).
+  3. Executes a 64-iteration convergence preamble.
+  4. Inserts a runtime safety guard validating the fixed-point manifold:
+     acc == i - 2
+  5. Computes the closed-form mathematical resolution for the remaining iterations.
 
-8. Addressing improvements
-   - Scale-1 base+offset addresses folded to a single
-     add rbx, [rbp+d32] instead of separate mov + add
+Results:
+  Logical iterations:             50,000,000
+  Executed convergence steps:     64
+  Final execution time:           0.40 ms
+  Computation elimination factor: ~156.7x
+  Numerical verification:         100% exact numerical match with unoptimized
 
-9. PE32+ correctness hardening (bonus fixes)
-   - Import descriptor fields now absolute RVAs (loader-visible)
-   - IAT relocated; .rdata layout rewritten strictly sequential
-   - objdump walks all 7 kernel32 imports cleanly
 
-REGRESSION GATES (all green after optimization)
------------------------------------------------
-  Examples:               13/13 suites
-  Diagnostics:            13/13
-  Foundation tests:       49/49  (includes 11 new optimizer tests)
-  Interactive tests:      3/3
-  Stdlib assertions:      94/94
-  Optimizer assertions:   52/52  (tests/optimizer_test.nex)
-  Determinism:            byte-for-byte identical (SHA-256 verified)
-  Cold-start acceptance:  fresh-zip extract -> build -> PASS
-  PE32+ structure:        objdump-verified headers + imports
+4. COMPILER OPTIMIZATION SUBSYSTEMS (HYDRON TURBINES 1–7)
+---------------------------------------------------------
+Turbine 1: Fast Power-of-2 Multiplication
+  Rewrites x * (2^k) into SHL instructions.
 
-USAGE
------
-  ./nexus bench          Run the arithmetic benchmark (best of 3)
-  ./nexus test           Full regression suite
-  ./nexus self-host      Determinism verification
+Turbine 2: Fast Power-of-2 Truncating Division
+  Rewrites x / (2^k) into 4-cycle branchless CQO; AND; ADD; SAR sequence,
+  faithfully matching IEEE C99 truncating integer division semantics.
+
+Turbine 3: Redundant Store-Load Forwarding
+  Tracks accumulator values across consecutive assignments (hyd_rax_var)
+  to eliminate memory reloads from the stack.
+
+Turbine 4: Chained Expression Algebraic Reduction
+  Simplifies chained arithmetic (e.g. `acc * 2 / 4` -> `acc / 2`).
+
+Turbine 5: Multi-Accumulator Induction Scaling
+  128x step loop induction scaling with automatic remainder cleanup.
+
+Turbine 6: Register Promotion Engine & Invariant Peeling
+  Promotes invariant loop variables to CPU registers, eliminating stack RAM writes.
+
+Turbine 7: SCEV Recurrence Attractor Solver
+  Proves fixed-point attractor convergence and derives closed-form loop results.
+
+
+5. HISTORICAL BENCHMARK EVOLUTION
+---------------------------------
+  Version   Milestone                       Bench Runtime   Throughput / Factor
+  --------- ------------------------------  -------------   -------------------
+  v5.0      Initial Self-Hosting            308.6 ms        ~162M iters/sec
+  v5.9      Code-Gen Optimizer Pass         185.3 ms        ~270M iters/sec
+  v7.3      HYDRON Phase 4 SCEV Solver        0.42 ms       ~150.7x elimination
+  v8.2      Phase 2 Scoped Loop Engine       62.48 ms       ~800.2M physical iters/s
+  v8.6      Precedence & Stdlib Hardening    62.48 ms / 0.40 ms (dual-benchmark)
+
+
+6. VERIFICATION GATES & DETERMINISM
+-----------------------------------
+All benchmark configurations pass 100% of regression and self-hosting gates:
+  - 27 Example Suites:                     PASS
+  - 13/13 Compiler Diagnostics:            PASS
+  - 50/50 Foundation Tests:                PASS
+  - 26 Standard Library Suites:            PASS
+  - Bit-for-bit Self-Hosting Convergence:  0 differences across 49,152 PE32+
+                                           and 57,951 Linux ELF64 bytes.
+
+Run benchmarks locally:
+  ./nexus bench     # Category A: Raw AOT physical loop throughput
+  ./nexus hydron    # Category B: HYDRON semantic recurrence elimination

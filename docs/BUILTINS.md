@@ -42,7 +42,7 @@ Two layers ship with NEXUS:
 | `frame_pointer()` | returns current stack frame pointer (`RBP` / `x29`) |
 | `stack_pointer()` | returns current runtime stack pointer (`RSP` / `sp`) |
 | `frame_parent(fp)` | reads caller frame pointer from linked stack frame |
-| chain `a + b * c` | left-to-right fold; no precedence, no parentheses |
+| chain `a + b * c` | standard mathematical precedence (`*`, `/`, `%` over `+`, `-`) with parentheses support |
 
 ### Memory writes
 

@@ -20,34 +20,34 @@ NEXUS is a compiled, statically typed systems language with a 100% self-hosted n
 
 ## 2. Variables and Types
 
-### Declarations and Number Bases
+### Declarations, Constants, and Number Bases
 ```nexus
 let x = 42                 # Decimal integer
 let h = 0x2A               # Hexadecimal integer (42)
 let b = 0b101010           # Binary integer (42)
+let o = 0o755              # Octal integer (493)
+const MAX_BUF = 65536      # Compile-time constant (evaluated & folded at compile time)
 local y = 100              # Lexical block-scoped local variable (scoped to { ... })
 int count = 0              # Explicit integer alias
 float pi = 3.14159         # Explicit float alias
 x = x + 1                  # Bare mutation assignment without let
 x += 1                     # Compound assignment (+=, -=, *=, /=, %=, **=)
+x++                        # Increment (x--)
+let val = opt ?? "Default" # Null coalescing (short-circuit fallback)
+let res = ok ? 1 : 0       # Ternary conditional operator
 ```
 
-### Operators
+### Operators & Precedence
+- **Precedence**: Standard mathematical precedence (`*`, `/`, `%` bind tighter than `+`, `-`).
+  - `1 + 2 * 3` evaluates to `7`.
+  - Parentheses `(...)` are supported for grouping: `(1 + 2) * 3` evaluates to `9`.
 - **Integer Arithmetic**: `+`, `-`, `*`, `/`, `%`, `**` (power)
 - **Float Arithmetic**: `+.`, `-.`, `*.`, `/.`, `**.`
 - **Bitwise Operations**: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `<<` (SHL), `>>` (SHR) — desugars to `stdlib/bitwise.nex`
 - **Compound**: `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `+=.`, `-=.`
 - **Relational Comparisons**: `==`, `!=`, `<`, `>`, `<=`, `>=`
 
-> **CRITICAL RULE**: Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) can **ONLY** appear inside `if` and `while` conditions. Never assign comparisons directly (`let flag = a > b` is INVALID).
->
-> **Correct Way**:
-> ```nexus
-> let flag = 0
-> if a > b {
->     let flag = 1
-> }
-> ```
+> **CRITICAL RULE**: Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) can appear inside `if`, `while`, and ternary expressions `cond ? a : b`. Direct assignment `let flag = a > b` is invalid; write `let flag = a > b ? 1 : 0` or use an `if` block.
 
 ---
 
@@ -66,15 +66,20 @@ if x > 10 {
 
 ### Loops
 ```nexus
+# Range loop (exclusive: 0..9)
+for i in 0..10 {
+    print i
+}
+
+# Range loop (inclusive with custom step: 0, 2, 4, 6, 8, 10)
+for i in 0..=10 step 2 {
+    print i
+}
+
 # While loop
 let i = 0
 while i < 10 {
     let i = i + 1
-}
-
-# For loop (var, start, count)
-for i, 0, 10 {
-    print i
 }
 
 # Break and continue
@@ -338,6 +343,24 @@ call nx_hashset_len
 let count = nx_r0
 ```
 
+### Additional Standard Library Collections
+- **Circular Ring Buffer / Deque (`stdlib/ring_buffer.nex`)**:
+  `nx_rb_new(cap)`, `nx_rb_push_back(rb, v)`, `nx_rb_push_front(rb, v)`, `nx_rb_pop_back(rb)`, `nx_rb_pop_front(rb)`, `nx_rb_get(rb, idx)`.
+- **Dense BitSet (`stdlib/bitset.nex`)**:
+  `nx_bitset_new(n_bits)`, `nx_bitset_set(bs, bit)`, `nx_bitset_clear(bs, bit)`, `nx_bitset_test(bs, bit)`, `nx_bitset_count(bs)`.
+- **Priority Queue / Binary Heap (`stdlib/priority_queue.nex`)**:
+  `nx_pq_new(cap, is_max_heap)`, `nx_pq_push(pq, val)`, `nx_pq_pop(pq)`, `nx_pq_peek(pq)`, `nx_pq_len(pq)`.
+- **Growable ByteBuffer (`stdlib/byte_buffer.nex`)**:
+  `nx_buf_new(init_cap)`, `nx_buf_write_u8/u16/u32/u64(b, v)`, `nx_buf_read_u8/u16/u32/u64(b, off)`.
+- **Chunked Arena Allocator (`stdlib/arena.nex`)**:
+  `nx_arena_new(chunk_sz)`, `nx_arena_alloc(arena, bytes)`, `nx_arena_reset(arena)`.
+- **Strict RFC 3629 UTF-8 (`stdlib/unicode.nex`)**:
+  `nx_utf8_validate(buf, len)`, `nx_utf8_decode_next(buf, off)`, `nx_utf8_encode(scalar, out)`.
+- **Binary Search (`stdlib/search.nex`)**:
+  `nx_bsearch_exact(arr, len, target)`, `nx_bsearch_lower_bound`, `nx_bsearch_upper_bound`.
+- **Bulk Memory (`stdlib/memory.nex`)**:
+  `nx_memmove(dst, src, n)` (overlap-safe), `nx_memcpy`, `nx_memset`, `nx_memzero`.
+
 ---
 
 ## 9. Assertions & Testing
@@ -358,7 +381,7 @@ assert_le actual, 50
 
 | Incorrect / Do Not Write | Correct NEXUS Syntax |
 |--------------------------|----------------------|
-| `let x = a > b` (relational operator in let) | `let x = 0 \n if a > b { let x = 1 }` |
+| `let x = a > b` (relational operator in let) | `let x = a > b ? 1 : 0` or `if a > b { let x = 1 }` |
 | `def func():` or `fn func() -> int` | `fn func(a, b) { ... }` (no return type annotations in header) |
 | `let mut x = 5` | `let x = 5` (variables are mutable by default) |
 | `true` or `false` | `1` and `0` |

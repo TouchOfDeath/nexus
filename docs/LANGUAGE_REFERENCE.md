@@ -1,4 +1,4 @@
-# NEXUS Language Reference
+# NEXUS Language Reference (v8.6)
 
 **Target audience:** anyone writing NEXUS programs.
 **Compiler:** self-hosted `nexc` (see `compiler/nexc.nex`) and native ARM64 `nexarm64` (`tools/nexarm64.c`).
@@ -6,7 +6,7 @@
 
 > Every example in this document was compiled and executed with the project's
 > own self-hosted compiler before publication. The runnable companion suite
-> lives in `tests/stdlib_test.nex` (122 assertions).
+> lives in `tests/stdlib_test.nex` (122 assertions) and individual stdlib suites.
 
 ---
 
@@ -15,17 +15,18 @@
 A NEXUS program is a plain UTF-8 (ASCII-safe) text file with the `.nex`
 extension. Statements are line-oriented: one statement per line, execution
 proceeds top to bottom. There is no `main` function — top-level statements run
-in order; functions are declared anywhere and invoked with `call`.
+in order; functions are declared anywhere and invoked with `call` or parameterized call syntax `foo(...)`.
 
 ```nex
 # comments start with '#' and run to end of line
 print "Hello, Bare-Metal x86-64 World!"
 
-fn greet {
-    print "Hello from a function!"
+fn greet(name) {
+    print "Hello from a function, "
+    print_str name
 }
 
-call greet
+greet("NEXUS")
 ```
 
 Multi-file programs use `include` (see section 9). Structs are declared with
@@ -39,7 +40,7 @@ Multi-file programs use `include` (see section 9). Structs are declared with
 |-------------|------|
 | Comments    | `#` to end of line. `;` also starts a comment (legacy). |
 | Identifiers | Letters, digits and underscores. Multi-letter and uppercase names are supported. |
-| Integers    | **Decimal**, **Hexadecimal** (`0x...` / `0X...`), and **Binary** (`0b...` / `0B...`). Literals are 64-bit compatible signed integers. Negative numbers appear via `-n` (in comparisons, `print`, `abs`) or `0 - n`. |
+| Integers    | **Decimal**, **Hexadecimal** (`0x...` / `0X...`), **Binary** (`0b...` / `0B...`), and **Octal** (`0o...` / `0O...`). Literals are 64-bit compatible signed integers. Negative numbers appear via `-n` (in comparisons, `print`, `abs`) or `0 - n`. |
 | Strings     | Double-quoted `"..."`, stored in the binary's read-only data section (`.rdata`), null-terminated. Supports standard C-style escape sequences (see 2.3). |
 | Whitespace  | Spaces and tabs separate tokens; newlines end statements. |
 
@@ -47,7 +48,7 @@ Multi-file programs use `include` (see section 9). Structs are declared with
 Identifiers are case-sensitive: `Total` and `total` are different variables.
 
 ### 2.2 Reserved words
-`let local int float var print print_str print_float read if else while for fn call return break continue struct include import alloc load store load64 store64 load32 store32 load16 store16 fload fstore len abs itof ftoi fadd fsub fmul fdiv fsqrt fneg frame_pointer stack_pointer frame_parent file_open file_create file_read file_write file_close assert_eq assert_ne os_argc os_argv syscall`.
+`let local const int float var print print_str print_float read if else while for in step fn call return break continue struct include import alloc load store load64 store64 load32 store32 load16 store16 fload fstore len abs itof ftoi fadd fsub fmul fdiv fsqrt fneg frame_pointer stack_pointer frame_parent file_open file_create file_read file_write file_close assert_eq assert_ne os_argc os_argv syscall`.
 
 ### 2.3 String Escape Sequences (Phase 1)
 NEXUS natively decodes standard escape sequences directly into binary bytes:
@@ -93,21 +94,20 @@ Reading a variable that was never assigned does **not** fail compilation: the
 compiler silently registers it with value 0. Typos therefore compile and simply
 read zero — pick consistent names.
 
-### 3.2 Expression rules
-Expressions are arithmetic chains evaluated **strictly left to right**:
+### 3.2 Expression rules & Operator Precedence
+Expressions are evaluated using standard mathematical operator precedence:
 
-- Operators: `+  -  *  /  %` (signed 64-bit hardware `idiv` for `/` and `%`)
-- Operands: integer literals, variables, and the prefix forms below
-- **No parentheses, no operator precedence.** `2 + 3 * 4` is `(2 + 3) * 4 = 20`.
-- Each operator step must be its own statement when order matters:
-
-```nex
-# want: (a + b) / 2  ->  write it as two statements
-let t = a + b
-let t = t / 2
-```
-
-Division truncates toward zero (C semantics): `0 - 7 / 2` is `(0-7)/2 = -3`.
+- **Precedence tiers**:
+  - Highest: Parentheses `(...)` and prefix calls / loads
+  - Multiplicative: `*`, `/`, `%` (signed 64-bit hardware `imul` and `idiv`)
+  - Additive: `+`, `-`
+- **Operands**: integer literals (decimal, hex, binary, octal), variables, array elements, and prefix expressions.
+- **Precedence Example**:
+  `1 + 2 * 3` evaluates as `1 + (2 * 3) = 7`.
+  `10 - 2 * 3` evaluates as `10 - (2 * 3) = 4`.
+  `1 + 2 * 3 + 4` evaluates as `(1 + 6) + 4 = 11`.
+- **Parentheses grouping**: Parentheses can be used to override precedence: `(1 + 2) * 3` evaluates to `9`.
+- **Division truncation**: Division truncates toward zero (C semantics): `0 - 7 / 2` evaluates to `-3`.
 
 ### 3.3 Prefix forms allowed after '='
 | Form | Meaning |
@@ -277,16 +277,18 @@ let s  = fadd w0 weights[1]  # use float ops to compute with elements
 > expressions may be integer sub-expressions or float literals.
 > Nested brackets in the same statement are not supported.
 
-### 3.7 Number Bases & Bitwise Operations (v8.1)
+### 3.7 Number Bases & Bitwise Operations (v8.1, v8.4)
 
 #### Number Bases
-Integer literals can be expressed in decimal, hexadecimal, or binary:
+Integer literals can be expressed in decimal, hexadecimal, binary, or octal:
 ```nex
 let dec = 255
 let hex = 0xFF             # hexadecimal: 255
 let hex_upper = 0xDEAD     # 57005
 let bin = 0b11111111       # binary: 255
 let flags = 0b1010         # binary: 10
+let perm = 0o755           # octal POSIX permissions: 493
+let mode = 0o644           # octal: 420
 ```
 
 #### Bitwise Operators (`stdlib/bitwise.nex`)
@@ -309,6 +311,47 @@ let nx_i0 = 0xF0
 let nx_i1 = 0x0F
 call nx_bor
 assert_eq nx_r0, 255
+```
+
+### 3.8 Compile-Time Constants (`const`, v8.5)
+Constants declare immutable values evaluated and folded at compile time:
+```nex
+const MAX_BUFFER = 65536
+const COLOR_BG   = 0x11111B
+const FILE_PERM  = 0o755
+const APP_NAME   = "NEXUS"
+
+# Arithmetic expressions are folded at compile time without runtime overhead
+const TABLE_SIZE = 16 * 1024
+```
+Constants can be declared at top-level or locally within blocks, and are emitted as immediate CPU operands without stack allocation or memory loads.
+
+### 3.9 Increment & Decrement Operators (`++`, `--`, v8.4)
+Concise in-place increments and decrements:
+```nex
+let i = 0
+i++                      # desugars to: let i = i + 1
+i--                      # desugars to: let i = i - 1
+++i                      # prefix supported
+--i
+```
+
+### 3.10 Ternary Conditional Operator (`? :`, v8.4)
+Inline conditional evaluation yielding an expression:
+```nex
+let score = 85
+let grade = score >= 60 ? "Pass" : "Fail"
+let min_val = a < b ? a : b
+```
+
+### 3.11 Null Coalescing Operator (`??`, v8.5)
+Provides short-circuiting fallback evaluation for zero/null values:
+```nex
+let opt_title = 0
+let title = opt_title ?? "Untitled"       # Evaluates to "Untitled"
+
+# Guaranteed short-circuiting: RHS is never evaluated if LHS is non-zero
+let name = user_name ?? fetch_default()
 ```
 
 ---
@@ -481,9 +524,39 @@ for i = 1, i <= 5, i = i + 1 {
 print acc                 # 120
 ```
 
-Diagnostics: a missing comma produces `[!] Error: Expected ',' in for header`.
+### 5.6 Range Expressions in Loops (`..`, `..=`, `step`, v8.5)
 
-### 5.6 Test assertions (new in v5.3, preprocessor)
+NEXUS provides modern range loop syntax desugared to canonical loop headers:
+
+```nex
+# Exclusive range: 0 <= i < 10 (runs 10 times, i = 0..9)
+for i in 0..10 {
+    print i
+}
+
+# Inclusive range: 0 <= i <= 10 (runs 11 times, i = 0..10)
+for i in 0..=10 {
+    print i
+}
+
+# Custom positive stride
+for i in 0..=10 step 2 {
+    print i                # 0, 2, 4, 6, 8, 10
+}
+
+# Countdown with negative stride
+for i in 10..0 step -2 {
+    print i                # 10, 8, 6, 4, 2
+}
+
+# Bounds can be variables, constants, or expressions
+const LIMIT = 100
+for i in 0..LIMIT step 10 {
+    # ...
+}
+```
+
+### 5.7 Test assertions (preprocessor)
 
 Inside any test program the preprocessor (`bin/nexprep`, run automatically by
 `nexus run/build/test`) expands:
@@ -796,26 +869,57 @@ Rules:
 
 ---
 
-## 11. Limits and known gotchas
+## 11. Standard Library Modules
 
-| Limit / Gotcha | Detail |
-|----------------|--------|
-| 120 variables  | Program-wide symbol table (including stdlib names, which use only 12 slots) |
-| 16 block depth | `{ }` nesting limit |
-| 32-bit literals| Integer literals are 32-bit immediates |
-| No parentheses | Expressions fold strictly left to right |
-| No precedence  | `*` does not bind tighter than `+` |
-| Memory ops     | `load`/`store` (8-bit bytes); `load64`/`store64` (64-bit quadwords with `* 8` scaled indexing) |
-| Global-only vars | No locals, no parameters, no recursion |
-| Auto-vivify    | Reading an undeclared variable silently creates it (value 0) |
-| store value    | Right side of `store [p+i] v` must be a literal or variable, not an expression |
-| Condition syntax| Conditions must be `<var> <relop> <var|num> {`; expressions, `=` or missing `{` are error-gated |
-| String escapes | None — strings are raw bytes between quotes |
-| CRLF output    | `print`/`print_str` emit `\r\n` |
+NEXUS includes over 30 modular standard library packages in `stdlib/`. Include individual packages as needed or use `include "stdlib/nstdlib.nex"` for foundational utilities:
+
+### 11.1 Collections & Data Structures
+- **`stdlib/vec.nex`**: Growable dynamic heap vector (`vec_new`, `vec_push`, `vec_pop`, `vec_get`, `vec_set`, `vec_len`, `vec_free`) with geometric capacity doubling.
+- **`stdlib/hashmap.nex`**: Open-addressing hash map with string keys and linear probing (`hashmap_new`, `hashmap_put`, `hashmap_get`, `hashmap_has`, `hashmap_remove`, `hashmap_free`).
+- **`stdlib/hashset.nex`**: Set collection storing unique integers and null-terminated strings (`nx_hashset_new`, `nx_hashset_add`, `nx_hashset_add_str`, `nx_hashset_contains`, `nx_hashset_contains_str`, `nx_hashset_remove`, `nx_hashset_len`).
+- **`stdlib/ring_buffer.nex`**: Dual-mode circular ring buffer and double-ended queue (`nx_rb_new`, `nx_rb_push_back`, `nx_rb_push_front`, `nx_rb_pop_back`, `nx_rb_pop_front`, `nx_rb_get`, `nx_rb_set`, `nx_rb_rotate`, `nx_rb_reverse`, `nx_rb_clone`).
+- **`stdlib/priority_queue.nex`**: Binary min-heap and max-heap (`nx_pq_new`, `nx_pq_push`, `nx_pq_pop`, `nx_pq_peek`, `nx_pq_len`, `nx_pq_is_empty`) with O(log n) sift operations.
+- **`stdlib/linked_list.nex`**: Node-based doubly-linked list (`nx_list_new`, `nx_list_push_back`, `nx_list_push_front`, `nx_list_pop_back`, `nx_list_pop_front`, `nx_list_remove_node`) with O(1) mutations.
+- **`stdlib/trie.nex`**: Character prefix tree (`nx_trie_new`, `nx_trie_insert`, `nx_trie_contains`, `nx_trie_starts_with`, `nx_trie_remove`).
+- **`stdlib/lru_cache.nex`**: Fixed-capacity Least Recently Used cache (`nx_lru_new`, `nx_lru_get`, `nx_lru_put`, `nx_lru_contains`, `nx_lru_clear`) with open-addressing and intrusive recency list.
+- **`stdlib/piece_table.nex`**: Piece-table text buffer backing the IDE (`nx_pt_new`, `nx_pt_insert`, `nx_pt_delete`, `nx_pt_get_slice`, `nx_pt_undo`, `nx_pt_redo`).
+
+### 11.2 Memory & Binary Buffers
+- **`stdlib/arena.nex`**: Chunked bump allocator (`nx_arena_new`, `nx_arena_alloc`, `nx_arena_reset`, `nx_arena_free`) with 8-byte alignment and O(chunks) reset.
+- **`stdlib/memory.nex`**: High-performance bulk memory primitives (`nx_memmove` with overlap safety, `nx_memcpy`, `nx_memset`, `nx_memzero`).
+- **`stdlib/byte_buffer.nex`**: Growable Little-Endian byte buffer (`nx_buf_new`, `nx_buf_write_u8/u16/u32/u64`, `nx_buf_read_u8/u16/u32/u64`, `nx_buf_write_bytes`, `nx_buf_to_ptr`).
+- **`stdlib/bit_stream.nex`**: LSB-first bit-level serialization matching DEFLATE packing (`nx_bit_writer_new`, `nx_bit_write`, `nx_bit_flush`, `nx_bit_reader_new`, `nx_bit_read`).
+- **`stdlib/bitset.nex`**: Space-efficient dense bitset packing 8 flags per byte (`nx_bitset_new`, `nx_bitset_set`, `nx_bitset_clear`, `nx_bitset_test`, `nx_bitset_toggle`, `nx_bitset_count`, `nx_bitset_find_first_set`, `nx_bitset_and/or/xor/not`).
+
+### 11.3 Text, Encoding & Algorithms
+- **`stdlib/unicode.nex`**: Strict RFC 3629 UTF-8 codec (`nx_utf8_validate`, `nx_utf8_decode_next`, `nx_utf8_encode`) rejecting overlong sequences and surrogates.
+- **`stdlib/strings.nex`**: Tokenizing delimiter split (`nx_str_split`), array join (`nx_str_join`), prefix/suffix checking (`nx_str_starts_with`, `nx_str_ends_with`), whitespace trim (`nx_str_trim`), CRLF normalization (`nx_str_normalize_newlines`), and escaping (`nx_str_escape_literal`).
+- **`stdlib/search.nex`**: Binary search over sorted 64-bit arrays (`nx_binary_search`, `nx_lower_bound`, `nx_upper_bound`).
+
+### 11.4 Math, Science & Graphics
+- **`stdlib/math.nex` & `math_trig.nex`**: Core arithmetic, power, sqrt, gcd, lcm, min, max, clamp, sin, cos, tan.
+- **`stdlib/calculus.nex`, `complex.nex`, `rational.nex`, `linalg.nex`**: Differentiation, integration, complex arithmetic, exact fractions, matrix operations.
+- **`stdlib/framebuffer.nex`, `font.nex`, `x11.nex`**: Direct X11 wire protocol, 32-bit software rasterizer, 8x8 bitmap font blitter.
+- **`stdlib/poll.nex`, `http.nex`**: Linux epoll async event polling and standalone HTTP 1.1 web server.
 
 ---
 
-## 12. Complete example
+## 12. Limits and Known Best Practices
+
+| Area | Current Behavior & Best Practice |
+|:---|:---|
+| **Operator Precedence** | Standard precedence (`*`, `/`, `%` over `+`, `-`). Parentheses `(...)` are supported for explicit grouping. |
+| **Variables & Scoping** | Global symbols (`let`) and lexical block-scoped variables (`local x`). Function parameters and stack-allocated frames are isolated. |
+| **String Literals** | Full standard escape sequence support (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`, `\e`, `\xHH`). Stored in `.rdata`. |
+| **Number Literals** | Decimal, Hexadecimal (`0x...`), Binary (`0b...`), and Octal (`0o...`). Immediates are 64-bit compatible. |
+| **Memory Access** | Multi-width primitives: `load`/`store` (8-bit), `load16`/`store16` (16-bit), `load32`/`store32` (32-bit), `load64`/`store64` (64-bit with `* 8` scaled indexing). |
+| **Conditionals** | Strict `<var> <relop> <var\|num> {` syntax in `if` and `while`. Direct boolean assignments (`let b = x > y`) are invalid; use ternary `let b = x > y ? 1 : 0`. |
+| **Block Nesting** | Up to 16 levels of lexical nesting (`{ ... }`). |
+| **Console Output** | Output line endings are CRLF (`\r\n`) on both Windows PE32+ and Linux ELF64. |
+
+---
+
+## 13. Complete example
 
 A prime sieve using `alloc`, nested loops, byte memory and the stdlib
 (this exact program is shipped as `examples/prime_sieve.nex` and prints 25):

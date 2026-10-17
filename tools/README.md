@@ -1,114 +1,102 @@
-# NEXUS Developer & Debugging Toolkit Suite
-### Zero-Install Native Diagnostics for Windows Systems & Language Engineering
+# NEXUS Toolchain & Engineering Suite
+### Native Emitters, Intermediate Representation, Preprocessors, and Diagnostics
 
-This directory contains the developer and debugging suite created to support and accelerate future engineering, optimization, and expansion of the **NEXUS Native AOT Compiler**.
-
-All tools in this suite are built using **Windows pre-installed components only** (`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`), requiring **zero downloads, zero external SDKs, and zero Visual Studio installations**.
+This directory contains the core toolchain utilities, native emitters, optimizers, and diagnostic tooling supporting the **NEXUS Native AOT Compiler**.
 
 ---
 
-## 🛠️ Toolkit Overview
+## 🛠️ Complete Tools Inventory
+
+### 1. Native Emitters & Toolchain Core (C / Native Machine Code)
+
+| Tool | Source | Target | Purpose & Architecture |
+| :--- | :--- | :--- | :--- |
+| **`nexprep`** | `nexprep.c` | Linux / Windows | **Frontend Preprocessor & AST Transformer**: Performs import/include expansion, struct desugaring, operator precedence partitioning (`prec_rewrite`), statement fusion, and loop induction scaling. |
+| **`nexelf`** | `nexelf.c` | Linux x86-64 | **Standalone Linux ELF64 Emitter**: Synthesizes native ELF64 binaries executing directly via raw kernel syscalls with **0% libc and 0% loader**. |
+| **`nexarm64`** | `nexarm64.c` | macOS / Linux ARM64 | **Native ARM64 AOT Compiler**: Generates AArch64 machine instructions for Apple Silicon and Linux aarch64. |
+| **`nexmacho`** | `nexmacho.c` | macOS ARM64 | **Standalone macOS Mach-O Emitter**: Packages ARM64 code into macOS Mach-O executable binaries. |
+| **`nexir`** | `nexir.c` | Tri-Platform | **N-IR Intermediate Representation Engine**: 3-address typed SSA intermediate representation optimizer and execution VM. |
+| **`nexfmt`** | `nexfmt.c` | Tri-Platform | **Idempotent Code Formatter**: Standardizes `.nex` source code indentation, whitespace, and bracket alignment. |
+| **`nextest`** | `nextest.c` | Tri-Platform | **Native Test Assertion Harness**: Fast native runner validating test assertions and printing pass/fail tallies. |
+| **`nexload`** | `nexload.c` | Linux / POSIX | **Zero-Dependency PE32+ Bridge**: Executes PE32+ binaries on Linux for bootstrap generation validation. |
+
+---
+
+### 2. Verification, Interpretation & Fuzzing (Python)
+
+| Tool | Source | Purpose | Key Capabilities |
+| :--- | :--- | :--- | :--- |
+| **`nexinterp.py`** | `tools/nexinterp.py` | **Reference Semantic Interpreter** | Serves as the mathematical semantic oracle. Evaluates NEXUS programs without compilation to verify compiler output equivalence. |
+| **`nexdelta.py`** | `tools/nexdelta.py` | **Automated Delta Debugger** | Minimizes failing test programs into the smallest reproducible test cases via binary line-reduction. |
+| **`nexfuzz.py`** | `tools/nexfuzz.py` | **7-Way Differential Fuzzer** | Generates randomized NEXUS code and cross-compares execution results across interpreter, unoptimized native, and HYDRON optimized native. |
+| **`nexbootstrap.py`** | `tools/nexbootstrap.py` | **Bootstrap Driver** | Multi-generation compiler self-hosting verification driver. |
+| **`nexstudio.py`** | `tools/nexstudio.py` | **Reference Studio IDE** | High-level Python/Tkinter code studio used as the functional specification reference for native IDE development. |
+
+---
+
+### 3. Windows Native Diagnostics Suite (C# / Zero-Dependency)
+
+Built using Windows pre-installed components (`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`) with **zero external downloads or SDKs**:
 
 | Tool Binary | Source | Purpose | Key Capabilities |
 | :--- | :--- | :--- | :--- |
-| **`nexpedump.exe`** | [`nexpedump.cs`](file:///nexpedump.cs) | PE32+ Binary & Header Inspector | Dumps DOS, COFF, Optional Headers, Section Tables, RVAs, and Import Address Table (IAT) function names. |
-| **`nexdisasm.exe`** | [`nexdisasm.cs`](file:///nexdisasm.cs) | x86-64 Native Disassembler | Disassembles raw x86-64 machine code from `.exe` files or raw byte offsets. Decodes REX, ModR/M, SIB, and branch targets. |
-| **`nexdiff.exe`** | [`nexdiff.cs`](file:///nexdiff.cs) | Visual Side-by-Side Binary Diff | Compares two binaries byte-for-byte, maps differences to PE sections, and renders colored hex side-by-side dumps. |
-| **`nexdebug.exe`** | [`nexdebug.cs`](file:///nexdebug.cs) | Win32 Debugger & Crash Interceptor | Spawns target binaries under active native debug monitoring. Intercepts Access Violations & Division-by-Zeros, dumping RIP, registers, and stack memory. |
-| **`nexfuzz.exe`** | [`nexfuzz.cs`](file:///nexfuzz.cs) | Automated Grammar & Stress Fuzzer | Generates randomized, nested, chained NEXUS programs, compiling and running them to detect compiler panics and infinite loops. |
+| **`nexpedump.exe`** | `nexpedump.cs` | PE32+ Header Inspector | Dumps DOS, COFF, Optional Headers, Section Tables, RVAs, and Import Address Table (IAT) function names. |
+| **`nexdisasm.exe`** | `nexdisasm.cs` | x86-64 Native Disassembler | Disassembles raw x86-64 machine code from `.exe` files or byte offsets. Decodes REX, ModR/M, SIB, and branches. |
+| **`nexdiff.exe`** | `nexdiff.cs` | Visual Binary Diff | Compares two binaries byte-for-byte, maps differences to PE sections, and renders colored hex side-by-side dumps. |
+| **`nexdebug.exe`** | `nexdebug.cs` | Win32 Debugger | Spawns binaries under active native debug monitoring. Intercepts Access Violations & Division-by-Zero, dumping registers and call stack. |
+| **`nexfuzz.exe`** | `nexfuzz.cs` | Grammar Stress Fuzzer | Generates randomized NEXUS programs to stress-test Windows compilation and execution. |
 
 ---
 
 ## ⚡ Quick Start & Usage Examples
 
-### 1. Inspecting PE Headers and Imports (`nexpedump.exe`)
-Inspect any compiled executable to verify headers, alignments, and Win32 imported APIs:
+### Inspecting PE Headers (`nexpedump.exe`)
 ```powershell
-.\nexpedump.exe ..\compiler\app.exe
+.\tools\nexpedump.exe compiler\nexc.exe
 ```
-**Sample Output:**
+
+### Disassembling Emitted Machine Code (`nexdisasm.exe`)
+```powershell
+.\tools\nexdisasm.exe compiler\nexc.exe 0x200 128
 ```
-[+] File: app.exe (32,768 bytes)
---- OPTIONAL HEADER (PE32+ 64-bit) ---
-  ImageBase:           0x0000000000400000
-  AddressOfEntryPoint: 0x00001000 (VA: 0x0000000000401000)
-  SectionAlignment:    0x00001000 (4,096 bytes)
---- IMPORT DIRECTORY & FUNCTIONS ---
-  [DLL] kernel32.dll
-    IAT [0x00008028] API: GetStdHandle
-    IAT [0x00008030] API: WriteFile
-    IAT [0x00008038] API: ExitProcess
-    IAT [0x00008040] API: ReadFile
-    IAT [0x00008048] API: VirtualAlloc
-    IAT [0x00008050] API: CreateFileA
-    IAT [0x00008058] API: CloseHandle
+
+### Verifying Bit-for-Bit Identity (`nexdiff.exe`)
+```powershell
+.\tools\nexdiff.exe compiler\nexc3.exe compiler\nexc4.exe
+```
+
+### Automated Failing Test Minimization (`nexdelta.py`)
+```bash
+./nexus delta failing_test.nex
+```
+
+### Semantic Differential Fuzzing (`nexfuzz.py`)
+```bash
+./nexus fuzz --iterations 1000
+```
+
+### Code Formatting (`nexfmt`)
+```bash
+./nexus fmt examples/fibonacci.nex
 ```
 
 ---
 
-### 2. Disassembling x86-64 Machine Code (`nexdisasm.exe`)
-Disassemble the `.text` section of an executable or inspect specific byte offsets:
+## 🔨 Rebuilding Tools
+
+### Linux & macOS Emitters:
+Built automatically via `./nexus build` or:
+```bash
+gcc -O2 tools/nexprep.c -o bin/nexprep
+gcc -O2 tools/nexelf.c -o bin/nexelf
+gcc -O2 tools/nexarm64.c -o bin/nexarm64
+gcc -O2 tools/nexmacho.c -o bin/nexmacho
+gcc -O2 tools/nexir.c -o bin/nexir
+gcc -O2 tools/nexfmt.c -o bin/nexfmt
+gcc -O2 tools/nextest.c -o bin/nextest
+```
+
+### Windows C# Diagnostic Tools:
 ```powershell
-# Automatically disassembles the PE .text section:
-.\nexdisasm.exe ..\compiler\app.exe
-
-# Or specify custom file offset and length:
-.\nexdisasm.exe ..\compiler\app.exe 0x200 128
-```
-**Sample Output:**
-```
-  Offset     RVA (Virtual)      Bytes                Assembly Instruction
-  ---------------------------------------------------------------------------------------
-  0x000200   0x000000401000   48 81 EC 28 01 00 00 sub rsp, 0x128
-  0x000207   0x000000401007   48 89 E5             mov rbp, rsp
-  0x00020A   0x00000040100A   48 8D 7D 30          lea rdi, [rbp + 0x30]
-  0x00020E   0x00000040100E   B9 1A 00 00 00       mov ecx, 0x0000001A
-  0x000213   0x000000401013   31 C0                xor eax, eax
-  0x000215   0x000000401015   F3 48 AB             rep stosq
-  0x000218   0x000000401018   B9 F5 FF FF FF       mov ecx, 0xFFFFFFF5
-  0x00021D   0x00000040101D   FF 15 05 70 00 00    call qword [rip + 0x7005]
-```
-
----
-
-### 3. Comparing Two Binaries (`nexdiff.exe`)
-Compare compiler generations or check for binary regressions with side-by-side hex display:
-```powershell
-.\nexdiff.exe ..\compiler\nexc3.exe ..\compiler\nexc4.exe
-```
-**Output for Identical Binaries:**
-```
-*****************************************************************
- [***] 100% BIT-FOR-BIT IDENTICAL! ZERO DIFFERENCES FOUND! [***] 
-       Compared all 32,768 bytes with mathematical precision.
-*****************************************************************
-```
-
----
-
-### 4. Catching and Diagnosing Crashes (`nexdebug.exe`)
-Launch any executable under active native debugging monitor:
-```powershell
-.\nexdebug.exe ..\compiler\app.exe
-```
-If the binary encounters an `ACCESS_VIOLATION` or `DIVIDE_BY_ZERO`, `nexdebug` halts the crash and prints:
-- Faulting address and operation (`READ`, `WRITE`, or `EXECUTE`)
-- Full 64-bit hardware register dump (`RIP`, `RAX`, `RBX`, `RCX`, `RDX`, `RBP`, `RSP`, `R8`..`R15`)
-- Disassembled instruction bytes at the faulting `RIP`
-- 64-byte call stack memory dump at `RSP`
-
----
-
-### 5. Automated Grammar & Stress Fuzzing (`nexfuzz.exe`)
-Run randomized stress tests against `nexc.exe` to discover parser crashes, buffer overflows, or compiler hangs:
-```powershell
-.\nexfuzz.exe ..\compiler\nexc.exe 25
-```
-
----
-
-## 🔨 Rebuilding the Toolkit
-To recompile all 5 tools at any time using Windows preinstalled C# compiler:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_tools.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\build_tools.ps1
 ```
