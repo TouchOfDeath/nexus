@@ -4832,79 +4832,73 @@ static int prec_rewrite(const char *indent, const char *dest, int is_let,
     int n = prec_tokenize(rhs, tk, PREC_MAXTOK);
     if (n < 0) return 0;
     if (n < 3) return 0;                       /* nothing to reorder */
-    if (prec_no_mul(tk, n)) return 0;          /* already correct L-to-R */
-#ifdef PREC_DEBUG
-    for (int d = 0; d < n; d++) fprintf(stderr, "TOK[%d] op=%d '%s'\n", d, tk[d].is_op, tk[d].tok);
-#endif
+    if (!prec_mixed_chain(rhs)) return 0;      /* only rewrite if mixed additive & multiplicative */
 
-    /* Build segments: maximal runs of multiplicative operators. */
     char buf[MAXLINE * 8];
     buf[0] = '\0';
-    int ids[PREC_MAXTOK];
-    int nids = 0;
 
-    int i = 1;                                  /* tk[0] is the first operand */
-    int first_operand_is_temp = 0;
-    char cur[512];
-    snprintf(cur, sizeof cur, "%s", tk[0].tok);
+    /* An additive expression is a chain of terms separated by + or -:
+     * Term 0 (+|-) Term 1 (+|-) Term 2 ...
+     * Each term is an operand or a chain of operands joined by *, /, % */
+    char add_expr[MAXLINE * 4];
+    add_expr[0] = '\0';
 
-    while (i + 1 < n) {
-        char op = tk[i].tok[0];
-        if (op == '*' || op == '/' || op == '%') {
-            /* extend the running multiplicative sub-expression */
-            char nxt[640];
-            snprintf(nxt, sizeof nxt, "%s %c %s", cur, op, tk[i + 1].tok);
-            if (strlen(nxt) >= sizeof cur) return 0;
-            snprintf(cur, sizeof cur, "%s", nxt);
-            i += 2;
-            continue;
+    int t_start = 0;
+    while (t_start < n) {
+        /* Find the end of this multiplicative term */
+        int t_end = t_start; /* token index of last operand in this term */
+        while (t_end + 2 < n && (tk[t_end + 1].tok[0] == '*' || 
+                                 tk[t_end + 1].tok[0] == '/' || 
+                                 tk[t_end + 1].tok[0] == '%')) {
+            t_end += 2;
         }
-        /* additive operator: flush `cur` as a temp if it is multiplicative */
-        if (strchr(cur, '*') || strchr(cur, '/') || strchr(cur, '%')) {
-            if (nids >= PREC_MAXTOK) return 0;
+
+        char term_repr[256];
+        if (t_start == t_end) {
+            /* Single operand term */
+            snprintf(term_repr, sizeof term_repr, "%s", tk[t_start].tok);
+        } else {
+            /* Multiplicative term: build the sub-expression */
+            char term_sub[512];
+            term_sub[0] = '\0';
+            for (int k = t_start; k <= t_end; k++) {
+                if (k > t_start) strcat(term_sub, " ");
+                strcat(term_sub, tk[k].tok);
+            }
             prec_tmp_counter++;
             int id = prec_tmp_counter;
-            ids[nids++] = id;
             char line[768];
-            snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, cur);
+            snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, term_sub);
             if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
             strcat(buf, line);
-            if (first_operand_is_temp == 0 && nids == 1) first_operand_is_temp = 1;
-            snprintf(cur, sizeof cur, "_prec_%d", id);
+            snprintf(term_repr, sizeof term_repr, "_prec_%d", id);
         }
-        /* now append the additive operator and the next operand */
-        {
-            char nxt[640];
-            snprintf(nxt, sizeof nxt, "%s %c %s", cur, op, tk[i + 1].tok);
-            if (strlen(nxt) >= sizeof cur) return 0;
-            snprintf(cur, sizeof cur, "%s", nxt);
-        }
-        i += 2;
-    }
-    /* flush a trailing multiplicative run */
-    if (strchr(cur, '*') || strchr(cur, '/') || strchr(cur, '%')) {
-        if (nids >= PREC_MAXTOK) return 0;
-        prec_tmp_counter++;
-        int id = prec_tmp_counter;
-        ids[nids++] = id;
-        char line[768];
-        snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, cur);
-        if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
-        strcat(buf, line);
-        snprintf(cur, sizeof cur, "_prec_%d", id);
-    }
-    if (nids == 0) return 0;
 
-    {
-        char line[768];
-        if (is_let) {
-            snprintf(line, sizeof line, "%slet %s = %s\n", indent, dest, cur);
+        /* Append term_repr to add_expr */
+        if (t_start == 0) {
+            snprintf(add_expr, sizeof add_expr, "%s", term_repr);
         } else {
-            snprintf(line, sizeof line, "%s%s = %s\n", indent, dest, cur);
+            /* There is an additive operator before this term: tk[t_start - 1] */
+            char add_op = tk[t_start - 1].tok[0];
+            char tmp[MAXLINE * 4];
+            snprintf(tmp, sizeof tmp, "%s %c %s", add_expr, add_op, term_repr);
+            if (strlen(tmp) >= sizeof add_expr) return 0;
+            strcpy(add_expr, tmp);
         }
-        if (strlen(buf) + strlen(line) + 1 >= cap) return 0;
-        strcat(buf, line);
+
+        /* Move to the next term */
+        t_start = t_end + 2;
     }
+
+    char final_line[768];
+    if (is_let) {
+        snprintf(final_line, sizeof final_line, "%slet %s = %s\n", indent, dest, add_expr);
+    } else {
+        snprintf(final_line, sizeof final_line, "%s%s = %s\n", indent, dest, add_expr);
+    }
+    if (strlen(buf) + strlen(final_line) + 1 >= cap) return 0;
+    strcat(buf, final_line);
+
     snprintf(out, cap, "%s", buf);
     return 1;
 }
@@ -4944,6 +4938,9 @@ static int desugar_precedence(const char *in, char *out, size_t cap) {
     if (*p != '=' || p[1] == '=') return 0;
     p++;
     while (*p == ' ' || *p == '\t') p++;
+
+    /* Skip already decomposed Horner expressions */
+    if (strstr(p, "* 65536")) return 0;
 
     /* indent */
     char indent[64];

@@ -16,7 +16,7 @@ print "=== NEXUS OPTIMIZER TEST SUITE ==="
 
 # ------------------- 1. constant folding (12 assertions) -------------------
 let t1 = 2 + 3 * 4
-assert_eq t1, 20
+assert_eq t1, 14
 
 let t2 = 100 - 30 - 5
 assert_eq t2, 65
@@ -37,7 +37,7 @@ let t7 = 6 * 8
 assert_eq t7, 48
 
 let t8 = 12 + 0 - 0 * 5
-assert_eq t8, 60
+assert_eq t8, 12
 
 let t9 = 0 - 7 % 3
 assert_eq t9, 0 - 1
@@ -46,7 +46,7 @@ let t10 = 50 / 4 / 5
 assert_eq t10, 2
 
 let t11 = 2 * 3 + 4 * 5
-assert_eq t11, 50
+assert_eq t11, 26
 
 let t12 = 1 - 2 + 3 - 4 + 5
 assert_eq t12, 3

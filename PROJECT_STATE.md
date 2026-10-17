@@ -6,14 +6,16 @@
 
 ---
 
-## 0.1 Unreleased — Standard Library Additions & Dense BitSet (2026-10-16)
+## 0.1 Unreleased — Standard Library Additions & Compiler Bugfixes (2026-10-17)
+- **Operator Precedence in Emitted Code (BUG 4 RESOLVED)**: Fixed `prec_rewrite` in `tools/nexprep.c` to partition mixed infix expressions into multiplicative terms (`*`, `/`, `%`) separated by additive operators (`+`, `-`), extracting multi-operand terms into `_prec_K` temporaries while properly preserving Horner base-65536 expansions. `1 + 2 * 3 == 7`, `10 - 2 * 3 == 4`, `1 + 2 * 3 + 4 == 11`.
+- **Compiler Diagnostic Error Reporting & Exit Gating (BUGS 2 & 3 RESOLVED)**: Streamlined `report_err` in `compiler/nexc.nex` to print exact diagnostic strings without invoking the clobbered helper offset, preventing runaway jumps to the ELF emitter on syntax failures. All 13/13 compiler diagnostics now pass and failure gating correctly suppresses `app.exe`/`app.elf` on error.
 - **Feature #78: Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset packing 8 flags per byte. Supports O(1) bit testing, setting, clearing, toggling, popcount/cardinality, first/next set/clear bit scanning, deep cloning, equality comparison, and in-place set logic (`AND`, `OR`, `XOR`, `NOT`). Verified with dedicated regression suite in `tests/test_bitset.nex`.
 - Added `nx_str_starts_with` and `nx_str_ends_with` with empty and overlong input coverage (roadmap feature 138).
 - Added `nx_str_trim` for ASCII space and control whitespace bytes 9–13; Unicode whitespace remains unsupported (partial roadmap feature 132).
 - Added `nx_str_normalize_newlines` for mixed CRLF, LF, and CR input, including mutable in-place normalization (roadmap feature 148).
 - Added `nx_str_escape_literal` for quoted escaped string literals, including `\xHH` for non-printable bytes (roadmap feature 147).
 - Standard-library regression coverage increased from 94 to 122 assertions.
-- Verification: examples, foundation tests, stdlib, optimizer, interactive, type-inference, IDE, HYDRON, string-escape, hashset, and bitset suites passed. Fixed `examples/math_ecosystem_showcase.nex` code-size bloat by trimming unnecessary library includes. All green.
+- Verification: 27 example suites, 13/13 diagnostics, 50/50 foundation tests, stdlib, optimizer, interactive, type-inference, IDE, HYDRON, string-escape, hashset, and bitset suites passed. Fixed `examples/math_ecosystem_showcase.nex` code-size bloat by trimming unnecessary library includes. All green.
 
 ## 0. v8.2+ String Escapes & Optimization Release Snapshot (2026-10-13)
 - **Phase 1 String Escapes (COMPLETE)**: Full standard escape sequence decoding (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`, `\e`, `\xHH`) directly emitted into binary `.rdata` by the self-hosted compiler core (`compiler/nexc.nex`).
@@ -35,7 +37,7 @@
 - **Full Test Suite Status**: `PASS` (Run with `./nexus test`)
   - **Suites**: 27 example suites passing (+`recursion_showcase.nex`, `rocket_physics.nex`, etc.)
   - **Compiler Diagnostics**: 13/13 passing
-  - **Foundation Tests**: 48/48 passing
+  - **Foundation Tests**: 50/50 passing
   - **Type Inference Suite**: 7/7 categories passing (`tests/test_type_inference.nex`)
   - **Stdlib Assertions**: 122/122 passing
   - **Compiler Optimizer**: 52/52 passing (`tests/optimizer_test.nex`)

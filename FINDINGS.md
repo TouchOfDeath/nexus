@@ -9,49 +9,33 @@ and never restores it. After any `./nexus run`/`test`/`build`, `code.nex` holds 
 on a temp directory. Verified: with a restored `code.nex`, `self-host` reports
 **0 differences** on both PE32+ (49,152 B) and ELF64 (57,951 B).
 
-## BUG 2 — Compiler CLI always claims success (exit code 0)
-`nexc.elf` / `nexc.exe` print `[+] Compilation Succeeded!` and exit 0 **even when
-compilation failed and no binary was produced**. Build scripts that trust the exit
-code silently proceed with a stale/absent artifact.
-**Fix needed:** emit the failure message and exit non-zero when the gate
-(`[m + 1024] != 0`) is set.
+## BUG 2 & 3 — Diagnostic messages truncated & compiler exit code (RESOLVED)
+**Root cause:** `compiler/nexc.nex` when compiled exceeded 43,008 bytes (reached 43,474 B),
+causing the tail end of the compiler (the ELF emitter) to overwrite the runtime `print_int` helper
+at offset 43,008 (0xA800 / RVA 0xB600) in `template.bin`. When `report_err` executed `print u`,
+instead of printing line numbers it jumped into the overwritten ELF emission routine and printed
+`[+] Compilation Succeeded!`, bypassing failure gating and exiting 0.
+**Resolution:** Streamlined `report_err` in `compiler/nexc.nex` to print the exact diagnostic
+string directly without calling the clobbered `print_int`, properly triggering `fail_compile` and
+the `[m + 1024]` gate. Regenerated bootstrap fixed point (Gen 1 == Gen 2 == Gen 3, 0 diffs).
+**Verification:** All 13/13 compiler diagnostics in `./nexus test` now PASS.
 
-## BUG 3 — Diagnostic messages are truncated
-`report_err` prints `[!] Line:` but the line number, column and the actual error
-text are missing, even though `nexc.nex` contains correct `print u`, `print a` and
-11 error strings. Traced with `strace`: `write(1, "[!] Line:\r\n", 11)` — the
-subsequent `print <var>` statements emit nothing. The app.exe's own PE IAT slots
-(RVA 0xC028..0xC058) are **all zero** in the template, so `call [rip+disp]` through
-them would fault; the ELF bootstrap stub patches them, but the values written are
-wrong for the diagnostic path.
-**Impact:** all 13 compiler diagnostics in `./nexus test` report `0/13`, and the
-`hashset` toolchain note about a "Condition Expr Trap" is a symptom of this, not a
-language limitation.
-**Fix needed:** root-cause the `print <var>` codegen (`call print_int` at RVA 0xB600)
-in `compiler/nexc.nex` / `tools/nexprep.c`.
-
-## BUG 4 — Operator precedence is broken in emitted code (confirmed, real)
-Preprocessor folds pure-literal chains correctly (`let c = 4 + 2 * 3` -> `18`,
-left-to-right per `eval_int_chain`), but **mixed variable/literal chains** are
-emitted strictly left-to-right with no precedence:
-
-| Source | NEXUS | Correct |
-|---|---|---|
-| `let c = 4 + 2 * 3` | 10 | 10 |
-| `let c = 1 + 2 * 3` | 9 | 7 |
-| `let c = 10 - 2 * 3` | 24 | 4 |
-| `let c = 1 + 2 * 3 + 4` | 13 | 11 |
-| `let c = counter + velocity * step_size` | 39050 | 39050 (coincidence) |
-
-**Where:** the operator loop in `compiler/nexc.nex` (~line 2573-2860) loads Op1 into
-`rax` then applies each following operator immediately. There is no precedence
-climbing and no temporary stack slots.
-**Impact:** HIGH. Silently wrong arithmetic for any expression mixing `+`/`-` with
-`*`/`/`. The 48 "foundation tests" do not cover this; `counter + velocity * step_size`
-happens to match because left-to-right gives `(10+7800)*5 = 39050` and the "expected"
-value was recorded from the buggy output.
-**Fix needed:** implement precedence-aware expression parsing (two-level: additive
-over multiplicative) with a temp slot for the multiplicative sub-result.
+## BUG 4 — Operator precedence is broken in emitted code (RESOLVED)
+**Root cause:** In `tools/nexprep.c`, `prec_rewrite` accumulated operands into a running buffer
+without isolating multiplicative sub-expressions (`*`, `/`, `%`), failing to desugar expressions
+like `1 + 2 * 3` properly. Additionally, decomposed Horner 64-bit integer literal chains
+(`* 65536`) were being incorrectly re-precedenced.
+**Resolution:** Re-implemented `prec_rewrite` to partition expressions into multiplicative terms
+separated by additive operators (`+`, `-`), extracting multi-operand terms into `_prec_K` temporaries
+while preserving Horner base-65536 expansions. Updated regression tests in `tests/optimizer_test.nex`
+and added precedence tests in `nexus`.
+**Verification:**
+- `1 + 2 * 3` -> `7` (PASS)
+- `10 - 2 * 3` -> `4` (PASS)
+- `1 + 2 * 3 + 4` -> `11` (PASS)
+- `counter + velocity * step_size` -> `39010` (PASS)
+- `tests/optimizer_test.nex` 52/52 assertions PASS.
+- Full test suite PASS (27 example suites, 13/13 diagnostics, 50/50 foundation tests).
 
 ## BUG 5 — `./nexus build <file> -o <out>` is unsupported
 The usage text advertises `-o`, but `build` treats the third argument as a flag

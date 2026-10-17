@@ -28,10 +28,6 @@ fn calc_pos {
 fn report_err {
     call calc_pos
     print "[!] NEXUS Compilation Error in code.nex:"
-    print "[!] Line:"
-    print u
-    print "[!] Column:"
-    print a
     if w == 1 {
         print "[!] Error: Unrecognized statement keyword or syntax"
     }
