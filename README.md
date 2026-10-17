@@ -2,6 +2,8 @@
 ### Self-Hosted Compiler Core | Tri-Platform (Linux ELF64, Windows PE32+, macOS ARM64) | 0% libc | HYDRON Engine
 
 [![Version](https://img.shields.io/badge/version-v8.6-blue.svg)](PROJECT_STATE.md)
+[![CI](https://github.com/TouchOfDeath/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/TouchOfDeath/nexus/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Compiler](https://img.shields.io/badge/compiler-Self--Hosted%20Core-brightgreen.svg)](compiler/nexc.nex)
 [![Dependencies](https://img.shields.io/badge/libc-0%25%20(Direct%20Syscalls)-orange.svg)](compiler/nexc.elf)
 [![Architecture](https://img.shields.io/badge/arch-x86--64%20%7C%20ARM64-purple.svg)](bin/nexarm64)

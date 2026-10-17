@@ -1,0 +1,57 @@
+name: Release Packaging
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  package-release:
+    name: Package Release Assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Linux Binaries
+        run: |
+          mkdir -p bin
+          gcc -O2 tools/nexprep.c -o bin/nexprep
+          gcc -O2 tools/nexelf.c -o bin/nexelf
+          gcc -O2 tools/nexarm64.c -o bin/nexarm64
+          gcc -O2 tools/nexmacho.c -o bin/nexmacho
+          gcc -O2 tools/nexir.c -o bin/nexir
+          gcc -O2 tools/nexfmt.c -o bin/nexfmt
+          gcc -O2 tools/nextest.c -o bin/nextest
+          gcc -O2 tools/nexload.c -o bin/nexload
+          chmod +x nexus
+
+      - name: Verify Release Tests
+        run: ./nexus test
+
+      - name: Create Linux Release Archive
+        run: |
+          tar -czf nexus-${{ github.ref_name }}-linux-x86_64.tar.gz \
+            nexus build_all.sh \
+            bin/ compiler/ stdlib/ examples/ docs/ \
+            README.md LICENSE LLMS.txt
+
+      - name: Create Source Archive
+        run: |
+          zip -r nexus-${{ github.ref_name }}-complete.zip \
+            nexus nexus.cmd nexus.ps1 build_all.sh build_all.ps1 \
+            bin/ compiler/ stdlib/ examples/ tests/ tools/ docs/ \
+            README.md LICENSE LLMS.txt CHANGES.md PROJECT_STATE.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            nexus-${{ github.ref_name }}-linux-x86_64.tar.gz
+            nexus-${{ github.ref_name }}-complete.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false

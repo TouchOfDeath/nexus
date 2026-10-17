@@ -1,0 +1,58 @@
+name: NEXUS CI Pipeline
+
+on:
+  push:
+    branches: [ main, experiment/opencode ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  linux-x86_64:
+    name: Linux x86-64 (Direct Kernel ELF64 & Self-Host)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc python3
+
+      - name: Build Toolchain & Emitters
+        run: |
+          mkdir -p bin
+          gcc -O2 tools/nexprep.c -o bin/nexprep
+          gcc -O2 tools/nexelf.c -o bin/nexelf
+          gcc -O2 tools/nexarm64.c -o bin/nexarm64
+          gcc -O2 tools/nexmacho.c -o bin/nexmacho
+          gcc -O2 tools/nexir.c -o bin/nexir
+          gcc -O2 tools/nexfmt.c -o bin/nexfmt
+          gcc -O2 tools/nextest.c -o bin/nextest
+          gcc -O2 tools/nexload.c -o bin/nexload
+          chmod +x nexus build_all.sh
+
+      - name: Run Full Regression Test Suite
+        run: ./nexus test
+
+      - name: Verify Stage 5 Bit-for-Bit Self-Hosting Convergence
+        run: ./nexus self-host
+
+      - name: Run Raw AOT Code-Gen Benchmark
+        run: ./nexus bench
+
+      - name: Run HYDRON Recurrence Attractor Benchmark
+        run: ./nexus hydron
+
+  windows-x64:
+    name: Windows x64 Native Verification
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Master Windows Verification Pipeline
+        shell: powershell
+        run: .\build_all.ps1
