@@ -804,6 +804,215 @@ if os.path.exists(rb_src):
         else:
             print("[-] Circular ring buffer suite: FAIL")
 
+# Memory primitives (Features #87 & #88) regression suite
+mem_ok = False
+mem_src = os.path.join(base_dir, "tests", "test_memory.nex")
+if os.path.exists(mem_src):
+    subprocess.run([nexprep, mem_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_mem = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "MEMORY_TEST_PASS" in out_mem:
+            log_pass("[+] Memory suite: Features #87 & #88 (memmove overlap, memset, memzero) PASS")
+            mem_ok = True
+        else:
+            print("[-] Memory suite: FAIL")
+
+# Growable ByteBuffer (Feature #99) regression suite
+bb_ok = False
+bb_src = os.path.join(base_dir, "tests", "test_byte_buffer.nex")
+if os.path.exists(bb_src):
+    subprocess.run([nexprep, bb_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_bb = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "BYTE_BUFFER_TEST_PASS" in out_bb:
+            log_pass("[+] ByteBuffer suite: Feature #99 (u8/u16/u32/u64, auto-grow, read/write) PASS")
+            bb_ok = True
+        else:
+            print("[-] ByteBuffer suite: FAIL")
+
+# Bit Stream Reader & Writer (Feature #100) regression suite
+bitstream_ok = False
+bitstream_src = os.path.join(base_dir, "tests", "test_bit_stream.nex")
+if os.path.exists(bitstream_src):
+    subprocess.run([nexprep, bitstream_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_bitstream = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "BIT_STREAM_TEST_PASS" in out_bitstream:
+            log_pass("[+] Bit stream suite: Feature #100 (LSB-first bit write/read, flush, cursor) PASS")
+            bitstream_ok = True
+        else:
+            print("[-] Bit stream suite: FAIL")
+
+# Priority Queue / Binary Heap (Feature #76) regression suite
+pq_ok = False
+pq_src = os.path.join(base_dir, "tests", "test_priority_queue.nex")
+if os.path.exists(pq_src):
+    subprocess.run([nexprep, pq_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_pq = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "PRIORITY_QUEUE_TEST_PASS" in out_pq:
+            log_pass("[+] Priority queue suite: Feature #76 (min/max heap, push/pop, sift, heapsort) PASS")
+            pq_ok = True
+        else:
+            print("[-] Priority queue suite: FAIL")
+
+# Doubly-Linked List (Feature #77) regression suite
+ll_ok = False
+ll_src = os.path.join(base_dir, "tests", "test_linked_list.nex")
+if os.path.exists(ll_src):
+    subprocess.run([nexprep, ll_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_ll = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "LINKED_LIST_TEST_PASS" in out_ll:
+            log_pass("[+] Linked list suite: Feature #77 (push/pop both ends, remove node, links) PASS")
+            ll_ok = True
+        else:
+            print("[-] Linked list suite: FAIL")
+
+# Trie / Prefix Tree (Feature #80) regression suite
+trie_ok = False
+trie_src = os.path.join(base_dir, "tests", "test_trie.nex")
+if os.path.exists(trie_src):
+    subprocess.run([nexprep, trie_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_trie = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "TRIE_TEST_PASS" in out_trie:
+            log_pass("[+] Trie suite: Feature #80 (insert, contains, prefix query, remove) PASS")
+            trie_ok = True
+        else:
+            print("[-] Trie suite: FAIL")
+
+# LRU Cache (Feature #94) regression suite
+lru_ok = False
+lru_src = os.path.join(base_dir, "tests", "test_lru_cache.nex")
+if os.path.exists(lru_src):
+    subprocess.run([nexprep, lru_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_lru = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "LRU_CACHE_TEST_PASS" in out_lru:
+            log_pass("[+] LRU cache suite: Feature #94 (eviction order, refresh, revive, rebuild) PASS")
+            lru_ok = True
+        else:
+            print("[-] LRU cache suite: FAIL")
+
+# Arena Bump Allocator (Feature #96) regression suite
+arena_ok = False
+arena_src = os.path.join(base_dir, "tests", "test_arena.nex")
+if os.path.exists(arena_src):
+    subprocess.run([nexprep, arena_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_arena = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "ARENA_TEST_PASS" in out_arena:
+            log_pass("[+] Arena suite: Feature #96 (chunked bump alloc, alignment, O(1) reset) PASS")
+            arena_ok = True
+        else:
+            print("[-] Arena suite: FAIL")
+
+# UTF-8 Validate / Decode / Encode (Features #113-115) regression suite
+utf_ok = False
+utf_src = os.path.join(base_dir, "tests", "test_unicode.nex")
+if os.path.exists(utf_src):
+    subprocess.run([nexprep, utf_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_utf = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "UNICODE_TEST_PASS" in out_utf:
+            log_pass("[+] Unicode suite: Features #113-115 (strict UTF-8 validate, decode, encode) PASS")
+            utf_ok = True
+        else:
+            print("[-] Unicode suite: FAIL")
+
+# String Split / Join (Features #133 & #134) regression suite
+splitjoin_ok = False
+splitjoin_src = os.path.join(base_dir, "tests", "test_string_split_join.nex")
+if os.path.exists(splitjoin_src):
+    subprocess.run([nexprep, splitjoin_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_splitjoin = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "STRING_SPLIT_JOIN_TEST_PASS" in out_splitjoin:
+            log_pass("[+] Split/Join suite: Features #133 & #134 (delimiter split, separator join) PASS")
+            splitjoin_ok = True
+        else:
+            print("[-] Split/Join suite: FAIL")
+
+# Binary Search Primitives (Feature #93) regression suite
+search_ok = False
+search_src = os.path.join(base_dir, "tests", "test_search.nex")
+if os.path.exists(search_src):
+    subprocess.run([nexprep, search_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_search = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "BINARY_SEARCH_TEST_PASS" in out_search:
+            log_pass("[+] Binary search suite: Feature #93 (exact, lower bound, upper bound) PASS")
+            search_ok = True
+        else:
+            print("[-] Binary search suite: FAIL")
+
 s_ok = "PASS" if stdlib_ok else "FAIL"
 o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
@@ -816,10 +1025,21 @@ range_status = "PASS" if range_ok else "FAIL"
 hashset_status = "PASS" if hs_ok else "FAIL"
 bitset_status = "PASS" if bs_ok else "FAIL"
 ring_buffer_status = "PASS" if rb_ok else "FAIL"
+mem_status = "PASS" if mem_ok else "FAIL"
+bb_status = "PASS" if bb_ok else "FAIL"
+bitstream_status = "PASS" if bitstream_ok else "FAIL"
+pq_status = "PASS" if pq_ok else "FAIL"
+ll_status = "PASS" if ll_ok else "FAIL"
+trie_status = "PASS" if trie_ok else "FAIL"
+lru_status = "PASS" if lru_ok else "FAIL"
+arena_status = "PASS" if arena_ok else "FAIL"
+utf_status = "PASS" if utf_ok else "FAIL"
+splitjoin_status = "PASS" if splitjoin_ok else "FAIL"
+search_status = "PASS" if search_ok else "FAIL"
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle, memory_bundle, byte_buffer_bundle, bit_stream_bundle, priority_queue_bundle, linked_list_bundle, trie_bundle, lru_bundle, arena_bundle, unicode_bundle, split_join_bundle, binary_search_bundle (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}, memory={mem_status}, byte_buffer={bb_status}, bit_stream={bitstream_status}, priority_queue={pq_status}, linked_list={ll_status}, trie={trie_status}, lru={lru_status}, arena={arena_status}, unicode={utf_status}, split_join={splitjoin_status}, binary_search={search_status}")
 '
         ;;
     self-host)

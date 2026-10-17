@@ -1,0 +1,200 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: linked_list.nex
+#               Doubly-Linked List (Feature #77)
+# ==============================================================================
+#
+# A node-based bidirectional linked list for LRU cache management, tab
+# ordering, and ordered traversal with O(1) insertion and removal at both
+# ends plus O(1) removal of any node handle.
+#
+# Node layout (24 bytes on the heap):
+#   offset 0:  prev - pointer to the previous node (0 = none)
+#   offset 8:  next - pointer to the next node (0 = none)
+#   offset 16: val  - 64-bit payload (value, pointer, or handle)
+#
+# List layout (32-byte descriptor on the heap):
+#   offset 0:  head - first node pointer (0 = empty)
+#   offset 8:  tail - last node pointer (0 = empty)
+#   offset 16: len  - element count
+#   offset 24: reserved
+#
+# Node handles returned by push/remove-style calls stay valid for the
+# lifetime of the list and can be passed to nx_list_remove_node, read via
+# nx_list_node_val, or walked manually via [node + 8] (next) links.
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = list handle (or node handle for nx_list_node_val)
+#   nx_i1 = value to store (push) or node handle (remove)
+#   nx_r0 = result (handle, value, length, or status flag)
+#
+# Internal variables use per-function unique prefixes (_lln_*, _llb_*, _llf_*,
+# _llpb_*, _llpf_*, _llrm_*, _llh_*, _llt_*, _llv_*) so no clobbering occurs.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_list_new : nx_r0 = new empty doubly-linked list
+# ------------------------------------------------------------------------------
+fn nx_list_new {
+    let _lln_desc = alloc 32
+    store64 [_lln_desc + 0] 0
+    store64 [_lln_desc + 8] 0
+    store64 [_lln_desc + 16] 0
+    store64 [_lln_desc + 24] 0
+    let nx_r0 = _lln_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_push_back : appends value nx_i1 to the end of list nx_i0
+#   nx_r0 = node handle of the new element
+# ------------------------------------------------------------------------------
+fn nx_list_push_back {
+    let _llb_l = nx_i0
+    let _llb_val = nx_i1
+    let _llb_node = alloc 24
+    store64 [_llb_node + 0] 0
+    store64 [_llb_node + 8] 0
+    store64 [_llb_node + 16] _llb_val
+    let _llb_tail = load64 [_llb_l + 8]
+    if _llb_tail == 0 {
+        store64 [_llb_l + 0] _llb_node
+        store64 [_llb_l + 8] _llb_node
+    } else {
+        store64 [_llb_node + 0] _llb_tail
+        store64 [_llb_tail + 8] _llb_node
+        store64 [_llb_l + 8] _llb_node
+    }
+    let _llb_len = load64 [_llb_l + 16]
+    let _llb_new_len = _llb_len + 1
+    store64 [_llb_l + 16] _llb_new_len
+    let nx_r0 = _llb_node
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_push_front : prepends value nx_i1 to the start of list nx_i0
+#   nx_r0 = node handle of the new element
+# ------------------------------------------------------------------------------
+fn nx_list_push_front {
+    let _llf_l = nx_i0
+    let _llf_val = nx_i1
+    let _llf_node = alloc 24
+    store64 [_llf_node + 0] 0
+    store64 [_llf_node + 8] 0
+    store64 [_llf_node + 16] _llf_val
+    let _llf_head = load64 [_llf_l + 0]
+    if _llf_head == 0 {
+        store64 [_llf_l + 0] _llf_node
+        store64 [_llf_l + 8] _llf_node
+    } else {
+        store64 [_llf_node + 8] _llf_head
+        store64 [_llf_head + 0] _llf_node
+        store64 [_llf_l + 0] _llf_node
+    }
+    let _llf_len = load64 [_llf_l + 16]
+    let _llf_new_len = _llf_len + 1
+    store64 [_llf_l + 16] _llf_new_len
+    let nx_r0 = _llf_node
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_pop_back : removes and returns the last value of list nx_i0
+#   nx_r0 = value (0 if the list is empty)
+# ------------------------------------------------------------------------------
+fn nx_list_pop_back {
+    let _llpb_l = nx_i0
+    let _llpb_tail = load64 [_llpb_l + 8]
+    let nx_r0 = 0
+    if _llpb_tail != 0 {
+        let nx_r0 = load64 [_llpb_tail + 16]
+        let _llpb_prev = load64 [_llpb_tail + 0]
+        if _llpb_prev == 0 {
+            store64 [_llpb_l + 0] 0
+            store64 [_llpb_l + 8] 0
+        } else {
+            store64 [_llpb_prev + 8] 0
+            store64 [_llpb_l + 8] _llpb_prev
+        }
+        let _llpb_len = load64 [_llpb_l + 16]
+        let _llpb_new_len = _llpb_len - 1
+        store64 [_llpb_l + 16] _llpb_new_len
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_pop_front : removes and returns the first value of list nx_i0
+#   nx_r0 = value (0 if the list is empty)
+# ------------------------------------------------------------------------------
+fn nx_list_pop_front {
+    let _llpf_l = nx_i0
+    let _llpf_head = load64 [_llpf_l + 0]
+    let nx_r0 = 0
+    if _llpf_head != 0 {
+        let nx_r0 = load64 [_llpf_head + 16]
+        let _llpf_next = load64 [_llpf_head + 8]
+        if _llpf_next == 0 {
+            store64 [_llpf_l + 0] 0
+            store64 [_llpf_l + 8] 0
+        } else {
+            store64 [_llpf_next + 0] 0
+            store64 [_llpf_l + 0] _llpf_next
+        }
+        let _llpf_len = load64 [_llpf_l + 16]
+        let _llpf_new_len = _llpf_len - 1
+        store64 [_llpf_l + 16] _llpf_new_len
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_remove_node : unlinks node handle nx_i1 from list nx_i0
+#   nx_r0 = 1 on success, 0 if the handle is null
+# ------------------------------------------------------------------------------
+fn nx_list_remove_node {
+    let _llrm_l = nx_i0
+    let _llrm_node = nx_i1
+    let nx_r0 = 0
+    if _llrm_node != 0 {
+        let _llrm_prev = load64 [_llrm_node + 0]
+        let _llrm_next = load64 [_llrm_node + 8]
+        if _llrm_prev == 0 {
+            store64 [_llrm_l + 0] _llrm_next
+        } else {
+            store64 [_llrm_prev + 8] _llrm_next
+        }
+        if _llrm_next == 0 {
+            store64 [_llrm_l + 8] _llrm_prev
+        } else {
+            store64 [_llrm_next + 0] _llrm_prev
+        }
+        let _llrm_len = load64 [_llrm_l + 16]
+        let _llrm_new_len = _llrm_len - 1
+        store64 [_llrm_l + 16] _llrm_new_len
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_len : nx_r0 = element count of list nx_i0
+# ------------------------------------------------------------------------------
+fn nx_list_len {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_head : nx_r0 = first node handle of list nx_i0 (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_list_head {
+    let nx_r0 = load64 [nx_i0 + 0]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_tail : nx_r0 = last node handle of list nx_i0 (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_list_tail {
+    let nx_r0 = load64 [nx_i0 + 8]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_list_node_val : nx_r0 = payload stored in node handle nx_i0
+# ------------------------------------------------------------------------------
+fn nx_list_node_val {
+    let nx_r0 = load64 [nx_i0 + 16]
+}

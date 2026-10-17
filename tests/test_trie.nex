@@ -1,0 +1,252 @@
+# Test: Trie / Prefix Tree (Feature #80, stdlib/trie.nex)
+include "stdlib/trie.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Empty trie behavior
+# ==============================================================================
+call nx_trie_new
+let t1 = nx_r0
+
+let nx_i0 = t1
+let nx_i1 = "apple"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "app"
+call nx_trie_starts_with
+assert_eq nx_r0, 0
+
+# the empty prefix always walks the root
+let nx_i0 = t1
+let nx_i1 = ""
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = ""
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 2: Insert and exact contains
+# ==============================================================================
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+# duplicate insert returns 0
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_insert
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "car"
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cart"
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "car"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cart"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+# missing words
+let nx_i0 = t1
+let nx_i1 = "ca"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "dogs"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "cau"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 3: Prefix queries
+# ==============================================================================
+let nx_i0 = t1
+let nx_i1 = "c"
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "ca"
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "car"
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cart"
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+# "cartx" extends past any inserted word
+let nx_i0 = t1
+let nx_i1 = "cartx"
+call nx_trie_starts_with
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "d"
+call nx_trie_starts_with
+assert_eq nx_r0, 0
+
+# contains is not prefix-matching
+let nx_i0 = t1
+let nx_i1 = "ca"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: Shared prefixes and branch independence
+# ==============================================================================
+let nx_i0 = t1
+let nx_i1 = "dog"
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "dot"
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "dog"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "dot"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "do"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "do"
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "don"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 5: Empty string word
+# ==============================================================================
+let nx_i0 = t1
+let nx_i1 = ""
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = ""
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = ""
+call nx_trie_remove
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = ""
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 6: Remove semantics
+# ==============================================================================
+let nx_i0 = t1
+let nx_i1 = "cart"
+call nx_trie_remove
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cart"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+# removing a non-word fails
+let nx_i0 = t1
+let nx_i1 = "cart"
+call nx_trie_remove
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "xyzzy"
+call nx_trie_remove
+assert_eq nx_r0, 0
+
+# prefix words still exist after removing a longer word
+let nx_i0 = t1
+let nx_i1 = "car"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "ca"
+call nx_trie_starts_with
+assert_eq nx_r0, 1
+
+# removing "cat" keeps "car" intact (shared branch)
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_remove
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = t1
+let nx_i1 = "car"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+# re-insert after removal works
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_insert
+assert_eq nx_r0, 1
+
+let nx_i0 = t1
+let nx_i1 = "cat"
+call nx_trie_contains
+assert_eq nx_r0, 1
+
+print "TRIE_TEST_PASS"

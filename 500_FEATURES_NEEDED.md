@@ -125,31 +125,31 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 73. **Ordered Set (`BTreeSet<T>`)**: Sorted set for tracking active breakpoint line numbers and diagnostic markers.
 74. [x] **Double-Ended Queue (`Deque<T>`) (`stdlib/ring_buffer.nex`)**: Ring-buffer backed double-ended queue with amortized O(1) push and pop at both head and tail, logical random access, and geometric auto-expansion.
 75. [x] **Circular Ring Buffer (`stdlib/ring_buffer.nex`)**: Fixed-capacity circular buffer with overwrite eviction mode, dropped count tracking, in-place rotation, linearization, and reversal for console output streaming, logging history, and audio sample mixing.
-76. **Priority Queue / Binary Heap**: Heap structure for scheduling asynchronous UI timer callbacks and sorting diagnostic errors by severity.
-77. **Doubly-Linked List**: Node-based list with bidirectional links for LRU cache management and tab ordering.
+76. [x] **Priority Queue / Binary Heap (`stdlib/priority_queue.nex`)**: Binary heap priority queue supporting both min-heap and max-heap modes with O(log n) push/pop, sift-up/sift-down rebalancing, peek, auto-doubling growth, duplicate and negative value handling (`stdlib/priority_queue.nex`).
+77. [x] **Doubly-Linked List (`stdlib/linked_list.nex`)**: Node-based bidirectional list with O(1) push/pop at both ends, O(1) removal of any node handle, bidirectional link walkability, and head/tail/value accessors for LRU cache management and tab ordering (`stdlib/linked_list.nex`).
 78. [x] **Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset for tracking dirty line flags and boolean selection masks across large files. Supports creation, indexing, bit manipulation (set, clear, toggle, test), popcount/cardinality, first/next bit searches, and bitwise operations (AND, OR, XOR, NOT).
 79. **Bloom Filter**: Probabilistic filter for instantaneous negative lookups across vast codebase symbol indexes.
-80. **Trie / Prefix Tree**: Character trie for blazing-fast prefix autocompletion and keyword dictionary queries.
+80. [x] **Trie / Prefix Tree (`stdlib/trie.nex`)**: Character trie with parallel branch arrays supporting insert, exact contains, prefix queries, word removal (terminator unmarking), shared prefixes, and the empty-string word (`stdlib/trie.nex`).
 81. **Compressed Radix Tree (Patricia Tree)**: Space-optimized prefix tree for path routing and symbol namespace resolution.
 82. **Interval Tree**: Tree structure for querying overlapping text ranges, syntax highlight spans, and code folding regions in O(log N).
 83. **Spatial QuadTree**: 2D spatial partitioning tree for accelerating hit-testing across thousands of visual UI elements.
 84. **Line Offset Index Table**: Dynamic array of byte offsets corresponding to line numbers for O(1) line-to-byte and byte-to-line coordinate translation.
 85. **Undo / Redo Command History Stack**: Bounded or unbounded dual-stack tracking inverse edit operations for atomic multi-step rollback.
 86. **Selection Range Model**: Data structure representing multiple disjoint non-contiguous text selections and rectangular columnar cursors.
-87. **Fast Memory Move (`memmove`)**: Hardware-accelerated overlapping buffer copy using rep movsb or AVX registers for gap buffer shifts.
-88. **Fast Memory Zero (`memzero` / `memset`)**: Vectorized zeroing routine for clearing framebuffers and resetting allocated buffers.
+87. [x] **Fast Memory Move (`memmove`) (`stdlib/memory.nex`)**: Overlap-safe byte-granular move selecting forward copy when dst < src and backward copy when dst > src, with a no-op on identical buffers and zero-length requests (`stdlib/memory.nex`).
+88. [x] **Fast Memory Zero (`memzero` / `memset`) (`stdlib/memory.nex`)**: Byte-granular fill/zero primitives over arbitrary ranges with low-byte truncation semantics and zero-length no-op guarantees, plus a forward-only `nx_memcpy` companion (`stdlib/memory.nex`).
 89. **Buffer Search via Knuth-Morris-Pratt (KMP)**: Linear-time string searching algorithm with precomputed failure function for fast pattern matching.
 90. **Boyer-Moore-Horspool String Search**: Sub-linear average time pattern search algorithm skipping characters using bad-character shift tables.
 91. **Aho-Corasick Multi-Pattern Search**: Automaton-based search finding all syntax keywords and token delimiters in a single linear pass.
 92. **Generic Sorting Algorithm (TimSort / IntroSort)**: Stable, high-performance hybrid sort for ordering files, diagnostic lists, and search results.
-93. **Binary Search Primitives**: Lower-bound and upper-bound binary search routines on sorted collections for rapid line-number resolution.
-94. **LRU (Least Recently Used) Cache**: Fixed-capacity cache evicting stale cached rendered glyphs and file ASTs.
+93. [x] **Binary Search Primitives (`stdlib/search.nex`)**: Exact-match (first occurrence), lower-bound, and upper-bound binary searches over sorted 64-bit arrays with overflow-free midpoint computation, returning half-open duplicate ranges and ascending insertion points (`stdlib/search.nex`).
+94. [x] **LRU (Least Recently Used) Cache (`stdlib/lru_cache.nex`)**: Fixed-capacity cache combining an open-addressing hash table with an intrusive doubly-linked recency list: O(1) get/put with recency refresh, tail eviction with tombstone revival, automatic tombstone rebuild, and value-0-safe membership queries (`stdlib/lru_cache.nex`).
 95. **String Interning Pool (String Interner)**: Global deduplicated string table mapping string slices to 32-bit integer symbols (`SymbolId`).
-96. **Arena Allocator for Document ASTs**: Fast bump-allocator releasing all compiler/parser AST nodes in a single O(1) reset pass per frame.
+96. [x] **Arena Allocator for Document ASTs (`stdlib/arena.nex`)**: Chunked bump allocator with 8-byte aligned O(1) allocations, automatic chunk chaining (default and oversized chunk sizes), usage/capacity/chunk-count metrics, and a single-pass reset that retains chunks for reuse (`stdlib/arena.nex`).
 97. **Slab Allocator**: Fixed-size chunk allocator avoiding heap fragmentation for editor piece descriptors and UI event nodes.
 98. **Pool Allocator**: Pre-allocated object pool recycling frequently allocated UI event structs.
-99. **Byte Array Buffer Builder (`ByteBuffer`)**: Growable byte buffer for serializing X11 wire protocol packets and binary ELF headers.
-100. **Bit Reader / Bit Writer**: Bit-level stream reader and writer for decoding compressed font tables and icon assets.
+99. [x] **Byte Array Buffer Builder (`ByteBuffer`) (`stdlib/byte_buffer.nex`)**: Heap-backed growable byte buffer with automatic capacity doubling and little-endian u8/u16/u32/u64 append plus offset-based reads, raw block writes, direct data-pointer export, and OOB-safe semantics (`stdlib/byte_buffer.nex`).
+100. [x] **Bit Reader / Bit Writer (`stdlib/bit_stream.nex`)**: LSB-first bit-level stream writer (growable buffer, 1-63 bit appends, byte-boundary flush) and reader (cursor-based reads over any byte buffer) for decoding compressed font tables and icon assets (`stdlib/bit_stream.nex`).
 101. **Myers Difference Algorithm (Diff Engine)**: Minimal edit script generator computing line-by-line diffs for Git integration and merge views.
 102. **Patience Diff Algorithm**: Syntactically pleasing diff generator aligning unique lines for cleaner code patch reviews.
 103. **Text Wrap Measurement Cache**: Cache storing measured pixel widths for wrapped text lines to eliminate expensive reflow recalculations.
@@ -167,9 +167,9 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 
 111. **Heap-Allocated Dynamic String (`String`)**: Growable UTF-8 string with length, capacity, and automatic null-termination safety.
 112. **Zero-Copy String Slice (`&str`)**: Pointer and byte-length pair referencing a sub-string without copying or heap allocation.
-113. **UTF-8 Validation Routine**: Validation function ensuring incoming file bytes strictly adhere to the Unicode UTF-8 byte sequence specification.
-114. **UTF-8 Character Decoding**: Iterator decoding variable-length 1-4 byte UTF-8 sequences into 32-bit Unicode Scalar Values (codepoints).
-115. **UTF-8 Character Encoding**: Function encoding 32-bit codepoints into valid 1-4 byte UTF-8 byte sequences.
+113. [x] **UTF-8 Validation Routine (`stdlib/unicode.nex`)**: Strict RFC 3629 validation of 1-4 byte sequence boundaries rejecting overlong encodings, UTF-16 surrogate encodings, out-of-range scalars, and truncated tails (`stdlib/unicode.nex`).
+114. [x] **UTF-8 Character Decoding (`stdlib/unicode.nex`)**: Offset-based decoder returning the Unicode scalar value in `nx_r0` and bytes consumed in `nx_r1`, reporting malformed input as (-1, 0) (`stdlib/unicode.nex`).
+115. [x] **UTF-8 Character Encoding (`stdlib/unicode.nex`)**: Encoder mapping 32-bit scalars to 1-4 UTF-8 bytes and rejecting surrogates, negatives, and values above U+10FFFF with a 0-byte return (`stdlib/unicode.nex`).
 116. **UTF-16 Decoder and Converter**: Conversion routines between UTF-8 and UTF-16 for native Windows Win32 API interoperability.
 117. **Unicode Grapheme Cluster Segmentation (UAX #29)**: Correct segmentation of user-perceived characters (e.g. flag emojis, combining accents) so backspace deletes one visual glyph.
 118. **Unicode Word Boundary Segmentation**: UAX #29 word boundary detection for intelligent `Ctrl+Left` and `Ctrl+Right` cursor jumping.
@@ -187,8 +187,8 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 130. **String Interpolation Syntax**: Format strings `f"Line {cursor_line}, Col {cursor_col}"` evaluated cleanly without string builder chaining.
 131. **Printf-Style Format Specifiers**: Low-level string formatting (`%08x`, `%10.2f`, `%-20s`) for compiler diagnostic listings.
 132. **String Trimming Utilities** *(PARTIAL)*: `nx_str_trim` removes leading/trailing ASCII space and control whitespace (bytes 9–13); Unicode whitespace and separate `trim_start`/`trim_end` functions remain unimplemented.
-133. **String Splitting by Delimiter / Predicate**: Zero-copy iterator yielding slices split by characters or substrings.
-134. **String Joining with Separator**: Concatenating arrays or iterators of strings with a delimiter into a single allocation.
+133. [x] **String Splitting by Delimiter / Predicate (`stdlib/strings.nex`)**: `nx_str_split` splits at any delimiter byte into a freshly allocated token array (`A[0]` = count, `A[1..N]` = null-terminated token strings), honoring empty, consecutive, leading, and trailing delimiters (`stdlib/strings.nex`).
+134. [x] **String Joining with Separator (`stdlib/strings.nex`)**: `nx_str_join` concatenates a qword array of strings with an arbitrary separator into a single allocation, supporting empty elements, empty separators, and zero counts (`stdlib/strings.nex`).
 135. **String Case Transformations**: Methods converting strings to lowercase, uppercase, title case, snake_case, camelCase, and kebab-case.
 136. **String Padding & Alignment**: Methods padding strings with arbitrary fill characters to fixed visual column widths.
 137. **Substring Replacement Utilities**: Methods replacing all or first N occurrences of a substring with another string.

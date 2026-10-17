@@ -1,0 +1,123 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: search.nex
+#                Binary Search Primitives (Feature #93)
+# ==============================================================================
+#
+# Binary search over sorted 64-bit integer arrays for rapid line-number
+# resolution, symbol table lookups, and sorted-collection queries.
+#
+# Three complementary primitives:
+#   nx_bsearch_exact      - index of a match (-1 if absent)
+#   nx_bsearch_lower_bound - first index with arr[i] >= target (len if none)
+#   nx_bsearch_upper_bound - first index with arr[i] > target (len if none)
+#
+# The array MUST be sorted ascending. With duplicates, exact returns the
+# FIRST matching index (deterministic), lower_bound the first element >=
+# target, and upper_bound one past the last element <= target, so the
+# half-open range [lower_bound, upper_bound) spans every occurrence.
+#
+# The probe midpoint is computed as lo + (hi - lo) / 2 in two steps to stay
+# overflow-free within 64-bit arithmetic.
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = array pointer (qword elements), nx_i1 = element count,
+#   nx_i2 = target value
+#   nx_r0 = index / bound / insertion point
+#
+# Internal variables use per-function unique prefixes (_bsearch_e_*,
+# _bsearch_l_*, _bsearch_u_*) so no clobbering occurs across calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_bsearch_exact : nx_r0 = index of target nx_i2 in sorted array
+#   [nx_i0, nx_i1 elements), or -1 when absent. Returns the FIRST match.
+# ------------------------------------------------------------------------------
+fn nx_bsearch_exact {
+    let _bsearch_e_arr = nx_i0
+    let _bsearch_e_len = nx_i1
+    let _bsearch_e_t = nx_i2
+    let nx_r0 = 0 - 1
+    let _bsearch_e_lo = 0
+    let _bsearch_e_hi = _bsearch_e_len
+    while _bsearch_e_lo < _bsearch_e_hi {
+        let _bsearch_e_span = _bsearch_e_hi - _bsearch_e_lo
+        let _bsearch_e_mid = _bsearch_e_span / 2
+        let _bsearch_e_mid = _bsearch_e_mid + _bsearch_e_lo
+        let _bsearch_e_v = load64 [_bsearch_e_arr + _bsearch_e_mid * 8]
+        if _bsearch_e_v < _bsearch_e_t {
+            let _bsearch_e_lo = _bsearch_e_mid + 1
+        } else {
+            if _bsearch_e_v > _bsearch_e_t {
+                let _bsearch_e_hi = _bsearch_e_mid
+            } else {
+                # match: walk left to the first occurrence, then exit
+                let _bsearch_e_i = _bsearch_e_mid
+                let _bsearch_e_done = 0
+                while _bsearch_e_done == 0 {
+                    if _bsearch_e_i == 0 {
+                        let _bsearch_e_done = 1
+                    } else {
+                        let _bsearch_e_j = _bsearch_e_i - 1
+                        let _bsearch_e_prev = load64 [_bsearch_e_arr + _bsearch_e_j * 8]
+                        if _bsearch_e_prev == _bsearch_e_t {
+                            let _bsearch_e_i = _bsearch_e_j
+                        } else {
+                            let _bsearch_e_done = 1
+                        }
+                    }
+                }
+                let nx_r0 = _bsearch_e_i
+                let _bsearch_e_lo = _bsearch_e_hi
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bsearch_lower_bound : nx_r0 = first index with arr[i] >= nx_i2
+#   Returns nx_i1 (the element count) when every element is < the target.
+#   This is also the ascending-insertion point that keeps order.
+# ------------------------------------------------------------------------------
+fn nx_bsearch_lower_bound {
+    let _bsearch_l_arr = nx_i0
+    let _bsearch_l_len = nx_i1
+    let _bsearch_l_t = nx_i2
+    let _bsearch_l_lo = 0
+    let _bsearch_l_hi = _bsearch_l_len
+    while _bsearch_l_lo < _bsearch_l_hi {
+        let _bsearch_l_span = _bsearch_l_hi - _bsearch_l_lo
+        let _bsearch_l_mid = _bsearch_l_span / 2
+        let _bsearch_l_mid = _bsearch_l_mid + _bsearch_l_lo
+        let _bsearch_l_v = load64 [_bsearch_l_arr + _bsearch_l_mid * 8]
+        if _bsearch_l_v < _bsearch_l_t {
+            let _bsearch_l_lo = _bsearch_l_mid + 1
+        } else {
+            let _bsearch_l_hi = _bsearch_l_mid
+        }
+    }
+    let nx_r0 = _bsearch_l_lo
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bsearch_upper_bound : nx_r0 = first index with arr[i] > nx_i2
+#   Returns nx_i1 (the element count) when every element is <= the target.
+# ------------------------------------------------------------------------------
+fn nx_bsearch_upper_bound {
+    let _bsearch_u_arr = nx_i0
+    let _bsearch_u_len = nx_i1
+    let _bsearch_u_t = nx_i2
+    let _bsearch_u_lo = 0
+    let _bsearch_u_hi = _bsearch_u_len
+    while _bsearch_u_lo < _bsearch_u_hi {
+        let _bsearch_u_span = _bsearch_u_hi - _bsearch_u_lo
+        let _bsearch_u_mid = _bsearch_u_span / 2
+        let _bsearch_u_mid = _bsearch_u_mid + _bsearch_u_lo
+        let _bsearch_u_v = load64 [_bsearch_u_arr + _bsearch_u_mid * 8]
+        if _bsearch_u_v <= _bsearch_u_t {
+            let _bsearch_u_lo = _bsearch_u_mid + 1
+        } else {
+            let _bsearch_u_hi = _bsearch_u_mid
+        }
+    }
+    let nx_r0 = _bsearch_u_lo
+}

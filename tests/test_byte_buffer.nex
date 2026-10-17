@@ -1,0 +1,251 @@
+# Test: Growable ByteBuffer (Feature #99, stdlib/byte_buffer.nex)
+include "stdlib/byte_buffer.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Creation and Sizing
+# ==============================================================================
+let nx_i0 = 8
+call nx_buf_new
+let bb1 = nx_r0
+
+let nx_i0 = bb1
+call nx_buf_len
+assert_eq nx_r0, 0
+
+let nx_i0 = bb1
+call nx_buf_cap
+assert_eq nx_r0, 16
+
+# larger initial capacity is honored
+let nx_i0 = 100
+call nx_buf_new
+let bb2 = nx_r0
+
+let nx_i0 = bb2
+call nx_buf_cap
+assert_eq nx_r0, 100
+
+# ==============================================================================
+# Section 2: u8 writes and length tracking
+# ==============================================================================
+let nx_i0 = bb1
+let nx_i1 = 65
+call nx_buf_write_u8
+assert_eq nx_r0, 1
+
+let nx_i0 = bb1
+let nx_i1 = 66
+call nx_buf_write_u8
+assert_eq nx_r0, 2
+
+let nx_i0 = bb1
+call nx_buf_len
+assert_eq nx_r0, 2
+
+let nx_i0 = bb1
+let nx_i1 = 0
+call nx_buf_read_u8
+assert_eq nx_r0, 65
+
+let nx_i0 = bb1
+let nx_i1 = 1
+call nx_buf_read_u8
+assert_eq nx_r0, 66
+
+# out-of-bounds read returns 0
+let nx_i0 = bb1
+let nx_i1 = 2
+call nx_buf_read_u8
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 3: u16 / u32 little-endian layout
+# ==============================================================================
+let nx_i0 = bb2
+let nx_i1 = 4660
+call nx_buf_write_u16
+assert_eq nx_r0, 2
+
+# bytes: 0x34 0x12
+let nx_i0 = bb2
+let nx_i1 = 0
+call nx_buf_read_u8
+assert_eq nx_r0, 52
+
+let nx_i0 = bb2
+let nx_i1 = 1
+call nx_buf_read_u8
+assert_eq nx_r0, 18
+
+let nx_i0 = bb2
+let nx_i1 = 0
+call nx_buf_read_u16
+assert_eq nx_r0, 4660
+
+let nx_i0 = bb2
+let nx_i1 = 305419896
+call nx_buf_write_u32
+assert_eq nx_r0, 6
+
+# bytes at offset 2..5: 78 56 34 12
+let nx_i0 = bb2
+let nx_i1 = 2
+call nx_buf_read_u8
+assert_eq nx_r0, 120
+
+let nx_i0 = bb2
+let nx_i1 = 5
+call nx_buf_read_u8
+assert_eq nx_r0, 18
+
+let nx_i0 = bb2
+let nx_i1 = 2
+call nx_buf_read_u32
+assert_eq nx_r0, 305419896
+
+# partial reads at the tail return 0
+let nx_i0 = bb2
+let nx_i1 = 5
+call nx_buf_read_u16
+assert_eq nx_r0, 0
+
+let nx_i0 = bb2
+let nx_i1 = 3
+call nx_buf_read_u32
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: u64 roundtrip with large 64-bit value
+# ==============================================================================
+let nx_i0 = bb2
+call nx_buf_len
+let bblen = nx_r0
+
+let bigval = 0
+let bvi = 0
+while bvi < 8 {
+    let bigval = bigval * 256 + 190
+    let bvi = bvi + 1
+}
+
+let nx_i0 = bb2
+let nx_i1 = bigval
+call nx_buf_write_u64
+assert_eq nx_r0, bblen + 8
+
+let nx_i0 = bb2
+let nx_i1 = bblen
+call nx_buf_read_u64
+assert_eq nx_r0, bigval
+
+# 64-bit read past the end (offset 12, len 14) returns 0
+let nx_i0 = bb2
+let nx_i1 = 12
+call nx_buf_read_u64
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 5: Auto-growth across the capacity boundary
+# ==============================================================================
+let nx_i0 = 16
+call nx_buf_new
+let bbg = nx_r0
+
+# write 20 bytes one at a time (16 -> 32 -> beyond)
+let bgi = 0
+while bgi < 20 {
+    let nx_i0 = bbg
+    let nx_i1 = bgi + 1
+    call nx_buf_write_u8
+    let bgi = bgi + 1
+}
+
+let nx_i0 = bbg
+call nx_buf_len
+assert_eq nx_r0, 20
+
+let nx_i0 = bbg
+call nx_buf_cap
+assert_eq nx_r0, 32
+
+# all bytes preserved through the growth
+let bgi = 0
+let bgok = 1
+while bgi < 20 {
+    let nx_i0 = bbg
+    let nx_i1 = bgi
+    call nx_buf_read_u8
+    let bgexpect = bgi + 1
+    if nx_r0 != bgexpect {
+        let bgok = 0
+    }
+    let bgi = bgi + 1
+}
+assert_eq bgok, 1
+
+# block write that forces growth
+let nx_i0 = 16
+call nx_buf_new
+let bbwb = nx_r0
+
+let wbsrc = alloc 24
+let wbi = 0
+while wbi < 24 {
+    let wbval = wbi + 100
+    store [wbsrc + wbi] wbval
+    let wbi = wbi + 1
+}
+
+let nx_i0 = bbwb
+let nx_i1 = wbsrc
+let nx_i2 = 24
+call nx_buf_write_bytes
+assert_eq nx_r0, 24
+
+let nx_i0 = bbwb
+call nx_buf_cap
+assert_eq nx_r0, 32
+
+let nx_i0 = bbwb
+let nx_i1 = 0
+call nx_buf_read_u8
+assert_eq nx_r0, 100
+
+let nx_i0 = bbwb
+let nx_i1 = 23
+call nx_buf_read_u8
+assert_eq nx_r0, 123
+
+# ==============================================================================
+# Section 6: to_ptr direct access and clear
+# ==============================================================================
+let nx_i0 = bb1
+call nx_buf_to_ptr
+let bbp = nx_r0
+
+let d0 = load [bbp + 0]
+assert_eq d0, 65
+
+let nx_i0 = bb1
+call nx_buf_clear
+assert_eq nx_r0, 1
+
+let nx_i0 = bb1
+call nx_buf_len
+assert_eq nx_r0, 0
+
+# capacity survives clear; buffer is reusable
+let nx_i0 = bb1
+let nx_i1 = 77
+call nx_buf_write_u8
+assert_eq nx_r0, 1
+
+let nx_i0 = bb1
+let nx_i1 = 0
+call nx_buf_read_u8
+assert_eq nx_r0, 77
+
+print "BYTE_BUFFER_TEST_PASS"

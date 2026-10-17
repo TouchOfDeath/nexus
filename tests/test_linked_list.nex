@@ -1,0 +1,275 @@
+# Test: Doubly-Linked List (Feature #77, stdlib/linked_list.nex)
+include "stdlib/linked_list.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Creation and emptiness
+# ==============================================================================
+call nx_list_new
+let l1 = nx_r0
+
+let nx_i0 = l1
+call nx_list_len
+assert_eq nx_r0, 0
+
+let nx_i0 = l1
+call nx_list_head
+assert_eq nx_r0, 0
+
+let nx_i0 = l1
+call nx_list_tail
+assert_eq nx_r0, 0
+
+let nx_i0 = l1
+call nx_list_pop_front
+assert_eq nx_r0, 0
+
+let nx_i0 = l1
+call nx_list_pop_back
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 2: push_back order and tail traversal
+# ==============================================================================
+let nx_i0 = l1
+let nx_i1 = 10
+call nx_list_push_back
+let n10 = nx_r0
+let nx_i0 = l1
+let nx_i1 = 20
+call nx_list_push_back
+let n20 = nx_r0
+let nx_i0 = l1
+let nx_i1 = 30
+call nx_list_push_back
+let n30 = nx_r0
+
+let nx_i0 = l1
+call nx_list_len
+assert_eq nx_r0, 3
+
+let nx_i0 = l1
+call nx_list_head
+let h = nx_r0
+assert_eq h, n10
+
+let nx_i0 = l1
+call nx_list_tail
+let t = nx_r0
+assert_eq t, n30
+
+let nx_i0 = n10
+call nx_list_node_val
+assert_eq nx_r0, 10
+
+let nx_i0 = n30
+call nx_list_node_val
+assert_eq nx_r0, 30
+
+# walk next links: 10 -> 20 -> 30
+let nnext = load64 [n10 + 8]
+assert_eq nnext, n20
+let nnext = load64 [nnext + 8]
+assert_eq nnext, n30
+
+# walk prev links: 30 -> 20 -> 10
+let nprev = load64 [n30 + 0]
+assert_eq nprev, n20
+let nprev = load64 [nprev + 0]
+assert_eq nprev, n10
+
+# boundary links are null
+let e1 = load64 [n10 + 0]
+assert_eq e1, 0
+let e2 = load64 [n30 + 8]
+assert_eq e2, 0
+
+# ==============================================================================
+# Section 3: pop_front and pop_back ordering
+# ==============================================================================
+let nx_i0 = l1
+call nx_list_pop_front
+assert_eq nx_r0, 10
+
+let nx_i0 = l1
+call nx_list_pop_back
+assert_eq nx_r0, 30
+
+let nx_i0 = l1
+call nx_list_len
+assert_eq nx_r0, 1
+
+# remaining single element is both head and tail
+let nx_i0 = l1
+call nx_list_head
+let h2 = nx_r0
+let nx_i0 = l1
+call nx_list_tail
+let t2 = nx_r0
+assert_eq h2, t2
+assert_eq h2, n20
+
+let nx_i0 = l1
+call nx_list_pop_front
+assert_eq nx_r0, 20
+
+let nx_i0 = l1
+call nx_list_len
+assert_eq nx_r0, 0
+
+let nx_i0 = l1
+call nx_list_head
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: push_front order
+# ==============================================================================
+let nx_i0 = l1
+let nx_i1 = 1
+call nx_list_push_front
+let nx_i0 = l1
+let nx_i1 = 2
+call nx_list_push_front
+let nx_i0 = l1
+let nx_i1 = 3
+call nx_list_push_front
+
+let nx_i0 = l1
+call nx_list_pop_front
+assert_eq nx_r0, 3
+let nx_i0 = l1
+call nx_list_pop_front
+assert_eq nx_r0, 2
+let nx_i0 = l1
+call nx_list_pop_front
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 5: remove_node - head, middle, tail, and only element
+# ==============================================================================
+call nx_list_new
+let l2 = nx_r0
+
+let nx_i0 = l2
+let nx_i1 = 100
+call nx_list_push_back
+let ra = nx_r0
+let nx_i0 = l2
+let nx_i1 = 200
+call nx_list_push_back
+let rb = nx_r0
+let nx_i0 = l2
+let nx_i1 = 300
+call nx_list_push_back
+let rc = nx_r0
+let nx_i0 = l2
+let nx_i1 = 400
+call nx_list_push_back
+let rd = nx_r0
+
+# remove middle (200)
+let nx_i0 = l2
+let nx_i1 = rb
+call nx_list_remove_node
+assert_eq nx_r0, 1
+
+let nx_i0 = l2
+call nx_list_len
+assert_eq nx_r0, 3
+
+# links rewired: ra.next == rc, rc.prev == ra
+let l1n = load64 [ra + 8]
+assert_eq l1n, rc
+let l1p = load64 [rc + 0]
+assert_eq l1p, ra
+
+# remove head (100)
+let nx_i0 = l2
+let nx_i1 = ra
+call nx_list_remove_node
+assert_eq nx_r0, 1
+
+let nx_i0 = l2
+call nx_list_head
+let h3 = nx_r0
+assert_eq h3, rc
+
+# remove tail (400)
+let nx_i0 = l2
+let nx_i1 = rd
+call nx_list_remove_node
+assert_eq nx_r0, 1
+
+let nx_i0 = l2
+call nx_list_tail
+let t3 = nx_r0
+assert_eq t3, rc
+
+# remove only remaining (300)
+let nx_i0 = l2
+let nx_i1 = rc
+call nx_list_remove_node
+assert_eq nx_r0, 1
+
+let nx_i0 = l2
+call nx_list_len
+assert_eq nx_r0, 0
+
+let nx_i0 = l2
+call nx_list_head
+assert_eq nx_r0, 0
+
+let nx_i0 = l2
+call nx_list_tail
+assert_eq nx_r0, 0
+
+# null handle removal is a safe no-op
+let nx_i0 = l2
+let nx_i1 = 0
+call nx_list_remove_node
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 6: Interleaved mixed operations
+# ==============================================================================
+call nx_list_new
+let l3 = nx_r0
+
+let nx_i0 = l3
+let nx_i1 = 7
+call nx_list_push_back
+let m1 = nx_r0
+let nx_i0 = l3
+let nx_i1 = 8
+call nx_list_push_front
+let m2 = nx_r0
+let nx_i0 = l3
+let nx_i1 = 9
+call nx_list_push_back
+let m3 = nx_r0
+
+# list: 8 7 9
+let nx_i0 = l3
+call nx_list_pop_front
+assert_eq nx_r0, 8
+
+let nx_i0 = l3
+let nx_i1 = m3
+call nx_list_remove_node
+
+# list: 7
+let nx_i0 = l3
+call nx_list_len
+assert_eq nx_r0, 1
+
+let nx_i0 = l3
+call nx_list_pop_back
+assert_eq nx_r0, 7
+
+let nx_i0 = l3
+call nx_list_len
+assert_eq nx_r0, 0
+
+print "LINKED_LIST_TEST_PASS"

@@ -1,0 +1,293 @@
+# Test: LRU Cache (Feature #94, stdlib/lru_cache.nex)
+include "stdlib/lru_cache.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Creation and sizing
+# ==============================================================================
+let nx_i0 = 3
+call nx_lru_new
+let c1 = nx_r0
+
+let nx_i0 = c1
+call nx_lru_len
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+call nx_lru_cap
+assert_eq nx_r0, 3
+
+let nx_i0 = c1
+let nx_i1 = 42
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+let nx_i1 = 42
+call nx_lru_get
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 2: Basic put/get roundtrip
+# ==============================================================================
+let nx_i0 = c1
+let nx_i1 = 10
+let nx_i2 = 100
+call nx_lru_put
+assert_eq nx_r0, 1
+
+let nx_i0 = c1
+let nx_i1 = 20
+let nx_i2 = 200
+call nx_lru_put
+assert_eq nx_r0, 1
+
+let nx_i0 = c1
+call nx_lru_len
+assert_eq nx_r0, 2
+
+let nx_i0 = c1
+let nx_i1 = 10
+call nx_lru_get
+assert_eq nx_r0, 100
+
+let nx_i0 = c1
+let nx_i1 = 20
+call nx_lru_get
+assert_eq nx_r0, 200
+
+let nx_i0 = c1
+let nx_i1 = 30
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 3: Value 0 storage and contains distinction
+# ==============================================================================
+let nx_i0 = c1
+let nx_i1 = 30
+let nx_i2 = 0
+call nx_lru_put
+assert_eq nx_r0, 1
+
+let nx_i0 = c1
+let nx_i1 = 30
+call nx_lru_get
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+let nx_i1 = 30
+call nx_lru_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = c1
+let nx_i1 = 99
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: Update in place (status 2) and recency refresh
+# ==============================================================================
+let nx_i0 = c1
+let nx_i1 = 10
+let nx_i2 = 111
+call nx_lru_put
+assert_eq nx_r0, 2
+
+let nx_i0 = c1
+call nx_lru_len
+assert_eq nx_r0, 3
+
+let nx_i0 = c1
+let nx_i1 = 10
+call nx_lru_get
+assert_eq nx_r0, 111
+
+# ==============================================================================
+# Section 5: Eviction order (capacity 3)
+# ==============================================================================
+# current recency: 10 (get in s4), 30 (get in s3), 20
+# insert 40 -> evicts 20 (LRU)
+let nx_i0 = c1
+let nx_i1 = 40
+let nx_i2 = 400
+call nx_lru_put
+assert_eq nx_r0, 3
+
+let nx_i0 = c1
+call nx_lru_len
+assert_eq nx_r0, 3
+
+let nx_i0 = c1
+let nx_i1 = 20
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+let nx_i1 = 40
+call nx_lru_get
+assert_eq nx_r0, 400
+
+# a get refreshes recency: touch 30, then insert 50 -> evicts 10
+let nx_i0 = c1
+let nx_i1 = 30
+call nx_lru_get
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+let nx_i1 = 50
+let nx_i2 = 500
+call nx_lru_put
+assert_eq nx_r0, 3
+
+let nx_i0 = c1
+let nx_i1 = 10
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+let nx_i1 = 30
+call nx_lru_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = c1
+let nx_i1 = 40
+call nx_lru_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = c1
+let nx_i1 = 50
+call nx_lru_contains
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 6: Revive after eviction
+# ==============================================================================
+# re-put evicted key 10 -> revives, evicting the current LRU (40)
+let nx_i0 = c1
+let nx_i1 = 10
+let nx_i2 = 101
+call nx_lru_put
+assert_eq nx_r0, 3
+
+let nx_i0 = c1
+let nx_i1 = 10
+call nx_lru_get
+assert_eq nx_r0, 101
+
+let nx_i0 = c1
+let nx_i1 = 40
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = c1
+call nx_lru_len
+assert_eq nx_r0, 3
+
+# ==============================================================================
+# Section 7: Table rebuild under churn (many evictions, same key space)
+# ==============================================================================
+let nx_i0 = 2
+call nx_lru_new
+let c2 = nx_r0
+
+let nx_i0 = c2
+let nx_i1 = 1
+let nx_i2 = 11
+call nx_lru_put
+let nx_i0 = c2
+let nx_i1 = 2
+let nx_i2 = 22
+call nx_lru_put
+let nx_i0 = c2
+let nx_i1 = 3
+let nx_i2 = 33
+call nx_lru_put
+let nx_i0 = c2
+let nx_i1 = 4
+let nx_i2 = 44
+call nx_lru_put
+let nx_i0 = c2
+let nx_i1 = 5
+let nx_i2 = 55
+call nx_lru_put
+let nx_i0 = c2
+let nx_i1 = 6
+let nx_i2 = 66
+call nx_lru_put
+
+let nx_i0 = c2
+call nx_lru_len
+assert_eq nx_r0, 2
+
+let nx_i0 = c2
+let nx_i1 = 5
+call nx_lru_get
+assert_eq nx_r0, 55
+
+let nx_i0 = c2
+let nx_i1 = 6
+call nx_lru_get
+assert_eq nx_r0, 66
+
+# re-put churn cycles evict + revive without unbounded table growth
+let c2i = 0
+while c2i < 6 {
+    let c2k = c2i + 10
+    let nx_i0 = c2
+    let nx_i1 = c2k
+    let nx_i2 = c2i
+    call nx_lru_put
+    let c2i = c2i + 1
+}
+
+let nx_i0 = c2
+call nx_lru_len
+assert_eq nx_r0, 2
+
+let nx_i0 = c2
+let nx_i1 = 15
+call nx_lru_get
+assert_eq nx_r0, 5
+
+let nx_i0 = c2
+let nx_i1 = 14
+call nx_lru_get
+assert_eq nx_r0, 4
+
+let nx_i0 = c2
+let nx_i1 = 5
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 8: Clear
+# ==============================================================================
+let nx_i0 = c2
+call nx_lru_clear
+assert_eq nx_r0, 1
+
+let nx_i0 = c2
+call nx_lru_len
+assert_eq nx_r0, 0
+
+let nx_i0 = c2
+let nx_i1 = 15
+call nx_lru_contains
+assert_eq nx_r0, 0
+
+# cache is reusable after clear
+let nx_i0 = c2
+let nx_i1 = 77
+let nx_i2 = 88
+call nx_lru_put
+assert_eq nx_r0, 1
+
+let nx_i0 = c2
+let nx_i1 = 77
+call nx_lru_get
+assert_eq nx_r0, 88
+
+print "LRU_CACHE_TEST_PASS"

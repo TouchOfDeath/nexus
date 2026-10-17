@@ -1,0 +1,297 @@
+# Test: String Split / Join (Features #133 & #134, stdlib/strings.nex)
+include "stdlib/strings.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# String equality checks use nx_str_cmp == 0 via assert_eq.
+
+# ==============================================================================
+# Section 1: Split basics
+# ==============================================================================
+let nx_i0 = "alpha,beta,gamma"
+let nx_i1 = 44
+call nx_str_split
+let sa = nx_r0
+
+let cnt = load64 [sa + 0]
+assert_eq cnt, 3
+
+let t1 = load64 [sa + 8]
+let nx_i0 = t1
+let nx_i1 = "alpha"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let t2 = load64 [sa + 16]
+let nx_i0 = t2
+let nx_i1 = "beta"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let t3 = load64 [sa + 24]
+let nx_i0 = t3
+let nx_i1 = "gamma"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 2: Split edge cases
+# ==============================================================================
+# no delimiter present
+let nx_i0 = "solo"
+let nx_i1 = 44
+call nx_str_split
+let sb = nx_r0
+
+let cnt = load64 [sb + 0]
+assert_eq cnt, 1
+
+let t1 = load64 [sb + 8]
+let nx_i0 = t1
+let nx_i1 = "solo"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# empty input yields one empty token
+let nx_i0 = ""
+let nx_i1 = 44
+call nx_str_split
+let sc = nx_r0
+
+let cnt = load64 [sc + 0]
+assert_eq cnt, 1
+
+let t1 = load64 [sc + 8]
+let t1b = load [t1 + 0]
+assert_eq t1b, 0
+
+# consecutive delimiters produce empty tokens
+let nx_i0 = "a,,b"
+let nx_i1 = 44
+call nx_str_split
+let sd = nx_r0
+
+let cnt = load64 [sd + 0]
+assert_eq cnt, 3
+
+let t1 = load64 [sd + 8]
+let nx_i0 = t1
+let nx_i1 = "a"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let t2 = load64 [sd + 16]
+let t2b = load [t2 + 0]
+assert_eq t2b, 0
+
+let t3 = load64 [sd + 24]
+let nx_i0 = t3
+let nx_i1 = "b"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# leading and trailing delimiters
+let nx_i0 = ",x,"
+let nx_i1 = 44
+call nx_str_split
+let se = nx_r0
+
+let cnt = load64 [se + 0]
+assert_eq cnt, 3
+
+let t1 = load64 [se + 8]
+let t1b = load [t1 + 0]
+assert_eq t1b, 0
+
+let t2 = load64 [se + 16]
+let nx_i0 = t2
+let nx_i1 = "x"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let t3 = load64 [se + 24]
+let t3b = load [t3 + 0]
+assert_eq t3b, 0
+
+# only delimiters
+let nx_i0 = ",,"
+let nx_i1 = 44
+call nx_str_split
+let sf = nx_r0
+
+let cnt = load64 [sf + 0]
+assert_eq cnt, 3
+
+# different delimiter byte (colon)
+let nx_i0 = "10:20:30"
+let nx_i1 = 58
+call nx_str_split
+let sg = nx_r0
+
+let cnt = load64 [sg + 0]
+assert_eq cnt, 3
+
+let t1 = load64 [sg + 8]
+let nx_i0 = t1
+let nx_i1 = "10"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let t3 = load64 [sg + 24]
+let nx_i0 = t3
+let nx_i1 = "30"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 3: Join basics
+# ==============================================================================
+let jarr = alloc 32
+let se_one = "one"
+let se_two = "two"
+let se_three = "three"
+store64 [jarr + 0] se_one
+store64 [jarr + 8] se_two
+
+let nx_i0 = jarr
+let nx_i1 = "-"
+let nx_i2 = 2
+call nx_str_join
+let j1 = nx_r0
+
+let nx_i0 = j1
+let nx_i1 = "one-two"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# single element: no separator added
+let nx_i0 = jarr
+let nx_i1 = "-"
+let nx_i2 = 1
+call nx_str_join
+let j2 = nx_r0
+
+let nx_i0 = j2
+let nx_i1 = "one"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# zero elements: empty string
+let nx_i0 = jarr
+let nx_i1 = "-"
+let nx_i2 = 0
+call nx_str_join
+let j3 = nx_r0
+
+let j3b = load [j3 + 0]
+assert_eq j3b, 0
+
+# multi-character separator
+store64 [jarr + 16] se_three
+let nx_i0 = jarr
+let nx_i1 = ", "
+let nx_i2 = 3
+call nx_str_join
+let j4 = nx_r0
+
+let nx_i0 = j4
+let nx_i1 = "one, two, three"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# empty separator is plain concatenation
+let nx_i0 = jarr
+let nx_i1 = ""
+let nx_i2 = 3
+call nx_str_join
+let j5 = nx_r0
+
+let nx_i0 = j5
+let nx_i1 = "onetwothree"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: Join with empty elements
+# ==============================================================================
+let jarr2 = alloc 24
+let se_a = "a"
+let se_empty = ""
+store64 [jarr2 + 0] se_a
+store64 [jarr2 + 8] se_empty
+
+let nx_i0 = jarr2
+let nx_i1 = "+"
+let nx_i2 = 2
+call nx_str_join
+let j6 = nx_r0
+
+let nx_i0 = j6
+let nx_i1 = "a+"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+store64 [jarr2 + 16] se_empty
+let nx_i0 = jarr2
+let nx_i1 = "x"
+let nx_i2 = 3
+call nx_str_join
+let j7 = nx_r0
+
+let nx_i0 = j7
+let nx_i1 = "axx"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let jarr3 = alloc 16
+store64 [jarr3 + 0] se_empty
+store64 [jarr3 + 8] se_empty
+
+let nx_i0 = jarr3
+let nx_i1 = "mid"
+let nx_i2 = 2
+call nx_str_join
+let j8 = nx_r0
+
+let nx_i0 = j8
+let nx_i1 = "mid"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 5: Split -> join roundtrip
+# ==============================================================================
+let nx_i0 = "k1;k2;k3;k4"
+let nx_i1 = 59
+call nx_str_split
+let rt = nx_r0
+
+let rtc = load64 [rt + 0]
+assert_eq rtc, 4
+
+let rtbase = rt + 8
+let nx_i0 = rtbase
+let nx_i1 = ";"
+let nx_i2 = rtc
+call nx_str_join
+let rtj = nx_r0
+
+let nx_i0 = rtj
+let nx_i1 = "k1;k2;k3;k4"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# roundtrip with a different separator
+let nx_i0 = rtbase
+let nx_i1 = "|"
+let nx_i2 = rtc
+call nx_str_join
+let rtj2 = nx_r0
+
+let nx_i0 = rtj2
+let nx_i1 = "k1|k2|k3|k4"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "STRING_SPLIT_JOIN_TEST_PASS"

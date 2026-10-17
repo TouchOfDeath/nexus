@@ -1,0 +1,292 @@
+# Test: Binary Heap Priority Queue (Feature #76, stdlib/priority_queue.nex)
+include "stdlib/priority_queue.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Min-heap creation and emptiness
+# ==============================================================================
+let nx_i0 = 8
+let nx_i1 = 1
+call nx_pq_new
+let pq1 = nx_r0
+
+let nx_i0 = pq1
+call nx_pq_len
+assert_eq nx_r0, 0
+
+let nx_i0 = pq1
+call nx_pq_is_empty
+assert_eq nx_r0, 1
+
+let nx_i0 = pq1
+call nx_pq_peek
+assert_eq nx_r0, 0
+
+let nx_i0 = pq1
+call nx_pq_pop
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 2: Min-heap push/pop ordering
+# ==============================================================================
+let nx_i0 = pq1
+let nx_i1 = 30
+call nx_pq_push
+let nx_i0 = pq1
+let nx_i1 = 10
+call nx_pq_push
+let nx_i0 = pq1
+let nx_i1 = 20
+call nx_pq_push
+let nx_i0 = pq1
+let nx_i1 = 5
+call nx_pq_push
+let nx_i0 = pq1
+let nx_i1 = 40
+call nx_pq_push
+
+let nx_i0 = pq1
+call nx_pq_len
+assert_eq nx_r0, 5
+
+let nx_i0 = pq1
+call nx_pq_is_empty
+assert_eq nx_r0, 0
+
+# peek shows the smallest
+let nx_i0 = pq1
+call nx_pq_peek
+assert_eq nx_r0, 5
+
+# peek does not remove
+let nx_i0 = pq1
+call nx_pq_len
+assert_eq nx_r0, 5
+
+# pop yields ascending order: 5 10 20 30 40
+let nx_i0 = pq1
+call nx_pq_pop
+assert_eq nx_r0, 5
+let nx_i0 = pq1
+call nx_pq_pop
+assert_eq nx_r0, 10
+let nx_i0 = pq1
+call nx_pq_pop
+assert_eq nx_r0, 20
+let nx_i0 = pq1
+call nx_pq_pop
+assert_eq nx_r0, 30
+let nx_i0 = pq1
+call nx_pq_pop
+assert_eq nx_r0, 40
+
+let nx_i0 = pq1
+call nx_pq_is_empty
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 3: Max-heap ordering
+# ==============================================================================
+let nx_i0 = 8
+let nx_i1 = 0
+call nx_pq_new
+let pq2 = nx_r0
+
+let nx_i0 = pq2
+let nx_i1 = 30
+call nx_pq_push
+let nx_i0 = pq2
+let nx_i1 = 10
+call nx_pq_push
+let nx_i0 = pq2
+let nx_i1 = 20
+call nx_pq_push
+let nx_i0 = pq2
+let nx_i1 = 5
+call nx_pq_push
+let nx_i0 = pq2
+let nx_i1 = 40
+call nx_pq_push
+
+let nx_i0 = pq2
+call nx_pq_peek
+assert_eq nx_r0, 40
+
+# pop yields descending order: 40 30 20 10 5
+let nx_i0 = pq2
+call nx_pq_pop
+assert_eq nx_r0, 40
+let nx_i0 = pq2
+call nx_pq_pop
+assert_eq nx_r0, 30
+let nx_i0 = pq2
+call nx_pq_pop
+assert_eq nx_r0, 20
+let nx_i0 = pq2
+call nx_pq_pop
+assert_eq nx_r0, 10
+let nx_i0 = pq2
+call nx_pq_pop
+assert_eq nx_r0, 5
+
+# ==============================================================================
+# Section 4: Duplicates and negatives
+# ==============================================================================
+let nx_i0 = 4
+let nx_i1 = 1
+call nx_pq_new
+let pq3 = nx_r0
+
+let nx_i0 = pq3
+let nx_i1 = 7
+call nx_pq_push
+let nx_i0 = pq3
+let nx_i1 = 7
+call nx_pq_push
+let nx_i0 = pq3
+let nx_i1 = 0 - 3
+call nx_pq_push
+let nx_i0 = pq3
+let nx_i1 = 7
+call nx_pq_push
+
+let nx_i0 = pq3
+call nx_pq_len
+assert_eq nx_r0, 4
+
+let nx_i0 = pq3
+call nx_pq_pop
+assert_eq nx_r0, 0 - 3
+let nx_i0 = pq3
+call nx_pq_pop
+assert_eq nx_r0, 7
+let nx_i0 = pq3
+call nx_pq_pop
+assert_eq nx_r0, 7
+let nx_i0 = pq3
+call nx_pq_pop
+assert_eq nx_r0, 7
+
+# ==============================================================================
+# Section 5: Auto-growth (capacity 4 -> 8) with interleaved push/pop
+# ==============================================================================
+let nx_i0 = 4
+let nx_i1 = 1
+call nx_pq_new
+let pq4 = nx_r0
+
+# push 12 values, popping every other one
+let p4i = 0
+while p4i < 12 {
+    let p4v = p4i * 7
+    let p4v = p4v % 10
+    let nx_i0 = pq4
+    let nx_i1 = p4v
+    call nx_pq_push
+    let p4mod = p4i % 2
+    if p4mod == 1 {
+        let nx_i0 = pq4
+        call nx_pq_pop
+    }
+    let p4i = p4i + 1
+}
+
+# remaining 6 elements pop in ascending order: 5 6 7 7 8 9
+let nx_i0 = pq4
+call nx_pq_len
+assert_eq nx_r0, 6
+
+let nx_i0 = pq4
+call nx_pq_pop
+assert_eq nx_r0, 5
+let nx_i0 = pq4
+call nx_pq_pop
+assert_eq nx_r0, 6
+let nx_i0 = pq4
+call nx_pq_pop
+assert_eq nx_r0, 7
+let nx_i0 = pq4
+call nx_pq_pop
+assert_eq nx_r0, 7
+let nx_i0 = pq4
+call nx_pq_pop
+assert_eq nx_r0, 8
+let nx_i0 = pq4
+call nx_pq_pop
+assert_eq nx_r0, 9
+
+# ==============================================================================
+# Section 6: Heapsort behavior (push N, pop N yields sorted order)
+# ==============================================================================
+let nx_i0 = 16
+let nx_i1 = 1
+call nx_pq_new
+let pq5 = nx_r0
+
+# push a scrambled permutation of 0..9
+let nx_i0 = pq5
+let nx_i1 = 3
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 9
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 1
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 4
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 0
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 8
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 2
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 7
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 5
+call nx_pq_push
+let nx_i0 = pq5
+let nx_i1 = 6
+call nx_pq_push
+
+# all 10 pops are sorted
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 0
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 1
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 2
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 3
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 4
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 5
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 6
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 7
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 8
+let nx_i0 = pq5
+call nx_pq_pop
+assert_eq nx_r0, 9
+
+print "PRIORITY_QUEUE_TEST_PASS"

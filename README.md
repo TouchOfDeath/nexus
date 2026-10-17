@@ -84,7 +84,18 @@ nexus_project/
 │   ├── http.nex               <- Native HTTP/1.1 web server & JSON engine
 │   ├── x11.nex                <- Direct X11 wire protocol graphical windowing
 │   ├── framebuffer.nex        <- 32-bit software rasterizer & pixel blitter
-│   └── font.nex               <- 8x8 bitmap font rendering engine
+│   ├── font.nex               <- 8x8 bitmap font rendering engine
+│   ├── memory.nex             <- memmove/memset/memzero primitives (Features #87, #88)
+│   ├── byte_buffer.nex        <- Growable little-endian ByteBuffer (Feature #99)
+│   ├── bit_stream.nex         <- LSB-first bit reader/writer (Feature #100)
+│   ├── priority_queue.nex     <- Min/max binary heap (Feature #76)
+│   ├── linked_list.nex        <- Doubly-linked list (Feature #77)
+│   ├── trie.nex               <- Character prefix tree (Feature #80)
+│   ├── lru_cache.nex          <- Fixed-capacity LRU cache (Feature #94)
+│   ├── arena.nex              <- Chunked bump/arena allocator (Feature #96)
+│   ├── unicode.nex            <- Strict UTF-8 validate/decode/encode (Features #113-115)
+│   ├── search.nex             <- Binary search exact/lower/upper bounds (Feature #93)
+│   └── piece_table.nex        <- Piece-table text buffer with undo/redo (Feature #67)
 │
 ├── examples/                  <- Sample Programs, Demos & Games
 │   ├── nexus_ide.nex          <- Pure native NEXUS graphical code studio (100% NEXUS)
@@ -95,7 +106,7 @@ nexus_project/
 │   ├── rocket_physics.nex     <- Numerical simulation of orbital mechanics
 │   └── recursion_showcase.nex <- Deep recursion: Ackermann, Fibonacci, GCD
 │
-├── tests/                     <- Comprehensive Test Suites (29+ test suites, 48 foundation tests)
+├── tests/                     <- Comprehensive Test Suites (50+ test suites, 50 foundation tests)
 │   ├── test_string_escapes.nex<- Phase 1 string escape sequences (\n, \t, \r, \\, \", \0, \e, \xHH)
 │   ├── test_hex_binary.nex    <- Hexadecimal (0x...) and binary (0b...) literals
 │   ├── test_bitwise_ops.nex   <- Bitwise operators and bit shifts

@@ -1,0 +1,239 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: trie.nex
+#                     Character Prefix Tree (Feature #80)
+# ==============================================================================
+#
+# A character trie for blazing-fast prefix autocompletion and keyword
+# dictionary queries. Each node holds parallel branch arrays (one byte per
+# branch character, one qword per branch child), so any byte value 1..255
+# may branch (0 terminates NEXUS strings and never appears inside them).
+#
+# Node layout (40 bytes on the heap):
+#   offset 0:  chars_ptr  - byte array of branch characters
+#   offset 8:  nodes_ptr  - qword array of branch child pointers
+#   offset 16: n_children - number of live branches
+#   offset 24: cap        - allocated branch slots
+#   offset 32: is_word    - 1 if a word terminates at this node
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = trie handle / node pointer (internal helpers)
+#   nx_i1 = string pointer (insert/contains/starts_with/remove)
+#   nx_r0 = result (handle, or 1/0 flag per function)
+#
+# Internal variables use per-function unique prefixes (_tn_*, _tg_*, _te_*,
+# _ti_*, _tc_*, _tw_*, _trm_*) so no clobbering occurs across calls.
+# Subroutines that call helpers (insert, contains, starts_with, remove) use
+# dedicated prefixes distinct from the child accessors they invoke.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_new : nx_r0 = new empty trie (root node handle)
+# ------------------------------------------------------------------------------
+fn nx_trie_new {
+    let _tn_root = alloc 40
+    store64 [_tn_root + 0] 0
+    store64 [_tn_root + 8] 0
+    store64 [_tn_root + 16] 0
+    store64 [_tn_root + 24] 0
+    store64 [_tn_root + 32] 0
+    let nx_r0 = _tn_root
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_child_get : internal, nx_r0 = child of node nx_i0 for byte nx_i1
+#   Returns 0 when no child branch exists for that byte.
+# ------------------------------------------------------------------------------
+fn nx_trie_child_get {
+    let _tg_node = nx_i0
+    let _tg_ch = nx_i1
+    let _tg_n = load64 [_tg_node + 16]
+    let _tg_chars = load64 [_tg_node + 0]
+    let _tg_nodes = load64 [_tg_node + 8]
+    let nx_r0 = 0
+    let _tg_i = 0
+    while _tg_i < _tg_n {
+        let _tg_c = load [_tg_chars + _tg_i]
+        if _tg_c == _tg_ch {
+            let nx_r0 = load64 [_tg_nodes + _tg_i * 8]
+            let _tg_i = _tg_n
+        }
+        let _tg_i = _tg_i + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_child_ensure : internal, returns child of node nx_i0 for byte
+#   nx_i1, creating the branch when missing. nx_r0 = child node handle.
+# ------------------------------------------------------------------------------
+fn nx_trie_child_ensure {
+    let _te_node = nx_i0
+    let _te_ch = nx_i1
+    let nx_i0 = _te_node
+    let nx_i1 = _te_ch
+    call nx_trie_child_get
+    let _te_found = nx_r0
+    if _te_found != 0 {
+        let nx_r0 = _te_found
+    } else {
+        let _te_n = load64 [_te_node + 16]
+        let _te_cap = load64 [_te_node + 24]
+        if _te_n >= _te_cap {
+            # grow parallel branch arrays (initial 4 slots, doubling)
+            let _te_new_cap = _te_cap * 2
+            if _te_new_cap < 4 {
+                let _te_new_cap = 4
+            }
+            let _te_new_chars = alloc _te_new_cap
+            let _te_nodes_bytes = _te_new_cap * 8
+            let _te_new_nodes = alloc _te_nodes_bytes
+            let _te_old_chars = load64 [_te_node + 0]
+            let _te_old_nodes = load64 [_te_node + 8]
+            let _te_i = 0
+            while _te_i < _te_n {
+                let _te_c = load [_te_old_chars + _te_i]
+                let _te_p = load64 [_te_old_nodes + _te_i * 8]
+                store [_te_new_chars + _te_i] _te_c
+                store64 [_te_new_nodes + _te_i * 8] _te_p
+                let _te_i = _te_i + 1
+            }
+            store64 [_te_node + 0] _te_new_chars
+            store64 [_te_node + 8] _te_new_nodes
+            store64 [_te_node + 24] _te_new_cap
+        }
+        let _te_child = alloc 40
+        store64 [_te_child + 0] 0
+        store64 [_te_child + 8] 0
+        store64 [_te_child + 16] 0
+        store64 [_te_child + 24] 0
+        store64 [_te_child + 32] 0
+        let _te_chars = load64 [_te_node + 0]
+        let _te_nodes = load64 [_te_node + 8]
+        let _te_n = load64 [_te_node + 16]
+        store [_te_chars + _te_n] _te_ch
+        store64 [_te_nodes + _te_n * 8] _te_child
+        let _te_new_n = _te_n + 1
+        store64 [_te_node + 16] _te_new_n
+        let nx_r0 = _te_child
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_insert : inserts string nx_i1 into trie nx_i0
+#   nx_r0 = 1 if the word was newly added, 0 if it already existed
+# ------------------------------------------------------------------------------
+fn nx_trie_insert {
+    let _ti_root = nx_i0
+    let _ti_str = nx_i1
+    let _ti_node = _ti_root
+    let _ti_i = 0
+    let _ti_c = load [_ti_str + _ti_i]
+    while _ti_c != 0 {
+        let nx_i0 = _ti_node
+        let nx_i1 = _ti_c
+        call nx_trie_child_ensure
+        let _ti_node = nx_r0
+        let _ti_i = _ti_i + 1
+        let _ti_c = load [_ti_str + _ti_i]
+    }
+    let _ti_was = load64 [_ti_node + 32]
+    let nx_r0 = 0
+    if _ti_was == 0 {
+        store64 [_ti_node + 32] 1
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_contains : nx_r0 = 1 if the exact word nx_i1 exists in trie nx_i0
+# ------------------------------------------------------------------------------
+fn nx_trie_contains {
+    let _tc_root = nx_i0
+    let _tc_str = nx_i1
+    let _tc_node = _tc_root
+    let _tc_i = 0
+    let _tc_c = load [_tc_str + _tc_i]
+    let _tc_ok = 1
+    while _tc_c != 0 {
+        let nx_i0 = _tc_node
+        let nx_i1 = _tc_c
+        call nx_trie_child_get
+        let _tc_node = nx_r0
+        if _tc_node == 0 {
+            let _tc_ok = 0
+            let _tc_c = 0
+        } else {
+            let _tc_i = _tc_i + 1
+            let _tc_c = load [_tc_str + _tc_i]
+        }
+    }
+    let nx_r0 = 0
+    if _tc_ok == 1 {
+        let _tc_isw = load64 [_tc_node + 32]
+        if _tc_isw == 1 {
+            let nx_r0 = 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_starts_with : nx_r0 = 1 if any word in trie nx_i0 begins with
+#   prefix nx_i1 (the empty prefix always matches)
+# ------------------------------------------------------------------------------
+fn nx_trie_starts_with {
+    let _tw_root = nx_i0
+    let _tw_str = nx_i1
+    let _tw_node = _tw_root
+    let _tw_i = 0
+    let _tw_c = load [_tw_str + _tw_i]
+    let _tw_ok = 1
+    while _tw_c != 0 {
+        let nx_i0 = _tw_node
+        let nx_i1 = _tw_c
+        call nx_trie_child_get
+        let _tw_node = nx_r0
+        if _tw_node == 0 {
+            let _tw_ok = 0
+            let _tw_c = 0
+        } else {
+            let _tw_i = _tw_i + 1
+            let _tw_c = load [_tw_str + _tw_i]
+        }
+    }
+    let nx_r0 = _tw_ok
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_trie_remove : unmarks word nx_i1 in trie nx_i0
+#   nx_r0 = 1 if the word existed and was removed, 0 otherwise.
+#   Note: nodes stay shared for other words; only the word terminator flag is
+#   cleared, so contains() reflects the removal immediately.
+# ------------------------------------------------------------------------------
+fn nx_trie_remove {
+    let _trm_root = nx_i0
+    let _trm_str = nx_i1
+    let _trm_node = _trm_root
+    let _trm_i = 0
+    let _trm_c = load [_trm_str + _trm_i]
+    let _trm_ok = 1
+    while _trm_c != 0 {
+        let nx_i0 = _trm_node
+        let nx_i1 = _trm_c
+        call nx_trie_child_get
+        let _trm_node = nx_r0
+        if _trm_node == 0 {
+            let _trm_ok = 0
+            let _trm_c = 0
+        } else {
+            let _trm_i = _trm_i + 1
+            let _trm_c = load [_trm_str + _trm_i]
+        }
+    }
+    let nx_r0 = 0
+    if _trm_ok == 1 {
+        let _trm_isw = load64 [_trm_node + 32]
+        if _trm_isw == 1 {
+            store64 [_trm_node + 32] 0
+            let nx_r0 = 1
+        }
+    }
+}

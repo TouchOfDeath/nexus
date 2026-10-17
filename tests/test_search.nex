@@ -1,0 +1,260 @@
+# Test: Binary Search Primitives (Feature #93, stdlib/search.nex)
+include "stdlib/search.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# sorted fixture: [2, 7, 7, 7, 12, 19, 25, 31]
+let sa = alloc 64
+let s0 = 2
+let s1 = 7
+let s2 = 7
+let s3 = 7
+let s4 = 12
+let s5 = 19
+let s6 = 25
+let s7 = 31
+store64 [sa + 0] s0
+store64 [sa + 8] s1
+store64 [sa + 16] s2
+store64 [sa + 24] s3
+store64 [sa + 32] s4
+store64 [sa + 40] s5
+store64 [sa + 48] s6
+store64 [sa + 56] s7
+
+# ==============================================================================
+# Section 1: exact search - hits
+# ==============================================================================
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 2
+call nx_bsearch_exact
+assert_eq nx_r0, 0
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 7
+call nx_bsearch_exact
+assert_eq nx_r0, 1
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 12
+call nx_bsearch_exact
+assert_eq nx_r0, 4
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 31
+call nx_bsearch_exact
+assert_eq nx_r0, 7
+
+# ==============================================================================
+# Section 2: exact search - misses (returns -1)
+# ==============================================================================
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 1
+call nx_bsearch_exact
+assert_eq nx_r0, 0 - 1
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 10
+call nx_bsearch_exact
+assert_eq nx_r0, 0 - 1
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 99
+call nx_bsearch_exact
+assert_eq nx_r0, 0 - 1
+
+let nx_i0 = sa
+let nx_i1 = 0
+let nx_i2 = 7
+call nx_bsearch_exact
+assert_eq nx_r0, 0 - 1
+
+# ==============================================================================
+# Section 3: exact - first occurrence among duplicates
+# ==============================================================================
+let dup = alloc 64
+let d0 = 5
+let d1 = 5
+let d2 = 5
+let d3 = 5
+let d4 = 5
+let d5 = 9
+store64 [dup + 0] d0
+store64 [dup + 8] d1
+store64 [dup + 16] d2
+store64 [dup + 24] d3
+store64 [dup + 32] d4
+store64 [dup + 40] d5
+
+let nx_i0 = dup
+let nx_i1 = 6
+let nx_i2 = 5
+call nx_bsearch_exact
+assert_eq nx_r0, 0
+
+let nx_i0 = dup
+let nx_i1 = 6
+let nx_i2 = 9
+call nx_bsearch_exact
+assert_eq nx_r0, 5
+
+# ==============================================================================
+# Section 4: lower_bound
+# ==============================================================================
+# first element >= target
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 7
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 1
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 8
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 4
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 1
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 0
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 31
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 7
+
+# beyond the last element returns the length (insertion point)
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 100
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 8
+
+let nx_i0 = sa
+let nx_i1 = 0
+let nx_i2 = 7
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 5: upper_bound
+# ==============================================================================
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 7
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 4
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 12
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 5
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 1
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 0
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 31
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 8
+
+let nx_i0 = sa
+let nx_i1 = 8
+let nx_i2 = 100
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 8
+
+# duplicates: upper_bound - lower_bound = occurrence count (5 x 5)
+let nx_i0 = dup
+let nx_i1 = 6
+let nx_i2 = 5
+call nx_bsearch_lower_bound
+let dlb = nx_r0
+assert_eq dlb, 0
+
+let nx_i0 = dup
+let nx_i1 = 6
+let nx_i2 = 5
+call nx_bsearch_upper_bound
+let dub = nx_r0
+assert_eq dub, 5
+
+let dcount = dub - dlb
+assert_eq dcount, 5
+
+# ==============================================================================
+# Section 6: negative values and single-element arrays
+# ==============================================================================
+let neg = alloc 32
+let n0 = 0 - 20
+let n1 = 0 - 5
+let n2 = 0 - 1
+let n3 = 14
+store64 [neg + 0] n0
+store64 [neg + 8] n1
+store64 [neg + 16] n2
+store64 [neg + 24] n3
+
+let nx_i0 = neg
+let nx_i1 = 4
+let nx_i2 = 0 - 5
+call nx_bsearch_exact
+assert_eq nx_r0, 1
+
+let nx_i0 = neg
+let nx_i1 = 4
+let nx_i2 = 0 - 7
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 1
+
+let nx_i0 = neg
+let nx_i1 = 4
+let nx_i2 = 0 - 20
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 1
+
+let one = alloc 8
+let o0 = 42
+store64 [one + 0] o0
+
+let nx_i0 = one
+let nx_i1 = 1
+let nx_i2 = 42
+call nx_bsearch_exact
+assert_eq nx_r0, 0
+
+let nx_i0 = one
+let nx_i1 = 1
+let nx_i2 = 43
+call nx_bsearch_exact
+assert_eq nx_r0, 0 - 1
+
+let nx_i0 = one
+let nx_i1 = 1
+let nx_i2 = 10
+call nx_bsearch_lower_bound
+assert_eq nx_r0, 0
+
+let nx_i0 = one
+let nx_i1 = 1
+let nx_i2 = 50
+call nx_bsearch_upper_bound
+assert_eq nx_r0, 1
+
+print "BINARY_SEARCH_TEST_PASS"

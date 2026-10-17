@@ -142,6 +142,9 @@ Strings are pointers to null-terminated bytes (string literal variables or
 | `nx_str_to_int` | (s) -> nx_r0 | decimal parse; optional leading '-'; non-digits ignored |
 | `nx_int_to_str` | (v=nx_i0, buf=nx_i1) | writes decimal text of v into buf (needs 12 bytes) |
 
+| `nx_str_split` | (str=nx_i0, delim_byte=nx_i1) -> nx_r0 | Splits at delimiter byte into fresh array: `A[0]`=count, `A[1..N]`=token strings (Feature #133) |
+| `nx_str_join` | (arr=nx_i0, sep=nx_i1, count=nx_i2) -> nx_r0 | Joins qword array of strings with separator into one allocation (Feature #134) |
+
 ### Dynamic Vectors — `stdlib/vec.nex`
 
 A dynamically resizable heap-allocated vector of 64-bit signed integers (`Vec<i64>`).
@@ -286,6 +289,142 @@ Layout in memory (48-byte header struct on heap):
 | `nx_rb_rotate` | (rb=nx_i0, k=nx_i1) -> nx_r0 | Rotates elements by k positions (positive=right, negative=left) |
 | `nx_rb_shrink_to_fit` | (rb=nx_i0) -> nx_r0 | Compacts allocated capacity to live element count (min 4) |
 
+### Memory Primitives — `stdlib/memory.nex` (Features #87 & #88)
+
+Byte-granular bulk memory operations for gap-buffer shifts, framebuffer clears, and buffer resets. `nx_memmove` is overlap-safe: it copies forward when `dst < src` and backward when `dst > src`.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_memmove` | (dst=nx_i0, src=nx_i1, n=nx_i2) -> nx_r0 | Overlap-safe byte move; returns dst |
+| `nx_memcpy` | (dst=nx_i0, src=nx_i1, n=nx_i2) -> nx_r0 | Forward copy for disjoint buffers; returns dst |
+| `nx_memset` | (dst=nx_i0, byte_val=nx_i1, n=nx_i2) -> nx_r0 | Fills n bytes with low byte of value; returns dst |
+| `nx_memzero` | (dst=nx_i0, n=nx_i1) -> nx_r0 | Zeroes n bytes; returns dst |
+
+### Growable ByteBuffer — `stdlib/byte_buffer.nex` (Feature #99)
+
+Heap-backed byte buffer (32-byte descriptor: `data_ptr`, `len`, `cap`, reserved) with automatic capacity doubling. Multi-byte values are little-endian. Reads are offset-based and out-of-bounds reads return 0.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_buf_new` | (init_cap=nx_i0) -> nx_r0 | New buffer (capacity clamped to >= 16) |
+| `nx_buf_write_u8` | (bb=nx_i0, v=nx_i1) -> nx_r0 | Appends low byte; returns new length |
+| `nx_buf_write_u16` | (bb=nx_i0, v=nx_i1) -> nx_r0 | Appends 16-bit LE; returns new length |
+| `nx_buf_write_u32` | (bb=nx_i0, v=nx_i1) -> nx_r0 | Appends 32-bit LE; returns new length |
+| `nx_buf_write_u64` | (bb=nx_i0, v=nx_i1) -> nx_r0 | Appends 64-bit LE; returns new length |
+| `nx_buf_write_bytes` | (bb=nx_i0, ptr=nx_i1, n=nx_i2) -> nx_r0 | Appends n bytes from memory; returns new length |
+| `nx_buf_read_u8` | (bb=nx_i0, off=nx_i1) -> nx_r0 | Byte at offset (0 if out of bounds) |
+| `nx_buf_read_u16` | (bb=nx_i0, off=nx_i1) -> nx_r0 | 16-bit LE at offset (0 if out of bounds) |
+| `nx_buf_read_u32` | (bb=nx_i0, off=nx_i1) -> nx_r0 | 32-bit LE at offset (0 if out of bounds) |
+| `nx_buf_read_u64` | (bb=nx_i0, off=nx_i1) -> nx_r0 | 64-bit LE at offset (0 if out of bounds) |
+| `nx_buf_len` | (bb=nx_i0) -> nx_r0 | Current byte length |
+| `nx_buf_cap` | (bb=nx_i0) -> nx_r0 | Allocated capacity |
+| `nx_buf_clear` | (bb=nx_i0) -> nx_r0 | Resets length to 0 (capacity preserved) |
+| `nx_buf_to_ptr` | (bb=nx_i0) -> nx_r0 | Direct data pointer for raw access |
+
+### Bit Stream Reader & Writer — `stdlib/bit_stream.nex` (Feature #100)
+
+LSB-first bit-level serial I/O (bit 0 of byte 0 is the first bit in the stream), matching DEFLATE-style packing. Bit counts are 1..63 per operation.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_bit_writer_new` | (init_bytes=nx_i0) -> nx_r0 | New writer (capacity clamped to >= 8 bytes) |
+| `nx_bit_write` | (w=nx_i0, val=nx_i1, count=nx_i2) -> nx_r0 | Appends low `count` bits LSB-first; returns total bits |
+| `nx_bit_flush` | (w=nx_i0) -> nx_r0 | Pads with zero bits to byte boundary; returns byte length |
+| `nx_bit_writer_bytes` | (w=nx_i0) -> nx_r0 | Whole bytes currently held (ceil of bits/8) |
+| `nx_bit_reader_new` | (buf=nx_i0, byte_len=nx_i1) -> nx_r0 | New reader over an existing byte buffer |
+| `nx_bit_read` | (r=nx_i0, count=nx_i1) -> nx_r0 | Reads next `count` bits (0 at end of stream) |
+| `nx_bit_reader_pos` | (r=nx_i0) -> nx_r0 | Read cursor position in bits |
+| `nx_bit_reader_bits_left` | (r=nx_i0) -> nx_r0 | Bits remaining between cursor and end |
+
+### Priority Queue / Binary Heap — `stdlib/priority_queue.nex` (Feature #76)
+
+Binary heap with min-heap or max-heap mode chosen at construction. O(log n) push/pop with iterative sift-up/sift-down, auto-doubling storage.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_pq_new` | (init_cap=nx_i0, is_min_heap=nx_i1) -> nx_r0 | New heap (min when flag=1, max when flag=0) |
+| `nx_pq_push` | (pq=nx_i0, val=nx_i1) -> nx_r0 | Appends and rebalances; returns new length |
+| `nx_pq_pop` | (pq=nx_i0) -> nx_r0 | Removes and returns root (0 if empty) |
+| `nx_pq_peek` | (pq=nx_i0) -> nx_r0 | Root value without removal (0 if empty) |
+| `nx_pq_len` | (pq=nx_i0) -> nx_r0 | Element count |
+| `nx_pq_is_empty` | (pq=nx_i0) -> nx_r0 | 1 if empty, else 0 |
+
+### Doubly-Linked List — `stdlib/linked_list.nex` (Feature #77)
+
+Node-based bidirectional list (24-byte nodes: prev, next, val) with O(1) operations at both ends and O(1) removal by node handle. Node links are directly walkable: next at `[node + 8]`, prev at `[node + 0]`.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_list_new` | () -> nx_r0 | New empty list descriptor |
+| `nx_list_push_back` | (l=nx_i0, val=nx_i1) -> nx_r0 | Appends; returns node handle |
+| `nx_list_push_front` | (l=nx_i0, val=nx_i1) -> nx_r0 | Prepends; returns node handle |
+| `nx_list_pop_back` | (l=nx_i0) -> nx_r0 | Removes and returns last value (0 if empty) |
+| `nx_list_pop_front` | (l=nx_i0) -> nx_r0 | Removes and returns first value (0 if empty) |
+| `nx_list_remove_node` | (l=nx_i0, node=nx_i1) -> nx_r0 | Unlinks node handle (1 ok, 0 null handle) |
+| `nx_list_len` | (l=nx_i0) -> nx_r0 | Element count |
+| `nx_list_head` | (l=nx_i0) -> nx_r0 | First node handle (0 if empty) |
+| `nx_list_tail` | (l=nx_i0) -> nx_r0 | Last node handle (0 if empty) |
+| `nx_list_node_val` | (node=nx_i0) -> nx_r0 | Payload stored in a node |
+
+### Trie / Prefix Tree — `stdlib/trie.nex` (Feature #80)
+
+Character prefix tree with parallel branch arrays per node (any byte value 1..255 may branch). Words may share prefixes; the empty string is a valid word.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_trie_new` | () -> nx_r0 | New trie (root node handle) |
+| `nx_trie_insert` | (trie=nx_i0, str=nx_i1) -> nx_r0 | Inserts word; 1 if newly added, 0 if already present |
+| `nx_trie_contains` | (trie=nx_i0, str=nx_i1) -> nx_r0 | 1 if the exact word exists, else 0 |
+| `nx_trie_starts_with` | (trie=nx_i0, prefix=nx_i1) -> nx_r0 | 1 if any word begins with prefix (empty prefix always matches) |
+| `nx_trie_remove` | (trie=nx_i0, str=nx_i1) -> nx_r0 | Unmarks word terminator; 1 if it existed |
+
+### LRU Cache — `stdlib/lru_cache.nex` (Feature #94)
+
+Fixed-capacity cache combining an open-addressing hash table with an intrusive doubly-linked recency list. O(1) get/put with recency refresh; tail eviction leaves a tombstone that a later put of the same key revives; the table rebuilds from live nodes when tombstones fill it. Keys are non-zero 64-bit values (string pointers match by pointer identity); use `nx_lru_contains` to distinguish a stored 0 value from a missing key.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_lru_new` | (cap=nx_i0) -> nx_r0 | New cache holding at most `cap` live entries |
+| `nx_lru_get` | (cache=nx_i0, key=nx_i1) -> nx_r0 | Value for key (0 if missing); hit refreshes recency |
+| `nx_lru_put` | (cache=nx_i0, key=nx_i1, val=nx_i2) -> nx_r0 | Insert/update; 1=new, 2=updated, 3=inserted after eviction |
+| `nx_lru_contains` | (cache=nx_i0, key=nx_i1) -> nx_r0 | 1 if key is live (does not refresh recency) |
+| `nx_lru_len` | (cache=nx_i0) -> nx_r0 | Live entry count |
+| `nx_lru_cap` | (cache=nx_i0) -> nx_r0 | Maximum live entries |
+| `nx_lru_clear` | (cache=nx_i0) -> nx_r0 | Removes all entries and resets the table |
+
+### Arena Bump Allocator — `stdlib/arena.nex` (Feature #96)
+
+Chunked bump allocator: O(1) allocation by pointer bump, 8-byte aligned results, automatic chunk chaining (default or oversized chunks), and a reset pass that is O(number of chunks) regardless of total bytes. Chunks are retained across resets for reuse.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_arena_new` | (chunk_sz=nx_i0) -> nx_r0 | New arena with default chunk size (clamped >= 64) |
+| `nx_arena_alloc` | (arena=nx_i0, n_bytes=nx_i1) -> nx_r0 | Bump-allocates (rounded up to 8 bytes); 0 for n <= 0 |
+| `nx_arena_reset` | (arena=nx_i0) -> nx_r0 | Releases all allocations for reuse; keeps chunks |
+| `nx_arena_used` | (arena=nx_i0) -> nx_r0 | Total bytes currently allocated |
+| `nx_arena_cap` | (arena=nx_i0) -> nx_r0 | Total reserved bytes across all chunks |
+| `nx_arena_chunks` | (arena=nx_i0) -> nx_r0 | Chunk count in the chain |
+
+### UTF-8 Validate / Decode / Encode — `stdlib/unicode.nex` (Features #113-115)
+
+Strict RFC 3629 UTF-8 primitives over raw byte buffers. Validation rejects overlong encodings (C0/C1 leads, E0 80-9F, F0 80-8F), UTF-16 surrogate encodings (ED A0-BF), and out-of-range scalars (F5+, F4 90+).
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_utf8_validate` | (buf=nx_i0, len=nx_i1) -> nx_r0 | 1 if bytes are strict UTF-8 (empty buffer is valid) |
+| `nx_utf8_decode_next` | (buf=nx_i0, offset=nx_i1) -> nx_r0, nx_r1 | Decodes codepoint at offset; `nx_r1` = bytes consumed; (-1, 0) on malformed input |
+| `nx_utf8_encode` | (cp=nx_i0, out=nx_i1) -> nx_r0 | Encodes scalar to 1-4 bytes; returns count (0 on invalid scalar) |
+
+### Binary Search Primitives — `stdlib/search.nex` (Feature #93)
+
+Binary searches over ascending sorted 64-bit arrays with overflow-free midpoints (`lo + (hi - lo) / 2`). Duplicate ranges are half-open: `[lower_bound, upper_bound)`.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_bsearch_exact` | (arr=nx_i0, len=nx_i1, target=nx_i2) -> nx_r0 | Index of first match, or -1 when absent |
+| `nx_bsearch_lower_bound` | (arr=nx_i0, len=nx_i1, target=nx_i2) -> nx_r0 | First index with arr[i] >= target (len if none) |
+| `nx_bsearch_upper_bound` | (arr=nx_i0, len=nx_i1, target=nx_i2) -> nx_r0 | First index with arr[i] > target (len if none) |
+
 ### Bitwise Operations — `stdlib/bitwise.nex`
 
 Software-emulated 64-bit bitwise primitives and shifts. When using operator syntax (`&`, `|`, `^`, `~`, `<<`, `>>`), `nexprep.c` automatically desugars them to these functions:
@@ -385,4 +524,15 @@ Everything above is machine-checked:
 - `tests/test_poll_events.nex` — Async epoll and eventfd multiplexing
 - `tests/test_string_escapes.nex` — Universal string escape sequences across Linux/Win/macOS
 - `examples/stdlib_demo.nex` — Runnable tour of standard library modules
-- `./nexus test` runs all 41 test suites and verifies 100% pass rate
+- `tests/test_memory.nex` — memmove overlap directionality, memset patterns, memzero ranges
+- `tests/test_byte_buffer.nex` — ByteBuffer width roundtrips, auto-growth, block writes
+- `tests/test_bit_stream.nex` — LSB-first bit roundtrips, flush alignment, cursor tracking
+- `tests/test_priority_queue.nex` — min/max heap ordering, duplicates, growth, heapsort behavior
+- `tests/test_linked_list.nex` — both-end pushes/pops, node removal at every position
+- `tests/test_trie.nex` — prefix queries, shared branches, removal semantics, empty word
+- `tests/test_lru_cache.nex` — eviction order, recency refresh, tombstone revival, table rebuild
+- `tests/test_arena.nex` — alignment, chunk chaining, oversized chunks, reset reuse
+- `tests/test_unicode.nex` — strict validation boundaries, decode/encode roundtrips, malformed input
+- `tests/test_string_split_join.nex` — delimiter split edge cases, separator joins, roundtrips
+- `tests/test_search.nex` — exact/lower/upper bounds, duplicates, negatives, single-element arrays
+- `./nexus test` runs all 52 test suites and verifies 100% pass rate

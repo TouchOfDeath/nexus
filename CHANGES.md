@@ -1,6 +1,23 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.5 — Modern Loop & Range Ergonomics Bundle & Standard Library Additions (current)
+## v8.6 — Foundational Prerequisite Bundle (current)
+
+### 0. Standard Library Additions: Features #76, #77, #80, #87, #88, #93, #94, #96, #99, #100, #113, #114, #115, #133, #134
+- **Features #87 & #88: Fast Memory Move / Set / Zero (`stdlib/memory.nex`)**: Byte-granular bulk memory primitives with overlap-safe `nx_memmove` (directional copy selection for gap-buffer shifts), `nx_memcpy`, `nx_memset`, and `nx_memzero`, all returning the destination pointer. Verified with dedicated regression suite in `tests/test_memory.nex`.
+- **Feature #99: Growable ByteBuffer (`stdlib/byte_buffer.nex`)**: Heap-backed byte buffer with automatic capacity doubling, little-endian u8/u16/u32/u64 append plus offset-based width reads, raw block writes, direct data-pointer export, and OOB-safe semantics. Verified in `tests/test_byte_buffer.nex`.
+- **Feature #100: Bit Stream Reader & Writer (`stdlib/bit_stream.nex`)**: LSB-first bit-level serial I/O with a doubling writer buffer, 1-63 bit field appends, byte-boundary flush, and a cursor-based reader over any byte buffer. Verified in `tests/test_bit_stream.nex`.
+- **Feature #76: Priority Queue / Binary Heap (`stdlib/priority_queue.nex`)**: Min/max mode binary heap with O(log n) iterative sift-up/sift-down, auto-doubling storage, and heapsort-verified ordering. Verified in `tests/test_priority_queue.nex`.
+- **Feature #77: Doubly-Linked List (`stdlib/linked_list.nex`)**: Node-based bidirectional list with O(1) push/pop at both ends, O(1) node-handle removal, and directly walkable links. Verified in `tests/test_linked_list.nex`.
+- **Feature #80: Trie / Prefix Tree (`stdlib/trie.nex`)**: Character trie with parallel branch arrays, insert/contains/prefix/remove word operations, shared prefixes, and empty-string word support. Verified in `tests/test_trie.nex`.
+- **Feature #94: LRU Cache (`stdlib/lru_cache.nex`)**: Fixed-capacity cache combining an open-addressing hash table with an intrusive doubly-linked recency list, tombstone revival eviction, and automatic table rebuild. Verified in `tests/test_lru_cache.nex`.
+- **Feature #96: Arena Bump Allocator (`stdlib/arena.nex`)**: Chunked bump allocator with 8-byte aligned O(1) allocations, automatic chunk chaining, usage metrics, and an O(chunks) reset that retains chunks for reuse. Verified in `tests/test_arena.nex`.
+- **Features #113-115: UTF-8 Validate / Decode / Encode (`stdlib/unicode.nex`)**: Strict RFC 3629 validation (overlong/surrogate/range/truncation rejection), offset-based decoding with secondary byte-count return, and scalar-to-bytes encoding. Verified in `tests/test_unicode.nex`.
+- **Features #133 & #134: String Split / Join (`stdlib/strings.nex`)**: `nx_str_split` tokenizes at any delimiter byte into a counted token array; `nx_str_join` concatenates a string array with an arbitrary separator into one allocation. Verified in `tests/test_string_split_join.nex`.
+- **Feature #93: Binary Search Primitives (`stdlib/search.nex`)**: Exact-match, lower-bound, and upper-bound searches over sorted 64-bit arrays with overflow-free midpoints and half-open duplicate ranges. Verified in `tests/test_search.nex`.
+- **Test Runner Integration**: 11 new regression suite blocks wired into `./nexus test` (memory, ByteBuffer, bit stream, priority queue, linked list, trie, LRU, arena, unicode, split/join, binary search) with per-suite PASS markers and summary reporting; full suite green.
+- **Tri-Platform Verification**: `./nexus test` 100% PASS (26 example suites, 13/13 diagnostics, 50/50 foundation tests, 3/3 interactive tests, 26 stdlib suites); `./nexus self-host` 100% bit-for-bit convergence (0 diffs on 49,152-byte PE32+ and 57,951-byte Linux ELF64).
+
+## v8.5 — Modern Loop & Range Ergonomics Bundle & Standard Library Additions
 
 ### 0. Standard Library Additions: Features #71, #74, #75, #78, #132, #138, #147, #148
 - **Features #75 & #74: Circular Ring Buffer / Deque (`stdlib/ring_buffer.nex`)**: Production-grade, 48-byte heap-descriptor double-ended circular buffer with 25 standard library subroutines. Supports dual operating modes: dynamic auto-growing Deque (geometric doubling capacity expansion with amortized O(1) push and pop at both head and tail) and fixed-capacity circular buffer (bounded memory window with eviction tracking via `nx_rb_dropped_count`). Features logical O(1) indexing (`nx_rb_get`, `nx_rb_set`), element searching (`nx_rb_contains`, `nx_rb_index_of`), contiguous array export (`nx_rb_to_array`), deep copying (`nx_rb_clone`), equality testing (`nx_rb_equals`), in-place reversal (`nx_rb_reverse`), bidirectional rotation (`nx_rb_rotate`), and buffer compaction (`nx_rb_shrink_to_fit`). Verified with dedicated regression suite in `tests/test_ring_buffer.nex`.

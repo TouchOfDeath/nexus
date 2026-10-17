@@ -1,0 +1,405 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: lru_cache.nex
+#           Least-Recently-Used Cache (Feature #94)
+# ==============================================================================
+#
+# A fixed-capacity LRU cache combining an open-addressing hash table (O(1)
+# key lookup) with an intrusive doubly-linked recency list (O(1) reorder and
+# eviction). Designed for caching rendered glyphs, parsed file ASTs, and
+# other hot handles.
+#
+# Node layout (40 bytes on the heap):
+#   offset 0:  prev - previous (more recent) node, 0 = none
+#   offset 8:  next - next (less recent) node, 0 = none
+#   offset 16: key  - 64-bit key (0 is reserved, see notes)
+#   offset 24: val  - 64-bit payload
+#   offset 32: dead - 1 after eviction (slot kept for reuse)
+#
+# Cache descriptor layout (64 bytes on the heap):
+#   offset 0:  head  - most recently used node (0 = empty)
+#   offset 8:  tail  - least recently used node (0 = empty)
+#   offset 16: len   - live element count
+#   offset 24: cap   - maximum live elements
+#   offset 32: keys  - hash table key array (qword per slot, 0 = empty)
+#   offset 40: nodes - hash table node array (qword per slot)
+#   offset 48: slots - table slot count (power of two, >= 2 * cap)
+#   offset 56: used  - occupied table slots (live + evicted tombstones)
+#
+# Notes:
+#   - Keys are arbitrary non-zero 64-bit values (string pointers work but are
+#     matched by pointer identity, not content). Key 0 is the table's empty
+#     sentinel and cannot be stored.
+#   - Values are arbitrary 64-bit values including 0; use nx_lru_contains to
+#     distinguish a stored 0 from a missing key.
+#   - Eviction marks the node dead but leaves its table slot; a later put of
+#     the same key revives it. When the table fills, it is rebuilt from the
+#     live nodes (dropping tombstones).
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = cache handle (or capacity for nx_lru_new)
+#   nx_i1 = key, nx_i2 = value
+#   nx_r0 = result (handle, value, flag, or status per function)
+#
+# Internal variables use per-function unique prefixes (_lrun_*, _lruh_*,
+# _lruf_*, _lrup_*, _lrurb_*, _lruu_*, _lrul_*, _lrue_*, _lruget_*, _lruput_*,
+# _lruc_*, _lrulen_*, _lrucap_*, _lruclear_*) so no clobbering occurs across
+# calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_new : nx_r0 = new LRU cache holding at most nx_i0 live entries
+# ------------------------------------------------------------------------------
+fn nx_lru_new {
+    let _lrun_cap = nx_i0
+    if _lrun_cap < 1 {
+        let _lrun_cap = 1
+    }
+    # slot count: smallest power of two >= 2 * cap (min 4)
+    let _lrun_slots = 4
+    let _lrun_need = _lrun_cap * 2
+    while _lrun_slots < _lrun_need {
+        let _lrun_slots = _lrun_slots * 2
+    }
+    let _lrun_keys_bytes = _lrun_slots * 8
+    let _lrun_keys = alloc _lrun_keys_bytes
+    let _lrun_nodes = alloc _lrun_keys_bytes
+    let _lrun_desc = alloc 64
+    store64 [_lrun_desc + 0] 0
+    store64 [_lrun_desc + 8] 0
+    store64 [_lrun_desc + 16] 0
+    store64 [_lrun_desc + 24] _lrun_cap
+    store64 [_lrun_desc + 32] _lrun_keys
+    store64 [_lrun_desc + 40] _lrun_nodes
+    store64 [_lrun_desc + 48] _lrun_slots
+    store64 [_lrun_desc + 56] 0
+    let nx_r0 = _lrun_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_hash : internal, nx_r0 = scrambled hash of key nx_i0 (always >= 0)
+# ------------------------------------------------------------------------------
+fn nx_lru_hash {
+    let _lruh_k = nx_i0
+    let _lruh_h = _lruh_k + 2654435761
+    if _lruh_h < 0 {
+        let _lruh_h = 0 - _lruh_h
+    }
+    let nx_r0 = _lruh_h
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_find : internal, nx_r0 = table node for key nx_i1 in cache nx_i0
+#   Returns 0 when absent. The node may be dead (evicted) - callers must
+#   check the dead flag.
+# ------------------------------------------------------------------------------
+fn nx_lru_find {
+    let _lruf_c = nx_i0
+    let _lruf_key = nx_i1
+    let _lruf_slots = load64 [_lruf_c + 48]
+    let _lruf_keys = load64 [_lruf_c + 32]
+    let _lruf_nodes = load64 [_lruf_c + 40]
+    let nx_i0 = _lruf_key
+    call nx_lru_hash
+    let _lruf_i = nx_r0
+    let _lruf_i = _lruf_i % _lruf_slots
+    let _lruf_probe = 0
+    let nx_r0 = 0
+    while _lruf_probe < _lruf_slots {
+        let _lruf_k = load64 [_lruf_keys + _lruf_i * 8]
+        if _lruf_k == _lruf_key {
+            let nx_r0 = load64 [_lruf_nodes + _lruf_i * 8]
+            let _lruf_probe = _lruf_slots
+        }
+        if _lruf_k == 0 {
+            let _lruf_probe = _lruf_slots
+        }
+        let _lruf_i = _lruf_i + 1
+        if _lruf_i >= _lruf_slots {
+            let _lruf_i = 0
+        }
+        let _lruf_probe = _lruf_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_table_put : internal, inserts (key nx_i1 -> node nx_i2) into the
+#   table of cache nx_i0. Caller guarantees a free slot exists.
+# ------------------------------------------------------------------------------
+fn nx_lru_table_put {
+    let _lrup_c = nx_i0
+    let _lrup_key = nx_i1
+    let _lrup_node = nx_i2
+    let _lrup_slots = load64 [_lrup_c + 48]
+    let _lrup_keys = load64 [_lrup_c + 32]
+    let _lrup_nodes = load64 [_lrup_c + 40]
+    let nx_i0 = _lrup_key
+    call nx_lru_hash
+    let _lrup_i = nx_r0
+    let _lrup_i = _lrup_i % _lrup_slots
+    let _lrup_done = 0
+    while _lrup_done == 0 {
+        let _lrup_k = load64 [_lrup_keys + _lrup_i * 8]
+        if _lrup_k == 0 {
+            store64 [_lrup_keys + _lrup_i * 8] _lrup_key
+            store64 [_lrup_nodes + _lrup_i * 8] _lrup_node
+            let _lrup_used = load64 [_lrup_c + 56]
+            let _lrup_used = _lrup_used + 1
+            store64 [_lrup_c + 56] _lrup_used
+            let _lrup_done = 1
+        }
+        let _lrup_i = _lrup_i + 1
+        if _lrup_i >= _lrup_slots {
+            let _lrup_i = 0
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_table_rebuild : internal, rebuilds the table of cache nx_i0 from
+#   its live nodes only, dropping evicted tombstone entries.
+# ------------------------------------------------------------------------------
+fn nx_lru_table_rebuild {
+    let _lrurb_c = nx_i0
+    let _lrurb_slots = load64 [_lrurb_c + 48]
+    let _lrurb_table_bytes = _lrurb_slots * 8
+    let _lrurb_keys = alloc _lrurb_table_bytes
+    let _lrurb_nodes = alloc _lrurb_table_bytes
+    store64 [_lrurb_c + 32] _lrurb_keys
+    store64 [_lrurb_c + 40] _lrurb_nodes
+    store64 [_lrurb_c + 56] 0
+    let _lrurb_node = load64 [_lrurb_c + 0]
+    while _lrurb_node != 0 {
+        let _lrurb_key = load64 [_lrurb_node + 16]
+        let nx_i0 = _lrurb_c
+        let nx_i1 = _lrurb_key
+        let nx_i2 = _lrurb_node
+        call nx_lru_table_put
+        let _lrurb_node = load64 [_lrurb_node + 8]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_unlink : internal, detaches node nx_i1 from the recency list of
+#   cache nx_i0. Does not touch len.
+# ------------------------------------------------------------------------------
+fn nx_lru_unlink {
+    let _lruu_c = nx_i0
+    let _lruu_node = nx_i1
+    let _lruu_prev = load64 [_lruu_node + 0]
+    let _lruu_next = load64 [_lruu_node + 8]
+    let _lruu_head = load64 [_lruu_c + 0]
+    let _lruu_tail = load64 [_lruu_c + 8]
+    if _lruu_prev == 0 {
+        store64 [_lruu_c + 0] _lruu_next
+    } else {
+        store64 [_lruu_prev + 8] _lruu_next
+    }
+    if _lruu_next == 0 {
+        store64 [_lruu_c + 8] _lruu_prev
+    } else {
+        store64 [_lruu_next + 0] _lruu_prev
+    }
+    let _lruu_check = 0
+    if _lruu_head == _lruu_node {
+        let _lruu_check = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_link_front : internal, inserts node nx_i1 as the most recently
+#   used node of cache nx_i0. Node must currently be detached. Does not
+#   touch len.
+# ------------------------------------------------------------------------------
+fn nx_lru_link_front {
+    let _lrul_c = nx_i0
+    let _lrul_node = nx_i1
+    let _lrul_head = load64 [_lrul_c + 0]
+    store64 [_lrul_node + 0] 0
+    store64 [_lrul_node + 8] _lrul_head
+    if _lrul_head != 0 {
+        store64 [_lrul_head + 0] _lrul_node
+    }
+    store64 [_lrul_c + 0] _lrul_node
+    let _lrul_tail = load64 [_lrul_c + 8]
+    if _lrul_tail == 0 {
+        store64 [_lrul_c + 8] _lrul_node
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_evict_tail : internal, evicts the least recently used node of
+#   cache nx_i0 (marks it dead, leaves it in the table as a tombstone).
+# ------------------------------------------------------------------------------
+fn nx_lru_evict_tail {
+    let _lrue_c = nx_i0
+    let _lrue_tail = load64 [_lrue_c + 8]
+    if _lrue_tail != 0 {
+        let nx_i0 = _lrue_c
+        let nx_i1 = _lrue_tail
+        call nx_lru_unlink
+        store64 [_lrue_tail + 32] 1
+        let _lrue_len = load64 [_lrue_c + 16]
+        let _lrue_len = _lrue_len - 1
+        store64 [_lrue_c + 16] _lrue_len
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_get : nx_r0 = value for key nx_i1 in cache nx_i0 (0 if missing)
+#   A hit refreshes recency (the node moves to the front).
+# ------------------------------------------------------------------------------
+fn nx_lru_get {
+    let _lruget_c = nx_i0
+    let _lruget_key = nx_i1
+    let nx_i0 = _lruget_c
+    let nx_i1 = _lruget_key
+    call nx_lru_find
+    let _lruget_node = nx_r0
+    let nx_r0 = 0
+    if _lruget_node != 0 {
+        let _lruget_dead = load64 [_lruget_node + 32]
+        if _lruget_dead == 0 {
+            let nx_r0 = load64 [_lruget_node + 24]
+            # refresh recency: unlink and re-link at the front
+            let _lruget_head = load64 [_lruget_c + 0]
+            if _lruget_head != _lruget_node {
+                let nx_i0 = _lruget_c
+                let nx_i1 = _lruget_node
+                call nx_lru_unlink
+                let nx_i0 = _lruget_c
+                let nx_i1 = _lruget_node
+                call nx_lru_link_front
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_put : inserts or updates key nx_i1 with value nx_i2 in cache nx_i0
+#   nx_r0 = 1 (new entry), 2 (value updated), 3 (inserted after an eviction)
+# ------------------------------------------------------------------------------
+fn nx_lru_put {
+    let _lruput_c = nx_i0
+    let _lruput_key = nx_i1
+    let _lruput_val = nx_i2
+    let nx_i0 = _lruput_c
+    let nx_i1 = _lruput_key
+    call nx_lru_find
+    let _lruput_node = nx_r0
+    let _lruput_status = 1
+    if _lruput_node != 0 {
+        let _lruput_dead = load64 [_lruput_node + 32]
+        if _lruput_dead == 0 {
+            # existing live entry: update in place and refresh recency
+            store64 [_lruput_node + 24] _lruput_val
+            let _lruput_status = 2
+            let _lruput_head = load64 [_lruput_c + 0]
+            if _lruput_head != _lruput_node {
+                let nx_i0 = _lruput_c
+                let nx_i1 = _lruput_node
+                call nx_lru_unlink
+                let nx_i0 = _lruput_c
+                let nx_i1 = _lruput_node
+                call nx_lru_link_front
+            }
+        }
+    }
+    if _lruput_status != 2 {
+        # new (or revive) path: make room if at capacity
+        let _lruput_len = load64 [_lruput_c + 16]
+        let _lruput_cap = load64 [_lruput_c + 24]
+        if _lruput_len >= _lruput_cap {
+            let nx_i0 = _lruput_c
+            call nx_lru_evict_tail
+            let _lruput_status = 3
+        }
+        if _lruput_node != 0 {
+            # revive an evicted node (its table slot still points here)
+            store64 [_lruput_node + 24] _lruput_val
+            store64 [_lruput_node + 32] 0
+            let nx_i0 = _lruput_c
+            let nx_i1 = _lruput_node
+            call nx_lru_link_front
+        } else {
+            # fresh node: ensure a free table slot, then insert
+            let _lruput_used = load64 [_lruput_c + 56]
+            let _lruput_slots = load64 [_lruput_c + 48]
+            if _lruput_used >= _lruput_slots {
+                let nx_i0 = _lruput_c
+                call nx_lru_table_rebuild
+            }
+            let _lruput_new = alloc 40
+            store64 [_lruput_new + 0] 0
+            store64 [_lruput_new + 8] 0
+            store64 [_lruput_new + 16] _lruput_key
+            store64 [_lruput_new + 24] _lruput_val
+            store64 [_lruput_new + 32] 0
+            let nx_i0 = _lruput_c
+            let nx_i1 = _lruput_key
+            let nx_i2 = _lruput_new
+            call nx_lru_table_put
+            let nx_i0 = _lruput_c
+            let nx_i1 = _lruput_new
+            call nx_lru_link_front
+        }
+        let _lruput_len = load64 [_lruput_c + 16]
+        let _lruput_new_len = _lruput_len + 1
+        store64 [_lruput_c + 16] _lruput_new_len
+    }
+    let nx_r0 = _lruput_status
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_contains : nx_r0 = 1 if key nx_i1 is live in cache nx_i0, else 0
+#   Does not refresh recency.
+# ------------------------------------------------------------------------------
+fn nx_lru_contains {
+    let _lruc_c = nx_i0
+    let _lruc_key = nx_i1
+    let nx_i0 = _lruc_c
+    let nx_i1 = _lruc_key
+    call nx_lru_find
+    let _lruc_node = nx_r0
+    let nx_r0 = 0
+    if _lruc_node != 0 {
+        let _lruc_dead = load64 [_lruc_node + 32]
+        if _lruc_dead == 0 {
+            let nx_r0 = 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_len : nx_r0 = live entry count of cache nx_i0
+# ------------------------------------------------------------------------------
+fn nx_lru_len {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_cap : nx_r0 = maximum live entry count of cache nx_i0
+# ------------------------------------------------------------------------------
+fn nx_lru_cap {
+    let nx_r0 = load64 [nx_i0 + 24]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_lru_clear : removes all entries from cache nx_i0 (table reset)
+# ------------------------------------------------------------------------------
+fn nx_lru_clear {
+    let _lruclear_c = nx_i0
+    let _lruclear_slots = load64 [_lruclear_c + 48]
+    let _lruclear_keys = load64 [_lruclear_c + 32]
+    let _lruclear_nodes = load64 [_lruclear_c + 40]
+    let _lruclear_i = 0
+    while _lruclear_i < _lruclear_slots {
+        store64 [_lruclear_keys + _lruclear_i * 8] 0
+        store64 [_lruclear_nodes + _lruclear_i * 8] 0
+        let _lruclear_i = _lruclear_i + 1
+    }
+    store64 [_lruclear_c + 0] 0
+    store64 [_lruclear_c + 8] 0
+    store64 [_lruclear_c + 16] 0
+    store64 [_lruclear_c + 56] 0
+    let nx_r0 = 1
+}

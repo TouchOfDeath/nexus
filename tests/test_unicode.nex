@@ -1,0 +1,428 @@
+# Test: UTF-8 Validate / Decode / Encode (Features #113-115, stdlib/unicode.nex)
+include "stdlib/unicode.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# build a scratch buffer with chosen bytes
+let ub = alloc 64
+
+# ==============================================================================
+# Section 1: Validation - pure ASCII
+# ==============================================================================
+let nx_i0 = "hello"
+let nx_i1 = 5
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+let nx_i0 = "hello"
+let nx_i1 = 0
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# a NUL payload byte is technically valid UTF-8 (U+0000)
+let nx_i0 = "a\x00b"
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 2: Validation - valid multi-byte sequences
+# ==============================================================================
+# 2-byte: U+00E9 (é) = C3 A9
+store [ub + 0] 195
+store [ub + 1] 169
+let nx_i0 = ub
+let nx_i1 = 2
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# boundary of the 2-byte lead range: C2 80 (U+0080)
+store [ub + 0] 194
+store [ub + 1] 128
+let nx_i0 = ub
+let nx_i1 = 2
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# 3-byte: U+20AC (euro) = E2 82 AC
+store [ub + 0] 226
+store [ub + 1] 130
+store [ub + 2] 172
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# E0 boundary: E0 A0 80 (U+0800)
+store [ub + 0] 224
+store [ub + 1] 160
+store [ub + 2] 128
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# ED boundary: ED 9F BF (U+D7FF, just below surrogates)
+store [ub + 0] 237
+store [ub + 1] 159
+store [ub + 2] 191
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# 4-byte: U+1F600 (emoji) = F0 9F 98 80
+store [ub + 0] 240
+store [ub + 1] 159
+store [ub + 2] 152
+store [ub + 3] 128
+let nx_i0 = ub
+let nx_i1 = 4
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# F4 boundary: F4 8F BF BF (U+10FFFF, the last scalar)
+store [ub + 0] 244
+store [ub + 1] 143
+store [ub + 2] 191
+store [ub + 3] 191
+let nx_i0 = ub
+let nx_i1 = 4
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 3: Validation - overlong encodings rejected
+# ==============================================================================
+# overlong 2-byte: C0 AF (would be "/" encoded long)
+store [ub + 0] 192
+store [ub + 1] 175
+let nx_i0 = ub
+let nx_i1 = 2
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# overlong 2-byte: C1 BF
+store [ub + 0] 193
+store [ub + 1] 191
+let nx_i0 = ub
+let nx_i1 = 2
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# overlong 3-byte: E0 80 80
+store [ub + 0] 224
+store [ub + 1] 128
+store [ub + 2] 128
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# overlong 4-byte: F0 80 80 80
+store [ub + 0] 240
+store [ub + 1] 128
+store [ub + 2] 128
+store [ub + 3] 128
+let nx_i0 = ub
+let nx_i1 = 4
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: Validation - surrogates and out-of-range rejected
+# ==============================================================================
+# surrogate: ED A0 80 (U+D800)
+store [ub + 0] 237
+store [ub + 1] 160
+store [ub + 2] 128
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# surrogate: ED BF BF (U+DFFF)
+store [ub + 0] 237
+store [ub + 1] 191
+store [ub + 2] 191
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# out of range: F4 90 80 80 (U+110000)
+store [ub + 0] 244
+store [ub + 1] 144
+store [ub + 2] 128
+store [ub + 3] 128
+let nx_i0 = ub
+let nx_i1 = 4
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# invalid lead: F5
+store [ub + 0] 245
+store [ub + 1] 128
+store [ub + 2] 128
+store [ub + 3] 128
+let nx_i0 = ub
+let nx_i1 = 4
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# stray continuation byte alone
+store [ub + 0] 128
+let nx_i0 = ub
+let nx_i1 = 1
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# truncated 3-byte sequence (missing last byte)
+store [ub + 0] 226
+store [ub + 1] 130
+let nx_i0 = ub
+let nx_i1 = 2
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# truncated 4-byte sequence
+store [ub + 0] 240
+store [ub + 1] 159
+store [ub + 2] 152
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# bad continuation (0x41 after a lead)
+store [ub + 0] 195
+store [ub + 1] 65
+let nx_i0 = ub
+let nx_i1 = 2
+call nx_utf8_validate
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 5: Validation - valid mixed content
+# ==============================================================================
+# "a" + é (C3 A9) + euro (E2 82 AC) + emoji (F0 9F 98 80) + "z" = 1+2+3+4+1
+store [ub + 0] 97
+store [ub + 1] 195
+store [ub + 2] 169
+store [ub + 3] 226
+store [ub + 4] 130
+store [ub + 5] 172
+store [ub + 6] 240
+store [ub + 7] 159
+store [ub + 8] 152
+store [ub + 9] 128
+store [ub + 10] 122
+let nx_i0 = ub
+let nx_i1 = 11
+call nx_utf8_validate
+assert_eq nx_r0, 1
+
+# ==============================================================================
+# Section 6: Decoding - ASCII and multi-byte
+# ==============================================================================
+# "a" at 0 -> codepoint 97, 1 byte
+let nx_i0 = ub
+let nx_i1 = 0
+call nx_utf8_decode_next
+assert_eq nx_r0, 97
+assert_eq nx_r1, 1
+
+# é at 1 -> 233, 2 bytes
+let nx_i0 = ub
+let nx_i1 = 1
+call nx_utf8_decode_next
+assert_eq nx_r0, 233
+assert_eq nx_r1, 2
+
+# euro at 3 -> 8364, 3 bytes
+let nx_i0 = ub
+let nx_i1 = 3
+call nx_utf8_decode_next
+assert_eq nx_r0, 8364
+assert_eq nx_r1, 3
+
+# emoji at 6 -> 128512, 4 bytes
+let nx_i0 = ub
+let nx_i1 = 6
+call nx_utf8_decode_next
+assert_eq nx_r0, 128512
+assert_eq nx_r1, 4
+
+# "z" at 10 -> 122, 1 byte
+let nx_i0 = ub
+let nx_i1 = 10
+call nx_utf8_decode_next
+assert_eq nx_r0, 122
+assert_eq nx_r1, 1
+
+# ==============================================================================
+# Section 7: Decoding - malformed input
+# ==============================================================================
+# stray continuation
+store [ub + 20] 140
+let nx_i0 = ub
+let nx_i1 = 20
+call nx_utf8_decode_next
+assert_eq nx_r0, 0 - 1
+assert_eq nx_r1, 0
+
+# overlong 2-byte lead C0
+store [ub + 21] 192
+store [ub + 22] 175
+let nx_i0 = ub
+let nx_i1 = 21
+call nx_utf8_decode_next
+assert_eq nx_r0, 0 - 1
+assert_eq nx_r1, 0
+
+# surrogate ED A0
+store [ub + 24] 237
+store [ub + 25] 160
+store [ub + 26] 128
+let nx_i0 = ub
+let nx_i1 = 24
+call nx_utf8_decode_next
+assert_eq nx_r0, 0 - 1
+assert_eq nx_r1, 0
+
+# ==============================================================================
+# Section 8: Encoding - all widths and boundaries
+# ==============================================================================
+let enc = alloc 16
+
+# U+0041 (65) -> 1 byte
+let nx_i0 = 65
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 1
+let e0 = load [enc + 0]
+assert_eq e0, 65
+
+# U+00E9 (233) -> 2 bytes C3 A9
+let nx_i0 = 233
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 2
+let e0 = load [enc + 0]
+assert_eq e0, 195
+let e1 = load [enc + 1]
+assert_eq e1, 169
+
+# U+20AC (8364) -> 3 bytes E2 82 AC
+let nx_i0 = 8364
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 3
+let e0 = load [enc + 0]
+assert_eq e0, 226
+let e1 = load [enc + 1]
+assert_eq e1, 130
+let e2 = load [enc + 2]
+assert_eq e2, 172
+
+# U+1F600 (128512) -> 4 bytes F0 9F 98 80
+let nx_i0 = 128512
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 4
+let e0 = load [enc + 0]
+assert_eq e0, 240
+let e1 = load [enc + 1]
+assert_eq e1, 159
+let e2 = load [enc + 2]
+assert_eq e2, 152
+let e3 = load [enc + 3]
+assert_eq e3, 128
+
+# boundary scalars: U+007F (127) 1 byte, U+0080 (128) 2 bytes
+let nx_i0 = 127
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 1
+
+let nx_i0 = 128
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 2
+
+# U+07FF (2047) 2 bytes, U+0800 (2048) 3 bytes
+let nx_i0 = 2047
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 2
+
+let nx_i0 = 2048
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 3
+
+# U+FFFF (65535) 3 bytes, U+10000 (65536) 4 bytes
+let nx_i0 = 65535
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 3
+
+let nx_i0 = 65536
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 4
+
+# U+10FFFF (1114111) 4 bytes - the maximum scalar
+let nx_i0 = 1114111
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 4
+
+# invalid scalars: surrogates and out of range
+let nx_i0 = 55296
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 0
+
+let nx_i0 = 57343
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 0
+
+let nx_i0 = 1114112
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 0
+
+let nx_i0 = 0 - 1
+let nx_i1 = enc
+call nx_utf8_encode
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 9: Encode -> decode roundtrip
+# ==============================================================================
+let rt = alloc 16
+let rti = 0
+let rtok = 1
+while rti < 5 {
+    let rtcp = rti * 10000 + 40
+    let nx_i0 = rtcp
+    let nx_i1 = rt
+    call nx_utf8_encode
+    let rtbytes = nx_r0
+    let nx_i0 = rt
+    let nx_i1 = 0
+    call nx_utf8_decode_next
+    if nx_r0 != rtcp {
+        let rtok = 0
+    }
+    if nx_r1 != rtbytes {
+        let rtok = 0
+    }
+    let rti = rti + 1
+}
+assert_eq rtok, 1
+
+print "UNICODE_TEST_PASS"

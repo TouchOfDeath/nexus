@@ -1,0 +1,269 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: byte_buffer.nex
+#              Growable Byte Array Buffer / ByteBuffer (Feature #99)
+# ==============================================================================
+#
+# A ByteBuffer is a heap-backed, dynamically resizable byte buffer with
+# automatic capacity doubling, designed for serializing binary data such as
+# X11 wire protocol packets, ELF headers, and network frames.
+#
+# Memory Layout (stored in a 32-byte descriptor struct on the heap):
+#   offset 0:  data_ptr - pointer to the raw byte array
+#   offset 8:  len      - current number of bytes written
+#   offset 16: cap      - allocated capacity in bytes
+#   offset 24: reserved - always 0 (future use)
+#
+# Multi-byte writes/reads use little-endian byte order (native x86-64/ARM64
+# memory layout) via the compiler's store16/store32/store64 primitives.
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = buffer handle (or initial capacity for nx_buf_new)
+#   nx_i1 = value / byte offset / source pointer (per function)
+#   nx_i2 = byte count (nx_buf_write_bytes)
+#   nx_r0 = result (handle, length, capacity, status, or pointer)
+#
+# All internal variables use per-function unique prefixes (_bbn_*, _bbg_*,
+# _bbw?_*, _bbr?_*, _bb_*) so no clobbering occurs across calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_new : nx_r0 = new ByteBuffer with initial capacity nx_i0
+#   Capacity is clamped to at least 16 bytes.
+# ------------------------------------------------------------------------------
+fn nx_buf_new {
+    let _bbn_cap = nx_i0
+    if _bbn_cap < 16 {
+        let _bbn_cap = 16
+    }
+    let _bbn_data = alloc _bbn_cap
+    let _bbn_desc = alloc 32
+    store64 [_bbn_desc + 0] _bbn_data
+    store64 [_bbn_desc + 8] 0
+    store64 [_bbn_desc + 16] _bbn_cap
+    store64 [_bbn_desc + 24] 0
+    let nx_r0 = _bbn_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_grow : internal helper, ensures capacity of buffer nx_i0 >= nx_i1
+#   Doubles the capacity until it fits, preserving all existing bytes.
+# ------------------------------------------------------------------------------
+fn nx_buf_grow {
+    let _bbg_h = nx_i0
+    let _bbg_need = nx_i1
+    let _bbg_cur = load64 [_bbg_h + 16]
+    if _bbg_cur < _bbg_need {
+        let _bbg_new = _bbg_cur * 2
+        while _bbg_new < _bbg_need {
+            let _bbg_new = _bbg_new * 2
+        }
+        let _bbg_data = alloc _bbg_new
+        let _bbg_old = load64 [_bbg_h + 0]
+        let _bbg_len = load64 [_bbg_h + 8]
+        let _bbg_i = 0
+        while _bbg_i < _bbg_len {
+            let _bbg_b = load [_bbg_old + _bbg_i]
+            store [_bbg_data + _bbg_i] _bbg_b
+            let _bbg_i = _bbg_i + 1
+        }
+        store64 [_bbg_h + 0] _bbg_data
+        store64 [_bbg_h + 16] _bbg_new
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_len : nx_r0 = current byte length of buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_len {
+    let nx_r0 = load64 [nx_i0 + 8]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_cap : nx_r0 = allocated capacity of buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_cap {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_clear : reset length of buffer nx_i0 to 0 (capacity preserved)
+# ------------------------------------------------------------------------------
+fn nx_buf_clear {
+    store64 [nx_i0 + 8] 0
+    let nx_r0 = 1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_to_ptr : nx_r0 = data pointer of buffer nx_i0 (for direct access)
+# ------------------------------------------------------------------------------
+fn nx_buf_to_ptr {
+    let nx_r0 = load64 [nx_i0 + 0]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_write_u8 : append low byte of nx_i1 to buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_write_u8 {
+    let _bbw1_h = nx_i0
+    let _bbw1_v = nx_i1
+    let _bbw1_len = load64 [_bbw1_h + 8]
+    let _bbw1_need = _bbw1_len + 1
+    let nx_i0 = _bbw1_h
+    let nx_i1 = _bbw1_need
+    call nx_buf_grow
+    let _bbw1_data = load64 [_bbw1_h + 0]
+    let _bbw1_len = load64 [_bbw1_h + 8]
+    store [_bbw1_data + _bbw1_len] _bbw1_v
+    let _bbw1_new_len = _bbw1_len + 1
+    store64 [_bbw1_h + 8] _bbw1_new_len
+    let nx_r0 = _bbw1_new_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_write_u16 : append 16-bit little-endian nx_i1 to buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_write_u16 {
+    let _bbw2_h = nx_i0
+    let _bbw2_v = nx_i1
+    let _bbw2_len = load64 [_bbw2_h + 8]
+    let _bbw2_need = _bbw2_len + 2
+    let nx_i0 = _bbw2_h
+    let nx_i1 = _bbw2_need
+    call nx_buf_grow
+    let _bbw2_data = load64 [_bbw2_h + 0]
+    let _bbw2_len = load64 [_bbw2_h + 8]
+    store16 [_bbw2_data + _bbw2_len] _bbw2_v
+    let _bbw2_new_len = _bbw2_len + 2
+    store64 [_bbw2_h + 8] _bbw2_new_len
+    let nx_r0 = _bbw2_new_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_write_u32 : append 32-bit little-endian nx_i1 to buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_write_u32 {
+    let _bbw4_h = nx_i0
+    let _bbw4_v = nx_i1
+    let _bbw4_len = load64 [_bbw4_h + 8]
+    let _bbw4_need = _bbw4_len + 4
+    let nx_i0 = _bbw4_h
+    let nx_i1 = _bbw4_need
+    call nx_buf_grow
+    let _bbw4_data = load64 [_bbw4_h + 0]
+    let _bbw4_len = load64 [_bbw4_h + 8]
+    store32 [_bbw4_data + _bbw4_len] _bbw4_v
+    let _bbw4_new_len = _bbw4_len + 4
+    store64 [_bbw4_h + 8] _bbw4_new_len
+    let nx_r0 = _bbw4_new_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_write_u64 : append 64-bit little-endian nx_i1 to buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_write_u64 {
+    let _bbw8_h = nx_i0
+    let _bbw8_v = nx_i1
+    let _bbw8_len = load64 [_bbw8_h + 8]
+    let _bbw8_need = _bbw8_len + 8
+    let nx_i0 = _bbw8_h
+    let nx_i1 = _bbw8_need
+    call nx_buf_grow
+    let _bbw8_data = load64 [_bbw8_h + 0]
+    let _bbw8_len = load64 [_bbw8_h + 8]
+    store64 [_bbw8_data + _bbw8_len] _bbw8_v
+    let _bbw8_new_len = _bbw8_len + 8
+    store64 [_bbw8_h + 8] _bbw8_new_len
+    let nx_r0 = _bbw8_new_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_write_bytes : append nx_i2 bytes from pointer nx_i1 to buffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_buf_write_bytes {
+    let _bbwb_h = nx_i0
+    let _bbwb_src = nx_i1
+    let _bbwb_n = nx_i2
+    let _bbwb_len = load64 [_bbwb_h + 8]
+    let _bbwb_need = _bbwb_len + _bbwb_n
+    let nx_i0 = _bbwb_h
+    let nx_i1 = _bbwb_need
+    call nx_buf_grow
+    let _bbwb_data = load64 [_bbwb_h + 0]
+    let _bbwb_len = load64 [_bbwb_h + 8]
+    let _bbwb_i = 0
+    while _bbwb_i < _bbwb_n {
+        let _bbwb_b = load [_bbwb_src + _bbwb_i]
+        store [_bbwb_data + _bbwb_len] _bbwb_b
+        let _bbwb_len = _bbwb_len + 1
+        let _bbwb_i = _bbwb_i + 1
+    }
+    store64 [_bbwb_h + 8] _bbwb_len
+    let nx_r0 = _bbwb_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_read_u8 : nx_r0 = byte at offset nx_i1 in buffer nx_i0 (0 if OOB)
+# ------------------------------------------------------------------------------
+fn nx_buf_read_u8 {
+    let _bbr1_h = nx_i0
+    let _bbr1_off = nx_i1
+    let _bbr1_len = load64 [_bbr1_h + 8]
+    let nx_r0 = 0
+    if _bbr1_off >= 0 {
+        if _bbr1_off < _bbr1_len {
+            let _bbr1_data = load64 [_bbr1_h + 0]
+            let nx_r0 = load [_bbr1_data + _bbr1_off]
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_read_u16 : nx_r0 = 16-bit LE value at offset nx_i1 (0 if OOB)
+# ------------------------------------------------------------------------------
+fn nx_buf_read_u16 {
+    let _bbr2_h = nx_i0
+    let _bbr2_off = nx_i1
+    let _bbr2_len = load64 [_bbr2_h + 8]
+    let nx_r0 = 0
+    if _bbr2_off >= 0 {
+        let _bbr2_end = _bbr2_off + 2
+        if _bbr2_end <= _bbr2_len {
+            let _bbr2_data = load64 [_bbr2_h + 0]
+            let nx_r0 = load16 [_bbr2_data + _bbr2_off]
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_read_u32 : nx_r0 = 32-bit LE value at offset nx_i1 (0 if OOB)
+# ------------------------------------------------------------------------------
+fn nx_buf_read_u32 {
+    let _bbr4_h = nx_i0
+    let _bbr4_off = nx_i1
+    let _bbr4_len = load64 [_bbr4_h + 8]
+    let nx_r0 = 0
+    if _bbr4_off >= 0 {
+        let _bbr4_end = _bbr4_off + 4
+        if _bbr4_end <= _bbr4_len {
+            let _bbr4_data = load64 [_bbr4_h + 0]
+            let nx_r0 = load32 [_bbr4_data + _bbr4_off]
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_buf_read_u64 : nx_r0 = 64-bit LE value at offset nx_i1 (0 if OOB)
+# ------------------------------------------------------------------------------
+fn nx_buf_read_u64 {
+    let _bbr8_h = nx_i0
+    let _bbr8_off = nx_i1
+    let _bbr8_len = load64 [_bbr8_h + 8]
+    let nx_r0 = 0
+    if _bbr8_off >= 0 {
+        let _bbr8_end = _bbr8_off + 8
+        if _bbr8_end <= _bbr8_len {
+            let _bbr8_data = load64 [_bbr8_h + 0]
+            let nx_r0 = load64 [_bbr8_data + _bbr8_off]
+        }
+    }
+}

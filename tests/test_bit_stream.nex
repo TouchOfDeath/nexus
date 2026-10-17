@@ -1,0 +1,277 @@
+# Test: Bit Stream Reader & Writer (Feature #100, stdlib/bit_stream.nex)
+include "stdlib/bit_stream.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Single-bit writes and byte-level verification
+# ==============================================================================
+let nx_i0 = 8
+call nx_bit_writer_new
+let w1 = nx_r0
+
+# write bit pattern 1,0,1,1 (LSB-first => value 0b1101 = 13)
+let nx_i0 = w1
+let nx_i1 = 13
+let nx_i2 = 4
+call nx_bit_write
+assert_eq nx_r0, 4
+
+# 4 bits occupy 1 whole byte
+let nx_i0 = w1
+call nx_bit_writer_bytes
+assert_eq nx_r0, 1
+
+# flush pads to byte boundary (already padded here)
+let nx_i0 = w1
+call nx_bit_flush
+assert_eq nx_r0, 1
+
+# byte 0 bits: 1 at pos0, 0 at pos1, 1 at pos2, 1 at pos3 => 1 + 4 + 8 = 13
+let wp1 = load64 [w1 + 0]
+let b0 = load [wp1 + 0]
+assert_eq b0, 13
+
+# ==============================================================================
+# Section 2: Multi-value append across byte boundaries
+# ==============================================================================
+let nx_i0 = 8
+call nx_bit_writer_new
+let w2 = nx_r0
+
+# 3-bit fields: 5 (101), 7 (111), 2 (010), 6 (110)
+let nx_i0 = w2
+let nx_i1 = 5
+let nx_i2 = 3
+call nx_bit_write
+let nx_i0 = w2
+let nx_i1 = 7
+let nx_i2 = 3
+call nx_bit_write
+let nx_i0 = w2
+let nx_i1 = 2
+let nx_i2 = 3
+call nx_bit_write
+let nx_i0 = w2
+let nx_i1 = 6
+let nx_i2 = 3
+call nx_bit_write
+assert_eq nx_r0, 12
+
+# 12 bits = 2 bytes (ceil)
+let nx_i0 = w2
+call nx_bit_writer_bytes
+assert_eq nx_r0, 2
+
+# concatenated LSB-first: 5 + 7*8 + 2*64 + 6*512 = 5 + 56 + 128 + 3072 = 3261
+# low byte = 3261 % 256 = 189, high byte = 3261 / 256 = 12
+let wp2 = load64 [w2 + 0]
+let b0 = load [wp2 + 0]
+assert_eq b0, 189
+let b1 = load [wp2 + 1]
+assert_eq b1, 12
+
+# flush pads 12 -> 16 bits = 2 bytes
+let nx_i0 = w2
+call nx_bit_flush
+assert_eq nx_r0, 2
+
+# ==============================================================================
+# Section 3: Reader roundtrip of the 3-bit stream
+# ==============================================================================
+let nx_i0 = wp2
+let nx_i1 = 2
+call nx_bit_reader_new
+let r1 = nx_r0
+
+let nx_i0 = r1
+let nx_i1 = 3
+call nx_bit_read
+assert_eq nx_r0, 5
+
+let nx_i0 = r1
+let nx_i1 = 3
+call nx_bit_read
+assert_eq nx_r0, 7
+
+let nx_i0 = r1
+let nx_i1 = 3
+call nx_bit_read
+assert_eq nx_r0, 2
+
+let nx_i0 = r1
+let nx_i1 = 3
+call nx_bit_read
+assert_eq nx_r0, 6
+
+# cursor advanced by 12 bits; 16 bits exist => 4 left
+let nx_i0 = r1
+call nx_bit_reader_pos
+assert_eq nx_r0, 12
+
+let nx_i0 = r1
+call nx_bit_reader_bits_left
+assert_eq nx_r0, 4
+
+# reading past the end returns 0
+let nx_i0 = r1
+let nx_i1 = 3
+call nx_bit_read
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: Wide values (16-bit and 32-bit) roundtrip
+# ==============================================================================
+let nx_i0 = 8
+call nx_bit_writer_new
+let w3 = nx_r0
+
+let v16 = 4660
+let nx_i0 = w3
+let nx_i1 = v16
+let nx_i2 = 16
+call nx_bit_write
+
+let v32 = 305419896
+let nx_i0 = w3
+let nx_i1 = v32
+let nx_i2 = 32
+call nx_bit_write
+
+# flush: 48 bits -> 6 bytes
+let nx_i0 = w3
+call nx_bit_flush
+assert_eq nx_r0, 6
+
+let wp3 = load64 [w3 + 0]
+let nx_i0 = wp3
+let nx_i1 = 6
+call nx_bit_reader_new
+let r2 = nx_r0
+
+let nx_i0 = r2
+let nx_i1 = 16
+call nx_bit_read
+assert_eq nx_r0, v16
+
+let nx_i0 = r2
+let nx_i1 = 32
+call nx_bit_read
+assert_eq nx_r0, v32
+
+let nx_i0 = r2
+call nx_bit_reader_pos
+assert_eq nx_r0, 48
+
+# ==============================================================================
+# Section 5: 1-bit at a time streaming (8 writes -> 1 byte)
+# ==============================================================================
+let nx_i0 = 8
+call nx_bit_writer_new
+let w4 = nx_r0
+
+let wi = 0
+while wi < 8 {
+    let bitv = wi % 2
+    let nx_i0 = w4
+    let nx_i1 = bitv
+    let nx_i2 = 1
+    call nx_bit_write
+    let wi = wi + 1
+}
+
+# alternating bits 0,1,0,1,0,1,0,1 => byte = 0b10101010 = 170
+let nx_i0 = w4
+call nx_bit_writer_bytes
+assert_eq nx_r0, 1
+
+let wp4 = load64 [w4 + 0]
+let b4 = load [wp4 + 0]
+assert_eq b4, 170
+
+let nx_i0 = wp4
+let nx_i1 = 1
+call nx_bit_reader_new
+let r3 = nx_r0
+
+# read back alternating bits
+let r3ok = 1
+let ri = 0
+while ri < 8 {
+    let nx_i0 = r3
+    let nx_i1 = 1
+    call nx_bit_read
+    let bitexp = ri % 2
+    if nx_r0 != bitexp {
+        let r3ok = 0
+    }
+    let ri = ri + 1
+}
+assert_eq r3ok, 1
+
+# ==============================================================================
+# Section 6: Unaligned mixed widths (1,2,3,4,7-bit fields in one stream)
+# ==============================================================================
+let nx_i0 = 8
+call nx_bit_writer_new
+let w5 = nx_r0
+
+let nx_i0 = w5
+let nx_i1 = 1
+let nx_i2 = 1
+call nx_bit_write
+let nx_i0 = w5
+let nx_i1 = 3
+let nx_i2 = 2
+call nx_bit_write
+let nx_i0 = w5
+let nx_i1 = 6
+let nx_i2 = 3
+call nx_bit_write
+let nx_i0 = w5
+let nx_i1 = 11
+let nx_i2 = 4
+call nx_bit_write
+let nx_i0 = w5
+let nx_i1 = 100
+let nx_i2 = 7
+call nx_bit_write
+
+# total 17 bits -> flush to 24 bits (3 bytes)
+let nx_i0 = w5
+call nx_bit_flush
+assert_eq nx_r0, 3
+
+let wp5 = load64 [w5 + 0]
+let nx_i0 = wp5
+let nx_i1 = 3
+call nx_bit_reader_new
+let r4 = nx_r0
+
+let nx_i0 = r4
+let nx_i1 = 1
+call nx_bit_read
+assert_eq nx_r0, 1
+
+let nx_i0 = r4
+let nx_i1 = 2
+call nx_bit_read
+assert_eq nx_r0, 3
+
+let nx_i0 = r4
+let nx_i1 = 3
+call nx_bit_read
+assert_eq nx_r0, 6
+
+let nx_i0 = r4
+let nx_i1 = 4
+call nx_bit_read
+assert_eq nx_r0, 11
+
+let nx_i0 = r4
+let nx_i1 = 7
+call nx_bit_read
+assert_eq nx_r0, 100
+
+print "BIT_STREAM_TEST_PASS"

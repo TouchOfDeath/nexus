@@ -469,3 +469,146 @@ fn nx_int_to_str {
     }
     store [s1 + s2] 0
 }
+
+# ==============================================================================
+#                       SPLIT / JOIN (Features #133 & #134)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_str_split : splits string nx_i0 at every occurrence of delimiter byte
+#                   nx_i1. Returns a freshly allocated qword array A where
+#                   A[0] = token count N and A[1..N] = pointers to
+#                   null-terminated token copies inside one freshly allocated
+#                   buffer. The empty string yields one empty token.
+#                   Consecutive delimiters produce empty tokens; leading and
+#                   trailing delimiters are honored ("a,b," -> 3 tokens).
+# ------------------------------------------------------------------------------
+fn nx_str_split {
+    let _spl_str = nx_i0
+    let _spl_delim = nx_i1
+
+    # source length
+    let _spl_len = 0
+    let _spl_c = load [_spl_str + 0]
+    while _spl_c != 0 {
+        let _spl_len = _spl_len + 1
+        let _spl_c = load [_spl_str + _spl_len]
+    }
+
+    # pass 1: count tokens = delimiters + 1
+    let _spl_n = 1
+    let _spl_i = 0
+    while _spl_i < _spl_len {
+        let _spl_c = load [_spl_str + _spl_i]
+        if _spl_c == _spl_delim {
+            let _spl_n = _spl_n + 1
+        }
+        let _spl_i = _spl_i + 1
+    }
+
+    # allocate token copy buffer and result array
+    let _spl_buf_bytes = _spl_len + _spl_n + 1
+    let _spl_buf = alloc _spl_buf_bytes
+    let _spl_arr_bytes = _spl_n + 1
+    let _spl_arr_bytes = _spl_arr_bytes * 8
+    let _spl_arr = alloc _spl_arr_bytes
+    store64 [_spl_arr + 0] _spl_n
+
+    # pass 2: copy tokens, recording start pointers
+    # token 1 starts at the buffer base
+    let _spl_w = 0
+    let _spl_tok = 1
+    let _spl_tok_idx = _spl_tok * 8
+    store64 [_spl_arr + _spl_tok_idx] _spl_buf
+    let _spl_i = 0
+    while _spl_i < _spl_len {
+        let _spl_c = load [_spl_str + _spl_i]
+        if _spl_c == _spl_delim {
+            store [_spl_buf + _spl_w] 0
+            let _spl_w = _spl_w + 1
+            let _spl_tok = _spl_tok + 1
+            let _spl_tok_idx = _spl_tok * 8
+            let _spl_start = _spl_buf + _spl_w
+            store64 [_spl_arr + _spl_tok_idx] _spl_start
+        } else {
+            store [_spl_buf + _spl_w] _spl_c
+            let _spl_w = _spl_w + 1
+        }
+        let _spl_i = _spl_i + 1
+    }
+    store [_spl_buf + _spl_w] 0
+    let nx_r0 = _spl_arr
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_join : concatenates the nx_i2 strings stored in qword array nx_i0
+#                  (element k at [arr + k * 8]) with separator string nx_i1
+#                  between adjacent elements. Returns a freshly allocated
+#                  null-terminated string. count <= 0 yields an empty string.
+# ------------------------------------------------------------------------------
+fn nx_str_join {
+    let _jn_arr = nx_i0
+    let _jn_sep = nx_i1
+    let _jn_count = nx_i2
+
+    # separator length
+    let _jn_sep_len = 0
+    let _jn_sc = load [_jn_sep + 0]
+    while _jn_sc != 0 {
+        let _jn_sep_len = _jn_sep_len + 1
+        let _jn_sc = load [_jn_sep + _jn_sep_len]
+    }
+
+    # total length = sum of element lengths + separators between
+    let _jn_total = 0
+    let _jn_k = 0
+    while _jn_k < _jn_count {
+        let _jn_k8 = _jn_k * 8
+        let _jn_elem = load64 [_jn_arr + _jn_k8]
+        let _jn_ei = 0
+        let _jn_ec = load [_jn_elem + _jn_ei]
+        while _jn_ec != 0 {
+            let _jn_total = _jn_total + 1
+            let _jn_ei = _jn_ei + 1
+            let _jn_ec = load [_jn_elem + _jn_ei]
+        }
+        let _jn_k = _jn_k + 1
+    }
+    if _jn_count > 1 {
+        let _jn_seps = _jn_count - 1
+        let _jn_seps = _jn_seps * _jn_sep_len
+        let _jn_total = _jn_total + _jn_seps
+    }
+
+    # allocate total bytes plus the NUL terminator (alloc 0 is invalid)
+    let _jn_alloc_sz = _jn_total + 1
+    let _jn_out = alloc _jn_alloc_sz
+
+    # second pass: copy elements and separators
+    let _jn_w = 0
+    let _jn_k = 0
+    while _jn_k < _jn_count {
+        if _jn_k > 0 {
+            let _jn_s = 0
+            while _jn_s < _jn_sep_len {
+                let _jn_c = load [_jn_sep + _jn_s]
+                store [_jn_out + _jn_w] _jn_c
+                let _jn_w = _jn_w + 1
+                let _jn_s = _jn_s + 1
+            }
+        }
+        let _jn_k8 = _jn_k * 8
+        let _jn_elem = load64 [_jn_arr + _jn_k8]
+        let _jn_ei = 0
+        let _jn_ec = load [_jn_elem + 0]
+        while _jn_ec != 0 {
+            store [_jn_out + _jn_w] _jn_ec
+            let _jn_w = _jn_w + 1
+            let _jn_ei = _jn_ei + 1
+            let _jn_ec = load [_jn_elem + _jn_ei]
+        }
+        let _jn_k = _jn_k + 1
+    }
+    store [_jn_out + _jn_w] 0
+    let nx_r0 = _jn_out
+}

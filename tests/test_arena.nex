@@ -1,0 +1,214 @@
+# Test: Arena Bump Allocator (Feature #96, stdlib/arena.nex)
+include "stdlib/arena.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Creation and initial metrics
+# ==============================================================================
+let nx_i0 = 128
+call nx_arena_new
+let a1 = nx_r0
+
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 0
+
+let nx_i0 = a1
+call nx_arena_chunks
+assert_eq nx_r0, 0
+
+let nx_i0 = a1
+call nx_arena_cap
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 2: Basic allocation, alignment, and non-overlap
+# ==============================================================================
+let nx_i0 = a1
+let nx_i1 = 16
+call nx_arena_alloc
+let p1 = nx_r0
+
+let nx_i0 = a1
+let nx_i1 = 16
+call nx_arena_alloc
+let p2 = nx_r0
+
+let nx_i0 = a1
+let nx_i1 = 16
+call nx_arena_alloc
+let p3 = nx_r0
+
+# pointers are distinct and ordered
+let d12 = p2 - p1
+assert_eq d12, 16
+let d23 = p3 - p2
+assert_eq d23, 16
+
+# 8-byte alignment (mmap base is page aligned; bump keeps multiples of 8)
+let al1 = p1 % 8
+assert_eq al1, 0
+
+# writes to one region do not touch the others
+store64 [p1 + 0] 111
+store64 [p2 + 0] 222
+store64 [p3 + 0] 333
+
+let v1 = load64 [p1 + 0]
+assert_eq v1, 111
+let v2 = load64 [p2 + 0]
+assert_eq v2, 222
+let v3 = load64 [p3 + 0]
+assert_eq v3, 333
+
+# usage accounting: 3 x 16 bytes
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 48
+
+let nx_i0 = a1
+call nx_arena_chunks
+assert_eq nx_r0, 1
+
+# odd request rounds up to 8-byte multiple
+let nx_i0 = a1
+let nx_i1 = 3
+call nx_arena_alloc
+let p4 = nx_r0
+
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 56
+
+let d34 = p4 - p3
+assert_eq d34, 16
+
+# ==============================================================================
+# Section 3: Chunk chaining (default size 128 -> second chunk on demand)
+# ==============================================================================
+let nx_i0 = a1
+let nx_i1 = 100
+call nx_arena_alloc
+let p5 = nx_r0
+
+# 56 + 100 rounds to 104 = 160 > 128 -> new chunk (default size 128)
+let nx_i0 = a1
+call nx_arena_chunks
+assert_eq nx_r0, 2
+
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 160
+
+let nx_i0 = a1
+call nx_arena_cap
+assert_eq nx_r0, 256
+
+# the new chunk's first allocation is the chunk base (aligned)
+let al5 = p5 % 8
+assert_eq al5, 0
+
+# ==============================================================================
+# Section 4: Large allocation bigger than the default chunk size
+# ==============================================================================
+let nx_i0 = a1
+let nx_i1 = 300
+call nx_arena_alloc
+let pbig = nx_r0
+
+# a 300-byte request (rounds to 304) gets its own 304-byte chunk
+let nx_i0 = a1
+call nx_arena_chunks
+assert_eq nx_r0, 3
+
+let nx_i0 = a1
+call nx_arena_cap
+assert_eq nx_r0, 560
+
+# large region is writable
+store64 [pbig + 292] 4242
+let bv = load64 [pbig + 292]
+assert_eq bv, 4242
+
+# ==============================================================================
+# Section 5: Zero / negative requests
+# ==============================================================================
+let nx_i0 = a1
+let nx_i1 = 0
+call nx_arena_alloc
+assert_eq nx_r0, 0
+
+let nx_i0 = a1
+let nx_i1 = 0 - 5
+call nx_arena_alloc
+assert_eq nx_r0, 0
+
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 464
+
+# ==============================================================================
+# Section 6: Reset and reuse
+# ==============================================================================
+let nx_i0 = a1
+call nx_arena_reset
+assert_eq nx_r0, 1
+
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 0
+
+# chunks are retained for reuse (no re-mmap)
+let nx_i0 = a1
+call nx_arena_chunks
+assert_eq nx_r0, 3
+
+let nx_i0 = a1
+call nx_arena_cap
+assert_eq nx_r0, 560
+
+# post-reset allocation starts at the oldest chunk's base
+let nx_i0 = a1
+let nx_i1 = 16
+call nx_arena_alloc
+let pr = nx_r0
+
+let dr = pr - p1
+assert_eq dr, 0
+
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 16
+
+# ==============================================================================
+# Section 7: Independent arenas
+# ==============================================================================
+let nx_i0 = 64
+call nx_arena_new
+let a2 = nx_r0
+
+let nx_i0 = a2
+let nx_i1 = 32
+call nx_arena_alloc
+let q1 = nx_r0
+
+let nx_i0 = a2
+call nx_arena_used
+assert_eq nx_r0, 32
+
+let nx_i0 = a2
+call nx_arena_chunks
+assert_eq nx_r0, 1
+
+# arena a1 is unaffected
+let nx_i0 = a1
+call nx_arena_used
+assert_eq nx_r0, 16
+
+store64 [q1 + 0] 555
+let qv = load64 [q1 + 0]
+assert_eq qv, 555
+
+print "ARENA_TEST_PASS"

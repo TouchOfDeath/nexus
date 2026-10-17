@@ -1,0 +1,109 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: memory.nex
+#            Fast Memory Move / Set / Zero Primitives (Feature #87 & #88)
+# ==============================================================================
+#
+# Byte-granular bulk memory primitives for gap-buffer shifts, framebuffer
+# clears, and allocated-buffer resets. All functions operate on raw byte
+# buffers and handle arbitrary 64-bit byte counts.
+#
+# Features:
+#   #87 nx_memmove  - overlap-safe byte copy (forward when dst < src,
+#                     backward when dst > src, no-op when dst == src)
+#   #88 nx_memset   - fill n bytes with a byte value
+#   #88 nx_memzero  - zero n bytes (memset with byte value 0)
+#   (companion) nx_memcpy - forward-only copy for guaranteed disjoint buffers
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = dst buffer pointer (memmove/memcpy/memset/memzero)
+#   nx_i1 = src buffer pointer (memmove/memcpy) or byte value (memset)
+#   nx_i2 = byte count n
+#   nx_r0 = dst pointer echoed back (enables call chaining), except
+#           nx_memcpy which returns dst as well
+#
+# All internal variables use per-function unique prefixes (_mm_*, _mc_*,
+# _ms_*, _mz_*) so no clobbering can occur across calls, per the global
+# variable activation frame rule.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_memmove : overlap-safe copy of nx_i2 bytes from nx_i1 to nx_i0
+#   Forward copy when dst < src, backward copy when dst > src.
+#   nx_r0 = dst pointer
+# ------------------------------------------------------------------------------
+fn nx_memmove {
+    let _mm_dst = nx_i0
+    let _mm_src = nx_i1
+    let _mm_n = nx_i2
+    if _mm_n > 0 {
+        if _mm_dst < _mm_src {
+            # dst below src: forward copy never overwrites unread bytes
+            let _mm_i = 0
+            while _mm_i < _mm_n {
+                let _mm_b = load [_mm_src + _mm_i]
+                store [_mm_dst + _mm_i] _mm_b
+                let _mm_i = _mm_i + 1
+            }
+        } else if _mm_dst > _mm_src {
+            # dst above src: backward copy never overwrites unread bytes
+            let _mm_j = _mm_n
+            while _mm_j > 0 {
+                let _mm_j = _mm_j - 1
+                let _mm_b = load [_mm_src + _mm_j]
+                store [_mm_dst + _mm_j] _mm_b
+            }
+        }
+    }
+    let nx_r0 = _mm_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_memcpy : forward copy of nx_i2 bytes from nx_i1 to nx_i0
+#   Buffers must NOT overlap (use nx_memmove when they might).
+#   nx_r0 = dst pointer
+# ------------------------------------------------------------------------------
+fn nx_memcpy {
+    let _mc_dst = nx_i0
+    let _mc_src = nx_i1
+    let _mc_n = nx_i2
+    if _mc_n > 0 {
+        let _mc_i = 0
+        while _mc_i < _mc_n {
+            let _mc_b = load [_mc_src + _mc_i]
+            store [_mc_dst + _mc_i] _mc_b
+            let _mc_i = _mc_i + 1
+        }
+    }
+    let nx_r0 = _mc_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_memset : fill nx_i2 bytes at nx_i0 with low byte of nx_i1
+#   nx_r0 = dst pointer
+# ------------------------------------------------------------------------------
+fn nx_memset {
+    let _ms_dst = nx_i0
+    let _ms_val = nx_i1
+    let _ms_n = nx_i2
+    if _ms_n > 0 {
+        let _ms_i = 0
+        while _ms_i < _ms_n {
+            store [_ms_dst + _ms_i] _ms_val
+            let _ms_i = _ms_i + 1
+        }
+    }
+    let nx_r0 = _ms_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_memzero : zero nx_i1 bytes at nx_i0
+#   nx_r0 = dst pointer
+# ------------------------------------------------------------------------------
+fn nx_memzero {
+    let _mz_dst = nx_i0
+    let _mz_n = nx_i1
+    let nx_i1 = 0
+    let nx_i2 = _mz_n
+    call nx_memset
+    let nx_r0 = _mz_dst
+}

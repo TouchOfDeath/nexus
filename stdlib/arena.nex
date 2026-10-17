@@ -1,0 +1,154 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: arena.nex
+#            Fast Chunked Bump / Arena Allocator (Feature #96)
+# ==============================================================================
+#
+# A chunked bump allocator for compiler/parser AST nodes and per-frame
+# scratch memory. Allocation is a pointer bump (O(1)); a reset logically
+# releases every allocation in a single pass by clearing per-chunk usage
+# counters (O(number of chunks), independent of total bytes).
+#
+# Chunk layout (32 bytes on the heap):
+#   offset 0: next - previously allocated chunk (0 = none)
+#   offset 8: base - chunk data pointer
+#   offset 16: used - bump offset within this chunk
+#   offset 24: cap - chunk capacity in bytes
+#
+# Arena layout (48-byte descriptor on the heap):
+#   offset 0:  chunk_head   - most recent chunk (0 before first alloc)
+#   offset 8:  chunk_size   - default chunk capacity
+#   offset 16: total_used   - sum of used bytes across all chunks
+#   offset 24: total_cap    - sum of capacities across all chunks
+#   offset 32: chunk_count  - number of chunks in the chain
+#   offset 40: reserved
+#
+# Allocation is 8-byte aligned: every returned pointer is 8-byte aligned as
+# long as the default chunk size and large-allocation sizes are 8-aligned
+# (mmap bases always are). Reset keeps all chunks for reuse (no re-mmap).
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = arena handle (or default chunk size for nx_arena_new)
+#   nx_i1 = byte count (nx_arena_alloc)
+#   nx_r0 = result (handle, pointer, or metric per function)
+#
+# Internal variables use per-function unique prefixes (_arn_*, _ara_*, _arr_*,
+# _aru_*, _arc_*, _arch_*) so no clobbering occurs across calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_arena_new : nx_r0 = new arena with default chunk size nx_i0 bytes
+#   Chunk size is clamped to at least 64 bytes.
+# ------------------------------------------------------------------------------
+fn nx_arena_new {
+    let _arn_sz = nx_i0
+    if _arn_sz < 64 {
+        let _arn_sz = 64
+    }
+    let _arn_desc = alloc 48
+    store64 [_arn_desc + 0] 0
+    store64 [_arn_desc + 8] _arn_sz
+    store64 [_arn_desc + 16] 0
+    store64 [_arn_desc + 24] 0
+    store64 [_arn_desc + 32] 0
+    store64 [_arn_desc + 40] 0
+    let nx_r0 = _arn_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arena_alloc : nx_r0 = pointer to nx_i1 bytes from arena nx_i0
+#   Bumps within the current chunk when it fits; otherwise chains a new chunk
+#   sized to fit the request. Returns 0 for zero or negative requests.
+# ------------------------------------------------------------------------------
+fn nx_arena_alloc {
+    let _ara_a = nx_i0
+    let _ara_n = nx_i1
+    let nx_r0 = 0
+    if _ara_n > 0 {
+        # round the request up to 8 bytes for alignment
+        let _ara_n8 = _ara_n + 7
+        let _ara_n8 = _ara_n8 / 8
+        let _ara_n8 = _ara_n8 * 8
+        let _ara_cur = load64 [_ara_a + 0]
+        if _ara_cur != 0 {
+            let _ara_used = load64 [_ara_cur + 16]
+            let _ara_cap = load64 [_ara_cur + 24]
+            let _ara_free = _ara_cap - _ara_used
+            if _ara_free < _ara_n8 {
+                let _ara_cur = 0
+            }
+        }
+        if _ara_cur == 0 {
+            # chain a fresh chunk: at least the default size, always fitting
+            let _ara_def = load64 [_ara_a + 8]
+            let _ara_chunk_cap = _ara_def
+            if _ara_chunk_cap < _ara_n8 {
+                let _ara_chunk_cap = _ara_n8
+            }
+            let _ara_base = alloc _ara_chunk_cap
+            let _ara_chunk = alloc 32
+            let _ara_old_head = load64 [_ara_a + 0]
+            store64 [_ara_chunk + 0] _ara_old_head
+            store64 [_ara_chunk + 8] _ara_base
+            store64 [_ara_chunk + 16] 0
+            store64 [_ara_chunk + 24] _ara_chunk_cap
+            store64 [_ara_a + 0] _ara_chunk
+            let _ara_count = load64 [_ara_a + 32]
+            let _ara_count = _ara_count + 1
+            store64 [_ara_a + 32] _ara_count
+            let _ara_tcap = load64 [_ara_a + 24]
+            let _ara_tcap = _ara_tcap + _ara_chunk_cap
+            store64 [_ara_a + 24] _ara_tcap
+            let _ara_cur = _ara_chunk
+        }
+        let _ara_base = load64 [_ara_cur + 8]
+        let _ara_used = load64 [_ara_cur + 16]
+        let _ara_ptr = _ara_base + _ara_used
+        let _ara_new_used = _ara_used + _ara_n8
+        store64 [_ara_cur + 16] _ara_new_used
+        let _ara_tused = load64 [_ara_a + 16]
+        let _ara_tused = _ara_tused + _ara_n8
+        store64 [_ara_a + 16] _ara_tused
+        let nx_r0 = _ara_ptr
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arena_reset : releases all allocations of arena nx_i0 for reuse
+#   nx_r0 = 1 on success. O(chunk_count); memory is retained, not freed.
+# ------------------------------------------------------------------------------
+fn nx_arena_reset {
+    let _arr_a = nx_i0
+    let _arr_cur = load64 [_arr_a + 0]
+    let _arr_oldest = _arr_cur
+    while _arr_cur != 0 {
+        store64 [_arr_cur + 16] 0
+        let _arr_oldest = _arr_cur
+        let _arr_cur = load64 [_arr_cur + 0]
+    }
+    if _arr_oldest != 0 {
+        store64 [_arr_a + 0] _arr_oldest
+    }
+    store64 [_arr_a + 16] 0
+    let nx_r0 = 1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arena_used : nx_r0 = total bytes currently allocated in arena nx_i0
+# ------------------------------------------------------------------------------
+fn nx_arena_used {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arena_cap : nx_r0 = total reserved bytes across all arena nx_i0 chunks
+# ------------------------------------------------------------------------------
+fn nx_arena_cap {
+    let nx_r0 = load64 [nx_i0 + 24]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_arena_chunks : nx_r0 = number of chunks chained in arena nx_i0
+# ------------------------------------------------------------------------------
+fn nx_arena_chunks {
+    let nx_r0 = load64 [nx_i0 + 32]
+}

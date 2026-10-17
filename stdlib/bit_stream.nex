@@ -1,0 +1,236 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: bit_stream.nex
+#             Bit-Level Stream Reader & Writer (Feature #100)
+# ==============================================================================
+#
+# A bit-level serial I/O stream for decoding compressed font tables, icon
+# assets, and Huffman-coded payloads. Bits are packed LSB-first within each
+# byte (bit 0 of byte 0 is the first bit in the stream), which matches the
+# canonical layout used by DEFLATE and most entropy coders.
+#
+# The Writer appends bits to a growable heap byte buffer. The Reader wraps an
+# existing byte buffer (such as a ByteBuffer data pointer or an .rdata string)
+# and serves sequential reads from a cursor.
+#
+# Writer layout (40-byte descriptor):
+#   offset 0:  buf_ptr - growable byte buffer
+#   offset 8:  cap     - allocated bytes
+#   offset 16: bit_len - total bits appended so far
+#   offset 24: reserved
+#
+# Reader layout (32-byte descriptor):
+#   offset 0:  buf_ptr - source byte buffer
+#   offset 8:  bit_len - total bits available (byte_len * 8)
+#   offset 16: bit_pos - read cursor position in bits
+#   offset 24: reserved
+#
+# Bit counts are in the range 1..63 per operation.
+#
+# CALLING CONVENTION (all functions):
+#   Writer: nx_i0 = writer handle (or initial byte capacity for new)
+#   Write:  nx_i0 = writer, nx_i1 = value, nx_i2 = bit count
+#   Reader: nx_i0 = reader handle; new takes nx_i0 = buffer, nx_i1 = bytes
+#   Read:   nx_i0 = reader, nx_i1 = bit count; nx_r0 = value
+#
+# Internal variables use per-function unique prefixes (_bitw*_*, _bitr*_*)
+# so no clobbering occurs across calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_writer_new : nx_r0 = new BitWriter with nx_i0 initial byte capacity
+#   Capacity is clamped to at least 8 bytes.
+# ------------------------------------------------------------------------------
+fn nx_bit_writer_new {
+    let _bitwn_cap = nx_i0
+    if _bitwn_cap < 8 {
+        let _bitwn_cap = 8
+    }
+    let _bitwn_buf = alloc _bitwn_cap
+    let _bitwn_desc = alloc 40
+    store64 [_bitwn_desc + 0] _bitwn_buf
+    store64 [_bitwn_desc + 8] _bitwn_cap
+    store64 [_bitwn_desc + 16] 0
+    store64 [_bitwn_desc + 24] 0
+    let nx_r0 = _bitwn_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_writer_grow : internal, ensures writer nx_i0 holds >= nx_i1 bytes
+# ------------------------------------------------------------------------------
+fn nx_bit_writer_grow {
+    let _bitwg_h = nx_i0
+    let _bitwg_need = nx_i1
+    let _bitwg_cur = load64 [_bitwg_h + 8]
+    if _bitwg_cur < _bitwg_need {
+        let _bitwg_new = _bitwg_cur * 2
+        while _bitwg_new < _bitwg_need {
+            let _bitwg_new = _bitwg_new * 2
+        }
+        let _bitwg_buf = alloc _bitwg_new
+        let _bitwg_old = load64 [_bitwg_h + 0]
+        let _bitwg_bytes = load64 [_bitwg_h + 8]
+        let _bitwg_i = 0
+        while _bitwg_i < _bitwg_bytes {
+            let _bitwg_b = load [_bitwg_old + _bitwg_i]
+            store [_bitwg_buf + _bitwg_i] _bitwg_b
+            let _bitwg_i = _bitwg_i + 1
+        }
+        store64 [_bitwg_h + 0] _bitwg_buf
+        store64 [_bitwg_h + 8] _bitwg_new
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_write : append low nx_i2 bits of nx_i1 to writer nx_i0 (LSB-first)
+#   nx_r0 = total bits written after the append
+# ------------------------------------------------------------------------------
+fn nx_bit_write {
+    let _bitww_h = nx_i0
+    let _bitww_val = nx_i1
+    let _bitww_cnt = nx_i2
+    let _bitww_bitlen = load64 [_bitww_h + 16]
+    let _bitww_end = _bitww_bitlen + _bitww_cnt
+    # ensure capacity: bytes needed = (end + 7) / 8, plus headroom byte
+    let _bitww_need = _bitww_end + 8
+    let _bitww_need = _bitww_need / 8
+    let nx_i0 = _bitww_h
+    let nx_i1 = _bitww_need
+    call nx_bit_writer_grow
+
+    let _bitww_buf = load64 [_bitww_h + 0]
+    let _bitww_pos = load64 [_bitww_h + 16]
+    let _bitww_j = 0
+    while _bitww_j < _bitww_cnt {
+        # p2 = 2^j
+        let _bitww_p2 = 1
+        let _bitww_k = 0
+        while _bitww_k < _bitww_j {
+            let _bitww_p2 = _bitww_p2 * 2
+            let _bitww_k = _bitww_k + 1
+        }
+        let _bitww_shift = _bitww_val / _bitww_p2
+        let _bitww_bit = _bitww_shift % 2
+        if _bitww_bit == 1 {
+            let _bitww_bidx = _bitww_pos / 8
+            let _bitww_boff = _bitww_pos % 8
+            # mask = 2^boff
+            let _bitww_mask = 1
+            let _bitww_m = 0
+            while _bitww_m < _bitww_boff {
+                let _bitww_mask = _bitww_mask * 2
+                let _bitww_m = _bitww_m + 1
+            }
+            let _bitww_cur = load [_bitww_buf + _bitww_bidx]
+            let _bitww_upd = _bitww_cur + _bitww_mask
+            store [_bitww_buf + _bitww_bidx] _bitww_upd
+        }
+        let _bitww_pos = _bitww_pos + 1
+        let _bitww_j = _bitww_j + 1
+    }
+    store64 [_bitww_h + 16] _bitww_pos
+    let nx_r0 = _bitww_pos
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_flush : pad writer nx_i0 to a byte boundary with zero bits
+#   nx_r0 = total byte length of the stream after flushing
+# ------------------------------------------------------------------------------
+fn nx_bit_flush {
+    let _bitwf_h = nx_i0
+    let _bitwf_bitlen = load64 [_bitwf_h + 16]
+    let _bitwf_rem = _bitwf_bitlen % 8
+    if _bitwf_rem != 0 {
+        let _bitwf_pad = 8 - _bitwf_rem
+        let _bitwf_newlen = _bitwf_bitlen + _bitwf_pad
+        store64 [_bitwf_h + 16] _bitwf_newlen
+    }
+    let _bitwf_bytes = load64 [_bitwf_h + 16]
+    let _bitwf_bytes = _bitwf_bytes / 8
+    let nx_r0 = _bitwf_bytes
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_writer_bytes : nx_r0 = whole bytes currently held (ceil(bit_len/8))
+# ------------------------------------------------------------------------------
+fn nx_bit_writer_bytes {
+    let _bitwb_bits = load64 [nx_i0 + 16]
+    let _bitwb_bytes = _bitwb_bits + 7
+    let _bitwb_bytes = _bitwb_bytes / 8
+    let nx_r0 = _bitwb_bytes
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_reader_new : nx_r0 = BitReader over nx_i0 bytes of buffer nx_i0...
+#   Inputs: nx_i0 = buffer pointer, nx_i1 = byte length
+# ------------------------------------------------------------------------------
+fn nx_bit_reader_new {
+    let _bitrn_buf = nx_i0
+    let _bitrn_bytes = nx_i1
+    let _bitrn_bits = _bitrn_bytes * 8
+    let _bitrn_desc = alloc 32
+    store64 [_bitrn_desc + 0] _bitrn_buf
+    store64 [_bitrn_desc + 8] _bitrn_bits
+    store64 [_bitrn_desc + 16] 0
+    store64 [_bitrn_desc + 24] 0
+    let nx_r0 = _bitrn_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_read : nx_r0 = next nx_i1 bits from reader nx_i0 (LSB-first)
+#   Returns 0 when the cursor is at or past the end of the stream.
+# ------------------------------------------------------------------------------
+fn nx_bit_read {
+    let _bitrr_h = nx_i0
+    let _bitrr_cnt = nx_i1
+    let _bitrr_buf = load64 [_bitrr_h + 0]
+    let _bitrr_bitlen = load64 [_bitrr_h + 8]
+    let _bitrr_pos = load64 [_bitrr_h + 16]
+    let _bitrr_acc = 0
+    let _bitrr_j = 0
+    while _bitrr_j < _bitrr_cnt {
+        if _bitrr_pos < _bitrr_bitlen {
+            let _bitrr_bidx = _bitrr_pos / 8
+            let _bitrr_boff = _bitrr_pos % 8
+            let _bitrr_byte = load [_bitrr_buf + _bitrr_bidx]
+            # mask = 2^boff
+            let _bitrr_mask = 1
+            let _bitrr_m = 0
+            while _bitrr_m < _bitrr_boff {
+                let _bitrr_mask = _bitrr_mask * 2
+                let _bitrr_m = _bitrr_m + 1
+            }
+            let _bitrr_bv = _bitrr_byte / _bitrr_mask
+            let _bitrr_bit = _bitrr_bv % 2
+            if _bitrr_bit == 1 {
+                # acc = acc + 2^j
+                let _bitrr_p2 = 1
+                let _bitrr_k = 0
+                while _bitrr_k < _bitrr_j {
+                    let _bitrr_p2 = _bitrr_p2 * 2
+                    let _bitrr_k = _bitrr_k + 1
+                }
+                let _bitrr_acc = _bitrr_acc + _bitrr_p2
+            }
+            let _bitrr_pos = _bitrr_pos + 1
+        }
+        let _bitrr_j = _bitrr_j + 1
+    }
+    store64 [_bitrr_h + 16] _bitrr_pos
+    let nx_r0 = _bitrr_acc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_reader_pos : nx_r0 = read cursor position in bits
+# ------------------------------------------------------------------------------
+fn nx_bit_reader_pos {
+    let nx_r0 = load64 [nx_i0 + 16]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_bit_reader_bits_left : nx_r0 = bits remaining between cursor and end
+# ------------------------------------------------------------------------------
+fn nx_bit_reader_bits_left {
+    let _bitrl_len = load64 [nx_i0 + 8]
+    let _bitrl_pos = load64 [nx_i0 + 16]
+    let nx_r0 = _bitrl_len - _bitrl_pos
+}

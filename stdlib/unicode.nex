@@ -1,0 +1,380 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: unicode.nex
+#            UTF-8 Validation, Decoding & Encoding (Features #113-115)
+# ==============================================================================
+#
+# Strict RFC 3629 UTF-8 byte-sequence primitives for editor input handling
+# and file loading:
+#
+#   #113 nx_utf8_validate   - strict validation of a byte buffer
+#   #114 nx_utf8_decode_next - decode the codepoint at a byte offset
+#   #115 nx_utf8_encode      - encode a scalar value into UTF-8 bytes
+#
+# Validation rejects overlong encodings (C0/C1 leads, E0 80-9F, F0 80-8F),
+# UTF-16 surrogate codepoints (ED A0-BF), and out-of-range scalars (F5+,
+# F4 90+). Decoding enforces the same rules and reports malformed input.
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = buffer pointer (validate/decode) or codepoint (encode)
+#   nx_i1 = byte length (validate), byte offset (decode), output ptr (encode)
+#   nx_r0 = 1/0 (validate), codepoint (decode, -1 on malformed),
+#           bytes written (encode, 0 on invalid input)
+#   nx_r1 = bytes consumed (decode; 0 on malformed input)
+#
+# nx_utf8_decode_next reads up to 4 bytes at nx_i1; the caller guarantees the
+# lead byte's sequence is within the buffer (pair with nx_utf8_validate on
+# untrusted input).
+#
+# Internal variables use per-function unique prefixes (_uv_*, _ud_*, _ue_*)
+# so no clobbering occurs across calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_utf8_validate : nx_r0 = 1 if bytes [nx_i0, nx_i0 + nx_i1) are strict
+#   RFC 3629 UTF-8, else 0. Accepts the empty buffer (length 0).
+# ------------------------------------------------------------------------------
+fn nx_utf8_validate {
+    let _uv_p = nx_i0
+    let _uv_len = nx_i1
+    let _uv_i = 0
+    let _uv_ok = 1
+    while _uv_ok == 1 {
+        if _uv_i >= _uv_len {
+            # consumed the whole input successfully
+            let _uv_ok = 2
+        } else {
+            let _uv_b = load [_uv_p + _uv_i]
+            if _uv_b < 128 {
+                # U+0000..U+007F: single byte
+                let _uv_i = _uv_i + 1
+            } else if _uv_b < 194 {
+                # 0x80..0xC1: stray continuation or overlong 2-byte lead
+                let _uv_ok = 0
+            } else if _uv_b < 224 {
+                # 0xC2..0xDF: 2-byte sequence
+                let _uv_need = _uv_i + 2
+                if _uv_need > _uv_len {
+                    let _uv_ok = 0
+                } else {
+                    let _uv_j = _uv_i + 1
+                    let _uv_b1 = load [_uv_p + _uv_j]
+                    if _uv_b1 < 128 {
+                        let _uv_ok = 0
+                    } else {
+                        if _uv_b1 > 191 {
+                            let _uv_ok = 0
+                        } else {
+                            let _uv_i = _uv_i + 2
+                        }
+                    }
+                }
+            } else if _uv_b < 240 {
+                # 0xE0..0xEF: 3-byte sequence
+                let _uv_need = _uv_i + 3
+                if _uv_need > _uv_len {
+                    let _uv_ok = 0
+                } else {
+                    let _uv_j = _uv_i + 1
+                    let _uv_b1 = load [_uv_p + _uv_j]
+                    # E0 requires A0-BF, ED requires 80-9F, others 80-BF
+                    let _uv_lo = 128
+                    let _uv_hi = 191
+                    if _uv_b == 224 {
+                        let _uv_lo = 160
+                    }
+                    if _uv_b == 237 {
+                        let _uv_hi = 159
+                    }
+                    if _uv_b1 < _uv_lo {
+                        let _uv_ok = 0
+                    } else {
+                        if _uv_b1 > _uv_hi {
+                            let _uv_ok = 0
+                        } else {
+                            let _uv_j2 = _uv_i + 2
+                            let _uv_b2 = load [_uv_p + _uv_j2]
+                            if _uv_b2 < 128 {
+                                let _uv_ok = 0
+                            } else {
+                                if _uv_b2 > 191 {
+                                    let _uv_ok = 0
+                                } else {
+                                    let _uv_i = _uv_i + 3
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if _uv_b < 245 {
+                # 0xF0..0xF4: 4-byte sequence
+                let _uv_need = _uv_i + 4
+                if _uv_need > _uv_len {
+                    let _uv_ok = 0
+                } else {
+                    let _uv_j = _uv_i + 1
+                    let _uv_b1 = load [_uv_p + _uv_j]
+                    # F0 requires 90-BF, F4 requires 80-8F, others 80-BF
+                    let _uv_lo = 128
+                    let _uv_hi = 191
+                    if _uv_b == 240 {
+                        let _uv_lo = 144
+                    }
+                    if _uv_b == 244 {
+                        let _uv_hi = 143
+                    }
+                    if _uv_b1 < _uv_lo {
+                        let _uv_ok = 0
+                    } else {
+                        if _uv_b1 > _uv_hi {
+                            let _uv_ok = 0
+                        } else {
+                            let _uv_j2 = _uv_i + 2
+                            let _uv_b2 = load [_uv_p + _uv_j2]
+                            if _uv_b2 < 128 {
+                                let _uv_ok = 0
+                            } else {
+                                if _uv_b2 > 191 {
+                                    let _uv_ok = 0
+                                } else {
+                                    let _uv_j3 = _uv_i + 3
+                                    let _uv_b3 = load [_uv_p + _uv_j3]
+                                    if _uv_b3 < 128 {
+                                        let _uv_ok = 0
+                                    } else {
+                                        if _uv_b3 > 191 {
+                                            let _uv_ok = 0
+                                        } else {
+                                            let _uv_i = _uv_i + 4
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                # 0xF5..0xFF: never valid
+                let _uv_ok = 0
+            }
+        }
+    }
+    let nx_r0 = 0
+    if _uv_ok == 2 {
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_utf8_decode_next : decodes the codepoint at offset nx_i1 in nx_i0
+#   nx_r0 = codepoint value (-1 on malformed input)
+#   nx_r1 = bytes consumed (0 on malformed input)
+# ------------------------------------------------------------------------------
+fn nx_utf8_decode_next {
+    let _ud_p = nx_i0
+    let _ud_off = nx_i1
+    let _ud_b = load [_ud_p + _ud_off]
+    let nx_r0 = 0 - 1
+    let nx_r1 = 0
+    if _ud_b < 128 {
+        let nx_r0 = _ud_b
+        let nx_r1 = 1
+    } else if _ud_b < 194 {
+        # stray continuation byte or overlong lead
+        let nx_r0 = 0 - 1
+        let nx_r1 = 0
+    } else if _ud_b < 224 {
+        # 2-byte: cp = (b - 192) * 64 + (b1 - 128)
+        let _ud_j1 = _ud_off + 1
+        let _ud_b1 = load [_ud_p + _ud_j1]
+        if _ud_b1 < 128 {
+            let nx_r0 = 0 - 1
+            let nx_r1 = 0
+        } else {
+            if _ud_b1 > 191 {
+                let nx_r0 = 0 - 1
+                let nx_r1 = 0
+            } else {
+                let _ud_hi = _ud_b - 192
+                let _ud_lo = _ud_b1 - 128
+                let _ud_cp = _ud_hi * 64 + _ud_lo
+                let nx_r0 = _ud_cp
+                let nx_r1 = 2
+            }
+        }
+    } else if _ud_b < 240 {
+        # 3-byte: cp = (b - 224)*4096 + (b1-128)*64 + (b2-128)
+        let _ud_j1 = _ud_off + 1
+        let _ud_b1 = load [_ud_p + _ud_j1]
+        let _ud_lo = 128
+        let _ud_hi = 191
+        if _ud_b == 224 {
+            let _ud_lo = 160
+        }
+        if _ud_b == 237 {
+            let _ud_hi = 159
+        }
+        if _ud_b1 < _ud_lo {
+            let nx_r0 = 0 - 1
+            let nx_r1 = 0
+        } else {
+            if _ud_b1 > _ud_hi {
+                let nx_r0 = 0 - 1
+                let nx_r1 = 0
+            } else {
+                let _ud_j2 = _ud_off + 2
+                let _ud_b2 = load [_ud_p + _ud_j2]
+                if _ud_b2 < 128 {
+                    let nx_r0 = 0 - 1
+                    let nx_r1 = 0
+                } else {
+                    if _ud_b2 > 191 {
+                        let nx_r0 = 0 - 1
+                        let nx_r1 = 0
+                    } else {
+                        let _ud_p1 = _ud_b - 224
+                        let _ud_p1 = _ud_p1 * 4096
+                        let _ud_p2 = _ud_b1 - 128
+                        let _ud_p2 = _ud_p2 * 64
+                        let _ud_p3 = _ud_b2 - 128
+                        let _ud_cp = _ud_p1 + _ud_p2
+                        let _ud_cp = _ud_cp + _ud_p3
+                        let nx_r0 = _ud_cp
+                        let nx_r1 = 3
+                    }
+                }
+            }
+        }
+    } else if _ud_b < 245 {
+        # 4-byte: cp = (b-240)*262144 + (b1-128)*4096 + (b2-128)*64 + (b3-128)
+        let _ud_j1 = _ud_off + 1
+        let _ud_b1 = load [_ud_p + _ud_j1]
+        let _ud_lo = 128
+        let _ud_hi = 191
+        if _ud_b == 240 {
+            let _ud_lo = 144
+        }
+        if _ud_b == 244 {
+            let _ud_hi = 143
+        }
+        if _ud_b1 < _ud_lo {
+            let nx_r0 = 0 - 1
+            let nx_r1 = 0
+        } else {
+            if _ud_b1 > _ud_hi {
+                let nx_r0 = 0 - 1
+                let nx_r1 = 0
+            } else {
+                let _ud_j2 = _ud_off + 2
+                let _ud_b2 = load [_ud_p + _ud_j2]
+                if _ud_b2 < 128 {
+                    let nx_r0 = 0 - 1
+                    let nx_r1 = 0
+                } else {
+                    if _ud_b2 > 191 {
+                        let nx_r0 = 0 - 1
+                        let nx_r1 = 0
+                    } else {
+                        let _ud_j3 = _ud_off + 3
+                        let _ud_b3 = load [_ud_p + _ud_j3]
+                        if _ud_b3 < 128 {
+                            let nx_r0 = 0 - 1
+                            let nx_r1 = 0
+                        } else {
+                            if _ud_b3 > 191 {
+                                let nx_r0 = 0 - 1
+                                let nx_r1 = 0
+                            } else {
+                                let _ud_p1 = _ud_b - 240
+                                let _ud_p1 = _ud_p1 * 262144
+                                let _ud_p2 = _ud_b1 - 128
+                                let _ud_p2 = _ud_p2 * 4096
+                                let _ud_p3 = _ud_b2 - 128
+                                let _ud_p3 = _ud_p3 * 64
+                                let _ud_p4 = _ud_b3 - 128
+                                let _ud_cp = _ud_p1 + _ud_p2
+                                let _ud_cp = _ud_cp + _ud_p3
+                                let _ud_cp = _ud_cp + _ud_p4
+                                let nx_r0 = _ud_cp
+                                let nx_r1 = 4
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_utf8_encode : encodes codepoint nx_i0 into buffer nx_i1
+#   nx_r0 = bytes written (1-4), or 0 for invalid scalars (negative,
+#   surrogates D800-DFFF, above U+10FFFF)
+# ------------------------------------------------------------------------------
+fn nx_utf8_encode {
+    let _ue_cp = nx_i0
+    let _ue_out = nx_i1
+    let nx_r0 = 0
+    if _ue_cp >= 0 {
+        if _ue_cp < 128 {
+            # 1 byte
+            store [_ue_out + 0] _ue_cp
+            let nx_r0 = 1
+        } else {
+            if _ue_cp < 2048 {
+                # 2 bytes: 110xxxxx 10xxxxxx
+                let _ue_hi = _ue_cp / 64
+                let _ue_hi = _ue_hi + 192
+                let _ue_lo = _ue_cp % 64
+                let _ue_lo = _ue_lo + 128
+                store [_ue_out + 0] _ue_hi
+                store [_ue_out + 1] _ue_lo
+                let nx_r0 = 2
+            } else {
+                # reject UTF-16 surrogates D800..DFFF
+                let _ue_surro = 0
+                if _ue_cp >= 55296 {
+                    if _ue_cp <= 57343 {
+                        let _ue_surro = 1
+                    }
+                }
+                if _ue_surro == 1 {
+                    let nx_r0 = 0
+                } else {
+                    if _ue_cp < 65536 {
+                        # 3 bytes: 1110xxxx 10xxxxxx 10xxxxxx
+                        let _ue_b0 = _ue_cp / 4096
+                        let _ue_b0 = _ue_b0 + 224
+                        let _ue_r = _ue_cp % 4096
+                        let _ue_b1 = _ue_r / 64
+                        let _ue_b1 = _ue_b1 + 128
+                        let _ue_b2 = _ue_r % 64
+                        let _ue_b2 = _ue_b2 + 128
+                        store [_ue_out + 0] _ue_b0
+                        store [_ue_out + 1] _ue_b1
+                        store [_ue_out + 2] _ue_b2
+                        let nx_r0 = 3
+                    } else {
+                        if _ue_cp <= 1114111 {
+                            # 4 bytes: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+                            let _ue_b0 = _ue_cp / 262144
+                            let _ue_b0 = _ue_b0 + 240
+                            let _ue_r = _ue_cp % 262144
+                            let _ue_b1 = _ue_r / 4096
+                            let _ue_b1 = _ue_b1 + 128
+                            let _ue_r = _ue_r % 4096
+                            let _ue_b2 = _ue_r / 64
+                            let _ue_b2 = _ue_b2 + 128
+                            let _ue_b3 = _ue_r % 64
+                            let _ue_b3 = _ue_b3 + 128
+                            store [_ue_out + 0] _ue_b0
+                            store [_ue_out + 1] _ue_b1
+                            store [_ue_out + 2] _ue_b2
+                            store [_ue_out + 3] _ue_b3
+                            let nx_r0 = 4
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

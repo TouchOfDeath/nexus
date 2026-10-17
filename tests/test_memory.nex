@@ -1,0 +1,245 @@
+# Test: Fast Memory Move / Set / Zero (Features #87 & #88, stdlib/memory.nex)
+include "stdlib/memory.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: memcpy - disjoint forward copy
+# ==============================================================================
+let bsrc = alloc 64
+let bdst = alloc 64
+
+store [bsrc + 0] 65
+store [bsrc + 1] 66
+store [bsrc + 2] 67
+store [bsrc + 3] 68
+
+let nx_i0 = bdst
+let nx_i1 = bsrc
+let nx_i2 = 4
+call nx_memcpy
+
+let c0 = load [bdst + 0]
+assert_eq c0, 65
+let c1 = load [bdst + 1]
+assert_eq c1, 66
+let c2 = load [bdst + 2]
+assert_eq c2, 67
+let c3 = load [bdst + 3]
+assert_eq c3, 68
+
+# source untouched
+let cs = load [bsrc + 0]
+assert_eq cs, 65
+
+# zero-length copy is a no-op
+store [bdst + 4] 99
+let nx_i0 = bdst
+let nx_i1 = bsrc
+let nx_i2 = 0
+call nx_memcpy
+let cz = load [bdst + 4]
+assert_eq cz, 99
+
+# ==============================================================================
+# Section 2: memmove - non-overlapping (behaves like copy)
+# ==============================================================================
+let nx_i0 = bdst
+let nx_i1 = bsrc
+let nx_i2 = 4
+call nx_memmove
+
+let m0 = load [bdst + 0]
+assert_eq m0, 65
+let m3 = load [bdst + 3]
+assert_eq m3, 68
+
+# ==============================================================================
+# Section 3: memmove - overlapping forward (dst < src)
+# ==============================================================================
+# Buffer: 1 2 3 4 5; copy 4 bytes from +1 to +0 => 2 3 4 5 5
+let ob = alloc 16
+store [ob + 0] 1
+store [ob + 1] 2
+store [ob + 2] 3
+store [ob + 3] 4
+store [ob + 4] 5
+
+let nx_i0 = ob
+let nx_i1 = ob + 1
+let nx_i2 = 4
+call nx_memmove
+
+let o0 = load [ob + 0]
+assert_eq o0, 2
+let o1 = load [ob + 1]
+assert_eq o1, 3
+let o2 = load [ob + 2]
+assert_eq o2, 4
+let o3 = load [ob + 3]
+assert_eq o3, 5
+let o4 = load [ob + 4]
+assert_eq o4, 5
+
+# ==============================================================================
+# Section 4: memmove - overlapping backward (dst > src)
+# ==============================================================================
+# Buffer: 1 2 3 4 5; copy 3 bytes from +0 to +2 => 1 2 1 2 3
+let ob2 = alloc 16
+store [ob2 + 0] 1
+store [ob2 + 1] 2
+store [ob2 + 2] 3
+store [ob2 + 3] 4
+store [ob2 + 4] 5
+
+let nx_i0 = ob2 + 2
+let nx_i1 = ob2
+let nx_i2 = 3
+call nx_memmove
+
+let p0 = load [ob2 + 0]
+assert_eq p0, 1
+let p1 = load [ob2 + 1]
+assert_eq p1, 2
+let p2 = load [ob2 + 2]
+assert_eq p2, 1
+let p3 = load [ob2 + 3]
+assert_eq p3, 2
+let p4 = load [ob2 + 4]
+assert_eq p4, 3
+
+# ==============================================================================
+# Section 5: memmove - dst == src is a safe no-op
+# ==============================================================================
+store [ob2 + 0] 42
+let nx_i0 = ob2
+let nx_i1 = ob2
+let nx_i2 = 3
+call nx_memmove
+let q0 = load [ob2 + 0]
+assert_eq q0, 42
+let q1 = load [ob2 + 1]
+assert_eq q1, 2
+
+# zero length move with distinct pointers is a no-op
+let nx_i0 = ob2
+let nx_i1 = ob2 + 5
+let nx_i2 = 0
+call nx_memmove
+let q2 = load [ob2 + 0]
+assert_eq q2, 42
+
+# ==============================================================================
+# Section 6: memset - fill patterns
+# ==============================================================================
+let bufm = alloc 32
+let nx_i0 = bufm
+let nx_i1 = 170
+let nx_i2 = 8
+call nx_memset
+
+let f0 = load [bufm + 0]
+assert_eq f0, 170
+let f7 = load [bufm + 7]
+assert_eq f7, 170
+
+# only n bytes touched
+let f8 = load [bufm + 8]
+assert_eq f8, 0
+
+# re-fill with different value over old data
+let nx_i0 = bufm
+let nx_i1 = 51
+let nx_i2 = 4
+call nx_memset
+let f9 = load [bufm + 0]
+assert_eq f9, 51
+let f10 = load [bufm + 3]
+assert_eq f10, 51
+let f11 = load [bufm + 4]
+assert_eq f11, 170
+
+# zero-length memset touches nothing
+let nx_i0 = bufm
+let nx_i1 = 7
+let nx_i2 = 0
+call nx_memset
+let f12 = load [bufm + 0]
+assert_eq f12, 51
+
+# values are truncated to the low byte
+let nx_i0 = bufm + 12
+let nx_i1 = 258
+let nx_i2 = 1
+call nx_memset
+let f13 = load [bufm + 12]
+assert_eq f13, 2
+
+# ==============================================================================
+# Section 7: memzero - clear buffers
+# ==============================================================================
+store [bufm + 20] 123
+store [bufm + 21] 45
+let nx_i0 = bufm + 16
+let nx_i1 = 8
+call nx_memzero
+
+let z0 = load [bufm + 20]
+assert_eq z0, 0
+let z1 = load [bufm + 21]
+assert_eq z1, 0
+let z2 = load [bufm + 16]
+assert_eq z2, 0
+let z3 = load [bufm + 23]
+assert_eq z3, 0
+
+# outside the zeroed range stays intact
+store [bufm + 24] 77
+let nx_i0 = bufm + 16
+let nx_i1 = 4
+call nx_memzero
+let z4 = load [bufm + 24]
+assert_eq z4, 77
+
+# zero-length memzero no-op
+let nx_i0 = bufm + 24
+let nx_i1 = 0
+call nx_memzero
+let z5 = load [bufm + 24]
+assert_eq z5, 77
+
+# ==============================================================================
+# Section 8: 64-bit view of byte operations (little-endian composition)
+# ==============================================================================
+let wbuf = alloc 32
+let nx_i0 = wbuf
+let nx_i1 = 8
+let nx_i2 = 8
+call nx_memset
+
+# build expected 0x0808080808080808 without oversized literals
+let expect64 = 0
+let ei = 0
+while ei < 8 {
+    let expect64 = expect64 * 256 + 8
+    let ei = ei + 1
+}
+let wv = load64 [wbuf + 0]
+assert_eq wv, expect64
+
+# zeroing 1 byte clears only the low byte (little-endian)
+let nx_i0 = wbuf
+let nx_i1 = 1
+call nx_memzero
+let wv2 = load64 [wbuf + 0]
+assert_eq wv2, 578721382704613376
+
+# zeroing all 8 bytes clears the full qword
+let nx_i0 = wbuf
+let nx_i1 = 8
+call nx_memzero
+let wv3 = load64 [wbuf + 0]
+assert_eq wv3, 0
+
+print "MEMORY_TEST_PASS"

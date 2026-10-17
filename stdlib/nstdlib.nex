@@ -30,6 +30,19 @@
 #                      nx_hashset_remove nx_hashset_remove_str
 #                      nx_hashset_len nx_hashset_cap nx_hashset_clear
 #
+# Additional standalone modules (include directly, not bundled here):
+#   stdlib/memory.nex         Features #87 & #88  (nx_memmove nx_memcpy
+#                             nx_memset nx_memzero)
+#   stdlib/byte_buffer.nex    Feature #99   (nx_buf_* growable byte buffer)
+#   stdlib/bit_stream.nex     Feature #100  (nx_bit_writer_* / nx_bit_reader*)
+#   stdlib/priority_queue.nex Feature #76   (nx_pq_* binary heap)
+#   stdlib/linked_list.nex    Feature #77   (nx_list_* doubly-linked list)
+#   stdlib/trie.nex           Feature #80   (nx_trie_* prefix tree)
+#   stdlib/lru_cache.nex      Feature #94   (nx_lru_* LRU cache)
+#   stdlib/arena.nex          Feature #96   (nx_arena_* bump allocator)
+#   stdlib/unicode.nex        Features #113-115 (nx_utf8_*)
+#   stdlib/search.nex         Feature #93   (nx_bsearch_*)
+#
 # CALLING CONVENTION (all functions):
 #   1. Set inputs in nx_i0, nx_i1, nx_i2 (per-function signature)
 #   2. call <fn>

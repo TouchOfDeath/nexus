@@ -1,0 +1,245 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: priority_queue.nex
+#                Binary Heap Priority Queue (Feature #76)
+# ==============================================================================
+#
+# A binary heap priority queue for scheduling asynchronous UI timer callbacks
+# and sorting diagnostic errors by severity. Supports both min-heaps (the
+# smallest element is served first) and max-heaps (the largest first), chosen
+# at construction time.
+#
+# Memory Layout (stored in a 32-byte descriptor struct on the heap):
+#   offset 0:  data_ptr   - pointer to the element array (qword elements)
+#   offset 8:  len        - current number of elements
+#   offset 16: cap        - allocated slots in data_ptr
+#   offset 24: is_min     - 1 = min-heap (default), 0 = max-heap
+#
+# Heap invariant:
+#   min-heap: every parent <= its children
+#   max-heap: every parent >= its children
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = queue handle (or initial capacity for nx_pq_new)
+#   nx_i1 = second argument (is_min flag for new, value for push)
+#   nx_r0 = result (handle, value, length, or emptiness flag)
+#
+# Internal variables use per-function unique prefixes (_pqn_*, _pqg_*, _pqp_*,
+# _pqo_*, _pqsu_*, _pqsd_*, _pqk_*, _pql_*, _pqe_*) so no clobbering occurs
+# across calls.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_new : nx_r0 = new priority queue with capacity nx_i0
+#   nx_i1 = 1 for min-heap (smallest first), 0 for max-heap (largest first)
+#   Capacity is clamped to at least 4.
+# ------------------------------------------------------------------------------
+fn nx_pq_new {
+    let _pqn_cap = nx_i0
+    if _pqn_cap < 4 {
+        let _pqn_cap = 4
+    }
+    let _pqn_min = nx_i1
+    let _pqn_bytes = _pqn_cap * 8
+    let _pqn_data = alloc _pqn_bytes
+    let _pqn_desc = alloc 32
+    store64 [_pqn_desc + 0] _pqn_data
+    store64 [_pqn_desc + 8] 0
+    store64 [_pqn_desc + 16] _pqn_cap
+    store64 [_pqn_desc + 24] _pqn_min
+    let nx_r0 = _pqn_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_grow : internal, ensures queue nx_i0 holds >= nx_i1 elements
+# ------------------------------------------------------------------------------
+fn nx_pq_grow {
+    let _pqg_h = nx_i0
+    let _pqg_need = nx_i1
+    let _pqg_cur = load64 [_pqg_h + 16]
+    if _pqg_cur < _pqg_need {
+        let _pqg_new = _pqg_cur * 2
+        while _pqg_new < _pqg_need {
+            let _pqg_new = _pqg_new * 2
+        }
+        let _pqg_bytes = _pqg_new * 8
+        let _pqg_data = alloc _pqg_bytes
+        let _pqg_old = load64 [_pqg_h + 0]
+        let _pqg_len = load64 [_pqg_h + 8]
+        let _pqg_i = 0
+        while _pqg_i < _pqg_len {
+            let _pqg_v = load64 [_pqg_old + _pqg_i * 8]
+            store64 [_pqg_data + _pqg_i * 8] _pqg_v
+            let _pqg_i = _pqg_i + 1
+        }
+        store64 [_pqg_h + 0] _pqg_data
+        store64 [_pqg_h + 16] _pqg_new
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_sift_up : internal, bubbles element at index nx_i1 upward
+# ------------------------------------------------------------------------------
+fn nx_pq_sift_up {
+    let _pqsu_h = nx_i0
+    let _pqsu_i = nx_i1
+    let _pqsu_min = load64 [_pqsu_h + 24]
+    let _pqsu_done = 0
+    while _pqsu_done == 0 {
+        if _pqsu_i <= 0 {
+            let _pqsu_done = 1
+        } else {
+            let _pqsu_pi = _pqsu_i - 1
+            let _pqsu_pi = _pqsu_pi / 2
+            let _pqsu_data = load64 [_pqsu_h + 0]
+            let _pqsu_cv = load64 [_pqsu_data + _pqsu_i * 8]
+            let _pqsu_pv = load64 [_pqsu_data + _pqsu_pi * 8]
+            let _pqsu_swap = 0
+            if _pqsu_min == 1 {
+                if _pqsu_cv < _pqsu_pv {
+                    let _pqsu_swap = 1
+                }
+            } else {
+                if _pqsu_cv > _pqsu_pv {
+                    let _pqsu_swap = 1
+                }
+            }
+            if _pqsu_swap == 1 {
+                store64 [_pqsu_data + _pqsu_i * 8] _pqsu_pv
+                store64 [_pqsu_data + _pqsu_pi * 8] _pqsu_cv
+                let _pqsu_i = _pqsu_pi
+            } else {
+                let _pqsu_done = 1
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_sift_down : internal, sinks element at index nx_i1 downward
+# ------------------------------------------------------------------------------
+fn nx_pq_sift_down {
+    let _pqsd_h = nx_i0
+    let _pqsd_i = nx_i1
+    let _pqsd_min = load64 [_pqsd_h + 24]
+    let _pqsd_len = load64 [_pqsd_h + 8]
+    let _pqsd_moved = 1
+    while _pqsd_moved == 1 {
+        let _pqsd_moved = 0
+        let _pqsd_li = _pqsd_i * 2 + 1
+        let _pqsd_ri = _pqsd_li + 1
+        if _pqsd_li < _pqsd_len {
+            let _pqsd_data = load64 [_pqsd_h + 0]
+            let _pqsd_best = _pqsd_li
+            if _pqsd_ri < _pqsd_len {
+                # choose the child that should sit above its sibling
+                let _pqsd_lv = load64 [_pqsd_data + _pqsd_li * 8]
+                let _pqsd_rv = load64 [_pqsd_data + _pqsd_ri * 8]
+                if _pqsd_min == 1 {
+                    if _pqsd_rv < _pqsd_lv {
+                        let _pqsd_best = _pqsd_ri
+                    }
+                } else {
+                    if _pqsd_rv > _pqsd_lv {
+                        let _pqsd_best = _pqsd_ri
+                    }
+                }
+            }
+            let _pqsd_bv = load64 [_pqsd_data + _pqsd_best * 8]
+            let _pqsd_iv = load64 [_pqsd_data + _pqsd_i * 8]
+            let _pqsd_swap = 0
+            if _pqsd_min == 1 {
+                if _pqsd_bv < _pqsd_iv {
+                    let _pqsd_swap = 1
+                }
+            } else {
+                if _pqsd_bv > _pqsd_iv {
+                    let _pqsd_swap = 1
+                }
+            }
+            if _pqsd_swap == 1 {
+                store64 [_pqsd_data + _pqsd_i * 8] _pqsd_bv
+                store64 [_pqsd_data + _pqsd_best * 8] _pqsd_iv
+                let _pqsd_i = _pqsd_best
+                let _pqsd_moved = 1
+            }
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_push : appends value nx_i1 to queue nx_i0 and restores the heap
+# ------------------------------------------------------------------------------
+fn nx_pq_push {
+    let _pqp_h = nx_i0
+    let _pqp_val = nx_i1
+    let _pqp_len = load64 [_pqp_h + 8]
+    let _pqp_cap = load64 [_pqp_h + 16]
+    if _pqp_len >= _pqp_cap {
+        let _pqp_need = _pqp_len + 1
+        let nx_i0 = _pqp_h
+        let nx_i1 = _pqp_need
+        call nx_pq_grow
+    }
+    let _pqp_data = load64 [_pqp_h + 0]
+    let _pqp_len = load64 [_pqp_h + 8]
+    store64 [_pqp_data + _pqp_len * 8] _pqp_val
+    let _pqp_new_len = _pqp_len + 1
+    store64 [_pqp_h + 8] _pqp_new_len
+    let nx_i0 = _pqp_h
+    let nx_i1 = _pqp_len
+    call nx_pq_sift_up
+    let nx_r0 = _pqp_new_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_pop : removes and returns the root value of queue nx_i0 (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_pq_pop {
+    let _pqo_h = nx_i0
+    let _pqo_len = load64 [_pqo_h + 8]
+    let nx_r0 = 0
+    if _pqo_len > 0 {
+        let _pqo_data = load64 [_pqo_h + 0]
+        let nx_r0 = load64 [_pqo_data + 0]
+        let _pqo_new_len = _pqo_len - 1
+        store64 [_pqo_h + 8] _pqo_new_len
+        if _pqo_new_len > 0 {
+            let _pqo_last = load64 [_pqo_data + _pqo_new_len * 8]
+            store64 [_pqo_data + 0] _pqo_last
+            let nx_i0 = _pqo_h
+            let nx_i1 = 0
+            call nx_pq_sift_down
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_peek : nx_r0 = root value of queue nx_i0 without removing (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_pq_peek {
+    let _pqk_h = nx_i0
+    let _pqk_len = load64 [_pqk_h + 8]
+    let nx_r0 = 0
+    if _pqk_len > 0 {
+        let _pqk_data = load64 [_pqk_h + 0]
+        let nx_r0 = load64 [_pqk_data + 0]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_len : nx_r0 = element count of queue nx_i0
+# ------------------------------------------------------------------------------
+fn nx_pq_len {
+    let nx_r0 = load64 [nx_i0 + 8]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_pq_is_empty : nx_r0 = 1 if queue nx_i0 holds no elements, else 0
+# ------------------------------------------------------------------------------
+fn nx_pq_is_empty {
+    let _pqe_len = load64 [nx_i0 + 8]
+    let nx_r0 = 0
+    if _pqe_len == 0 {
+        let nx_r0 = 1
+    }
+}
