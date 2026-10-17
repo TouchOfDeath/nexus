@@ -2,7 +2,8 @@
 
 ## v8.5 — Modern Loop & Range Ergonomics Bundle & Standard Library Additions (current)
 
-### 0. Standard Library Additions: Features #71, #78, #132, #138, #147, #148
+### 0. Standard Library Additions: Features #71, #74, #75, #78, #132, #138, #147, #148
+- **Features #75 & #74: Circular Ring Buffer / Deque (`stdlib/ring_buffer.nex`)**: Production-grade, 48-byte heap-descriptor double-ended circular buffer with 25 standard library subroutines. Supports dual operating modes: dynamic auto-growing Deque (geometric doubling capacity expansion with amortized O(1) push and pop at both head and tail) and fixed-capacity circular buffer (bounded memory window with eviction tracking via `nx_rb_dropped_count`). Features logical O(1) indexing (`nx_rb_get`, `nx_rb_set`), element searching (`nx_rb_contains`, `nx_rb_index_of`), contiguous array export (`nx_rb_to_array`), deep copying (`nx_rb_clone`), equality testing (`nx_rb_equals`), in-place reversal (`nx_rb_reverse`), bidirectional rotation (`nx_rb_rotate`), and buffer compaction (`nx_rb_shrink_to_fit`). Verified with dedicated regression suite in `tests/test_ring_buffer.nex`.
 - **Feature #78: Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset packing 8 flags per byte. Supports O(1) bit testing, setting, clearing, toggling, popcount/cardinality, first/next set/clear bit scanning, deep cloning, equality comparison, and in-place set logic (`AND`, `OR`, `XOR`, `NOT`). Verified with dedicated regression suite in `tests/test_bitset.nex`.
 - **Feature #71: HashSet (`stdlib/hashset.nex`)**: Open-addressing hash set storing unique integer and string elements with linear probing, tombstones, and dynamic capacity doubling. Verified with 117 assertions in `tests/test_hashset.nex`.
 - Added `nx_str_starts_with` and `nx_str_ends_with` to `stdlib/strings.nex`, including correct empty and too-long prefix/suffix behavior.

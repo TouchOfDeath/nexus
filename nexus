@@ -785,6 +785,25 @@ if os.path.exists(bs_src):
         else:
             print("[-] Dense bitset suite: FAIL")
 
+# Circular Ring Buffer / Deque (Feature #75) regression suite
+rb_ok = False
+rb_src = os.path.join(base_dir, "tests", "test_ring_buffer.nex")
+if os.path.exists(rb_src):
+    subprocess.run([nexprep, rb_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_rb = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "RING_BUFFER_TEST_PASS" in out_rb:
+            log_pass("[+] Circular ring buffer suite: Feature #75 (deque, fifo, overwrite, rotate, reverse) PASS")
+            rb_ok = True
+        else:
+            print("[-] Circular ring buffer suite: FAIL")
+
 s_ok = "PASS" if stdlib_ok else "FAIL"
 o_ok = "PASS" if optimizer_ok else "FAIL"
 t_ok = "PASS" if type_infer_ok else "FAIL"
@@ -796,10 +815,11 @@ syn_status = "PASS" if syn_ok else "FAIL"
 range_status = "PASS" if range_ok else "FAIL"
 hashset_status = "PASS" if hs_ok else "FAIL"
 bitset_status = "PASS" if bs_ok else "FAIL"
+ring_buffer_status = "PASS" if rb_ok else "FAIL"
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}")
 '
         ;;
     self-host)

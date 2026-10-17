@@ -1,0 +1,471 @@
+# ==============================================================================
+#   NEXUS TEST: Circular Ring Buffer / Deque
+#   Feature #75 & #74 (stdlib/ring_buffer.nex)
+# ==============================================================================
+include "stdlib/ring_buffer.nex"
+
+let nx_assert_passes = 0
+let nx_assert_fails = 0
+
+# ==============================================================================
+# Section 1: Creation and Sizing
+# ==============================================================================
+let nx_i0 = 2
+call nx_rb_new
+let rb1 = nx_r0
+
+let nx_i0 = rb1
+call nx_rb_len
+assert_eq nx_r0, 0
+
+let nx_i0 = rb1
+call nx_rb_cap
+assert_eq nx_r0, 4
+
+let nx_i0 = rb1
+call nx_rb_is_empty
+assert_eq nx_r0, 1
+
+let nx_i0 = rb1
+call nx_rb_is_full
+assert_eq nx_r0, 0
+
+let nx_i0 = 10
+call nx_rb_new
+let rb10 = nx_r0
+
+let nx_i0 = rb10
+call nx_rb_cap
+assert_eq nx_r0, 10
+
+# ==============================================================================
+# Section 2: FIFO Queue Operations (push_back and pop_front)
+# ==============================================================================
+let nx_i0 = rb10
+let nx_i1 = 10
+call nx_rb_push_back
+let nx_i0 = rb10
+let nx_i1 = 20
+call nx_rb_push_back
+let nx_i0 = rb10
+let nx_i1 = 30
+call nx_rb_push_back
+
+let nx_i0 = rb10
+call nx_rb_len
+assert_eq nx_r0, 3
+
+let nx_i0 = rb10
+call nx_rb_peek_front
+assert_eq nx_r0, 10
+
+let nx_i0 = rb10
+call nx_rb_peek_back
+assert_eq nx_r0, 30
+
+let nx_i0 = rb10
+call nx_rb_pop_front
+assert_eq nx_r0, 10
+
+let nx_i0 = rb10
+call nx_rb_pop_front
+assert_eq nx_r0, 20
+
+let nx_i0 = rb10
+call nx_rb_pop_front
+assert_eq nx_r0, 30
+
+let nx_i0 = rb10
+call nx_rb_is_empty
+assert_eq nx_r0, 1
+
+let nx_i0 = rb10
+call nx_rb_pop_front
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 3: Deque Operations (push_front and pop_back)
+# ==============================================================================
+let nx_i0 = rb10
+let nx_i1 = 100
+call nx_rb_push_front
+let nx_i0 = rb10
+let nx_i1 = 200
+call nx_rb_push_front
+let nx_i0 = rb10
+let nx_i1 = 300
+call nx_rb_push_front
+
+# Front = 300, 200, Back = 100
+let nx_i0 = rb10
+call nx_rb_peek_front
+assert_eq nx_r0, 300
+
+let nx_i0 = rb10
+call nx_rb_peek_back
+assert_eq nx_r0, 100
+
+let nx_i0 = rb10
+call nx_rb_pop_back
+assert_eq nx_r0, 100
+
+let nx_i0 = rb10
+call nx_rb_pop_back
+assert_eq nx_r0, 200
+
+let nx_i0 = rb10
+call nx_rb_pop_back
+assert_eq nx_r0, 300
+
+let nx_i0 = rb10
+call nx_rb_pop_back
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 4: Logical Indexing (get and set)
+# ==============================================================================
+let nx_i0 = rb10
+let nx_i1 = 11
+call nx_rb_push_back
+let nx_i0 = rb10
+let nx_i1 = 22
+call nx_rb_push_back
+let nx_i0 = rb10
+let nx_i1 = 33
+call nx_rb_push_back
+let nx_i0 = rb10
+let nx_i1 = 44
+call nx_rb_push_back
+
+let nx_i0 = rb10
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 11
+
+let nx_i0 = rb10
+let nx_i1 = 3
+call nx_rb_get
+assert_eq nx_r0, 44
+
+let nx_i0 = rb10
+let nx_i1 = 4
+call nx_rb_get
+assert_eq nx_r0, 0
+
+# Update index 2 to 999
+let nx_i0 = rb10
+let nx_i1 = 2
+let nx_i2 = 999
+call nx_rb_set
+assert_eq nx_r0, 1
+
+let nx_i0 = rb10
+let nx_i1 = 2
+call nx_rb_get
+assert_eq nx_r0, 999
+
+let nx_i0 = rb10
+let nx_i1 = 9
+let nx_i2 = 555
+call nx_rb_set
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 5: Search (contains and index_of)
+# ==============================================================================
+let nx_i0 = rb10
+let nx_i1 = 999
+call nx_rb_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = rb10
+let nx_i1 = 777
+call nx_rb_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = rb10
+let nx_i1 = 999
+call nx_rb_index_of
+assert_eq nx_r0, 2
+
+let nx_i0 = rb10
+let nx_i1 = 777
+call nx_rb_index_of
+assert_eq nx_r0, 0 - 1
+
+# ==============================================================================
+# Section 6: Dynamic Auto-Growth and Buffer Wrapping
+# ==============================================================================
+let nx_i0 = 4
+call nx_rb_new
+let rbg = nx_r0
+
+let nx_i0 = rbg
+let nx_i1 = 20
+call nx_rb_push_back
+let nx_i0 = rbg
+let nx_i1 = 10
+call nx_rb_push_front
+let nx_i0 = rbg
+let nx_i1 = 30
+call nx_rb_push_back
+let nx_i0 = rbg
+let nx_i1 = 40
+call nx_rb_push_back
+
+let nx_i0 = rbg
+call nx_rb_is_full
+assert_eq nx_r0, 1
+
+# 5th element triggers auto-growth: 4 -> 8
+let nx_i0 = rbg
+let nx_i1 = 50
+call nx_rb_push_back
+assert_eq nx_r0, 1
+
+let nx_i0 = rbg
+call nx_rb_cap
+assert_eq nx_r0, 8
+
+let nx_i0 = rbg
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 10
+
+let nx_i0 = rbg
+let nx_i1 = 4
+call nx_rb_get
+assert_eq nx_r0, 50
+
+# Prepend in grown buffer
+let nx_i0 = rbg
+let nx_i1 = 5
+call nx_rb_push_front
+assert_eq nx_r0, 1
+
+let nx_i0 = rbg
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 5
+
+let nx_i0 = rbg
+let nx_i1 = 1
+call nx_rb_get
+assert_eq nx_r0, 10
+
+# ==============================================================================
+# Section 7: Fixed-Capacity Circular Overwrite Mode
+# ==============================================================================
+let nx_i0 = 3
+call nx_rb_new_fixed
+let rbf = nx_r0
+
+let nx_i0 = rbf
+call nx_rb_cap
+assert_eq nx_r0, 3
+
+let nx_i0 = rbf
+let nx_i1 = 100
+call nx_rb_push_back
+let nx_i0 = rbf
+let nx_i1 = 200
+call nx_rb_push_back
+let nx_i0 = rbf
+let nx_i1 = 300
+call nx_rb_push_back
+
+let nx_i0 = rbf
+call nx_rb_is_full
+assert_eq nx_r0, 1
+
+# Push back 400: evicts 100, returns 2
+let nx_i0 = rbf
+let nx_i1 = 400
+call nx_rb_push_back
+assert_eq nx_r0, 2
+
+let nx_i0 = rbf
+call nx_rb_dropped_count
+assert_eq nx_r0, 1
+
+let nx_i0 = rbf
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 200
+
+let nx_i0 = rbf
+let nx_i1 = 2
+call nx_rb_get
+assert_eq nx_r0, 400
+
+# Push front 500: evicts 400 from back, returns 2
+let nx_i0 = rbf
+let nx_i1 = 500
+call nx_rb_push_front
+assert_eq nx_r0, 2
+
+let nx_i0 = rbf
+call nx_rb_dropped_count
+assert_eq nx_r0, 2
+
+let nx_i0 = rbf
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 500
+
+let nx_i0 = rbf
+let nx_i1 = 2
+call nx_rb_get
+assert_eq nx_r0, 300
+
+# ==============================================================================
+# Section 8: Clear
+# ==============================================================================
+let nx_i0 = rbf
+call nx_rb_clear
+assert_eq nx_r0, 1
+
+let nx_i0 = rbf
+call nx_rb_len
+assert_eq nx_r0, 0
+
+let nx_i0 = rbf
+call nx_rb_dropped_count
+assert_eq nx_r0, 0
+
+# ==============================================================================
+# Section 9: To Array Export
+# ==============================================================================
+let nx_i0 = 4
+call nx_rb_new
+let rba = nx_r0
+
+let nx_i0 = rba
+let nx_i1 = 111
+call nx_rb_push_back
+let nx_i0 = rba
+let nx_i1 = 222
+call nx_rb_push_back
+let nx_i0 = rba
+let nx_i1 = 333
+call nx_rb_push_back
+
+let nx_i0 = rba
+call nx_rb_to_array
+let arr = nx_r0
+
+let v0 = load64 [arr + 0]
+assert_eq v0, 111
+let v1 = load64 [arr + 8]
+assert_eq v1, 222
+let v2 = load64 [arr + 16]
+assert_eq v2, 333
+
+# ==============================================================================
+# Section 10: Reverse
+# ==============================================================================
+let nx_i0 = rba
+call nx_rb_reverse
+assert_eq nx_r0, 1
+
+let nx_i0 = rba
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 333
+
+let nx_i0 = rba
+let nx_i1 = 2
+call nx_rb_get
+assert_eq nx_r0, 111
+
+# ==============================================================================
+# Section 11: Rotate
+# ==============================================================================
+# Current: [333, 222, 111] -> Rotate +1 (right) -> [111, 333, 222]
+let nx_i0 = rba
+let nx_i1 = 1
+call nx_rb_rotate
+assert_eq nx_r0, 1
+
+let nx_i0 = rba
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 111
+
+# Rotate -1 (left) -> back to [333, 222, 111]
+let nx_i0 = rba
+let nx_i1 = 0 - 1
+call nx_rb_rotate
+assert_eq nx_r0, 1
+
+let nx_i0 = rba
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 333
+
+# ==============================================================================
+# Section 12: Clone and Equals
+# ==============================================================================
+let nx_i0 = rba
+call nx_rb_clone
+let rb_copy = nx_r0
+
+let nx_i0 = rba
+let nx_i1 = rb_copy
+call nx_rb_equals
+assert_eq nx_r0, 1
+
+let nx_i0 = rb_copy
+let nx_i1 = 0
+let nx_i2 = 9999
+call nx_rb_set
+
+let nx_i0 = rba
+let nx_i1 = rb_copy
+call nx_rb_equals
+assert_eq nx_r0, 0
+
+let nx_i0 = rba
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 333
+
+# ==============================================================================
+# Section 13: Shrink To Fit
+# ==============================================================================
+let nx_i0 = 16
+call nx_rb_new
+let rbs = nx_r0
+
+let nx_i0 = rbs
+let nx_i1 = 1
+call nx_rb_push_back
+let nx_i0 = rbs
+let nx_i1 = 2
+call nx_rb_push_back
+let nx_i0 = rbs
+let nx_i1 = 3
+call nx_rb_push_back
+let nx_i0 = rbs
+let nx_i1 = 4
+call nx_rb_push_back
+
+let nx_i0 = rbs
+call nx_rb_shrink_to_fit
+assert_eq nx_r0, 1
+
+let nx_i0 = rbs
+call nx_rb_cap
+assert_eq nx_r0, 4
+
+let nx_i0 = rbs
+let nx_i1 = 0
+call nx_rb_get
+assert_eq nx_r0, 1
+
+let nx_i0 = rbs
+let nx_i1 = 3
+call nx_rb_get
+assert_eq nx_r0, 4
+
+print "RING_BUFFER_TEST_PASS"

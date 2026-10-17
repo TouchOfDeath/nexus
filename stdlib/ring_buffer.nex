@@ -1,0 +1,662 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: ring_buffer.nex
+#              Circular Ring Buffer / Deque (Feature #75 & #74)
+# ==============================================================================
+#
+# A RingBuffer is a heap-allocated, double-ended circular buffer (Deque) storing
+# 64-bit integer elements (values, pointers, object handles, character codes).
+#
+# It supports two operating modes:
+#   1. Dynamic Auto-Grow Deque (flags = 0, default via nx_rb_new):
+#      Automatically doubles its allocated capacity when full, providing
+#      amortized O(1) push and pop at BOTH the head and tail.
+#   2. Fixed-Capacity Circular Buffer (flags = 1, via nx_rb_new_fixed):
+#      Maintains a bounded window of elements. When full, new insertions
+#      overwrite the oldest elements, making it ideal for streaming logs,
+#      terminal console scrollback, packet buffers, and audio sample mixing.
+#
+# Memory Layout (stored in a 48-byte descriptor struct on the heap):
+#   offset 0:  buf_ptr       - pointer to raw element array (qword elements)
+#   offset 8:  capacity      - total slots in buf_ptr (int64 >= 1)
+#   offset 16: head          - physical index of front element (0 <= head < cap)
+#   offset 24: len           - current number of live elements (0 <= len <= cap)
+#   offset 32: flags         - 0 = auto-grow deque, 1 = fixed overwrite mode
+#   offset 40: dropped_count - total items overwritten in fixed mode
+#
+# Element Indexing:
+#   Logical index i (0-based) maps to physical slot: (head + i) % capacity
+#   Logical index 0 is the FRONT element.
+#   Logical index len - 1 is the BACK element.
+#
+# CALLING CONVENTION (all functions):
+#   nx_i0 = ring buffer handle (descriptor pointer)
+#   nx_i1 = argument 1 (value, capacity, or logical index)
+#   nx_i2 = argument 2 (value for set)
+#   nx_r0 = primary result (value, length, capacity, status)
+#
+# All internal variables use the `_rb_` prefix to guarantee zero collision
+# with caller or library scope. Subroutines that call other ring buffer helpers
+# (e.g. nx_rb_grow, nx_rb_rotate) use dedicated prefixes (_rb_grow_*, _rb_rot_*)
+# to prevent cross-frame variable shadowing.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_new : nx_r0 = new dynamic auto-grow RingBuffer with initial capacity nx_i0
+# ------------------------------------------------------------------------------
+fn nx_rb_new {
+    let _rb_init_cap = nx_i0
+    if _rb_init_cap < 4 {
+        let _rb_init_cap = 4
+    }
+    let _rb_raw_bytes = _rb_init_cap * 8
+    let _rb_raw = alloc _rb_raw_bytes
+    let _rb_desc = alloc 48
+    store64 [_rb_desc + 0] _rb_raw
+    store64 [_rb_desc + 8] _rb_init_cap
+    store64 [_rb_desc + 16] 0
+    store64 [_rb_desc + 24] 0
+    store64 [_rb_desc + 32] 0
+    store64 [_rb_desc + 40] 0
+    let nx_r0 = _rb_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_new_fixed : nx_r0 = new fixed-capacity RingBuffer with capacity nx_i0 (overwrite mode)
+# ------------------------------------------------------------------------------
+fn nx_rb_new_fixed {
+    let _rb_f_cap = nx_i0
+    if _rb_f_cap < 1 {
+        let _rb_f_cap = 1
+    }
+    let _rb_f_bytes = _rb_f_cap * 8
+    let _rb_raw = alloc _rb_f_bytes
+    let _rb_desc = alloc 48
+    store64 [_rb_desc + 0] _rb_raw
+    store64 [_rb_desc + 8] _rb_f_cap
+    store64 [_rb_desc + 16] 0
+    store64 [_rb_desc + 24] 0
+    store64 [_rb_desc + 32] 1
+    store64 [_rb_desc + 40] 0
+    let nx_r0 = _rb_desc
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_len : nx_r0 = current element count of RingBuffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_rb_len {
+    let _rb_h = nx_i0
+    let nx_r0 = load64 [_rb_h + 24]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_cap : nx_r0 = total allocated capacity of RingBuffer nx_i0
+# ------------------------------------------------------------------------------
+fn nx_rb_cap {
+    let _rb_h = nx_i0
+    let nx_r0 = load64 [_rb_h + 8]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_is_empty : nx_r0 = 1 if RingBuffer nx_i0 has 0 elements, else 0
+# ------------------------------------------------------------------------------
+fn nx_rb_is_empty {
+    let _rb_h = nx_i0
+    let _rb_l = load64 [_rb_h + 24]
+    let nx_r0 = 0
+    if _rb_l == 0 {
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_is_full : nx_r0 = 1 if RingBuffer nx_i0 is at capacity, else 0
+# ------------------------------------------------------------------------------
+fn nx_rb_is_full {
+    let _rb_h = nx_i0
+    let _rb_l = load64 [_rb_h + 24]
+    let _rb_c = load64 [_rb_h + 8]
+    let nx_r0 = 0
+    if _rb_l >= _rb_c {
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_dropped_count : nx_r0 = total elements evicted in overwrite mode
+# ------------------------------------------------------------------------------
+fn nx_rb_dropped_count {
+    let _rb_h = nx_i0
+    let nx_r0 = load64 [_rb_h + 40]
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_clear : resets RingBuffer nx_i0 to empty state
+# ------------------------------------------------------------------------------
+fn nx_rb_clear {
+    let _rb_h = nx_i0
+    store64 [_rb_h + 16] 0
+    store64 [_rb_h + 24] 0
+    store64 [_rb_h + 40] 0
+    let nx_r0 = 1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_grow : internal growth helper, expands capacity to >= nx_i1
+# ------------------------------------------------------------------------------
+fn nx_rb_grow {
+    let _rb_grow_h = nx_i0
+    let _rb_grow_min_cap = nx_i1
+    let _rb_grow_cur_cap = load64 [_rb_grow_h + 8]
+    if _rb_grow_cur_cap < _rb_grow_min_cap {
+        let _rb_grow_new_cap = _rb_grow_cur_cap * 2
+        while _rb_grow_new_cap < _rb_grow_min_cap {
+            let _rb_grow_new_cap = _rb_grow_new_cap * 2
+        }
+        let _rb_grow_bytes = _rb_grow_new_cap * 8
+        let _rb_grow_new_buf = alloc _rb_grow_bytes
+        let _rb_grow_old_buf = load64 [_rb_grow_h + 0]
+        let _rb_grow_head = load64 [_rb_grow_h + 16]
+        let _rb_grow_len = load64 [_rb_grow_h + 24]
+
+        let _rb_grow_gi = 0
+        while _rb_grow_gi < _rb_grow_len {
+            let _rb_grow_phys = _rb_grow_head + _rb_grow_gi
+            let _rb_grow_phys = _rb_grow_phys % _rb_grow_cur_cap
+            let _rb_grow_v = load64 [_rb_grow_old_buf + _rb_grow_phys * 8]
+            store64 [_rb_grow_new_buf + _rb_grow_gi * 8] _rb_grow_v
+            let _rb_grow_gi = _rb_grow_gi + 1
+        }
+
+        store64 [_rb_grow_h + 0] _rb_grow_new_buf
+        store64 [_rb_grow_h + 8] _rb_grow_new_cap
+        store64 [_rb_grow_h + 16] 0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_push_back : appends value nx_i1 to the BACK of RingBuffer nx_i0
+# Returns: nx_r0 = 1 (inserted), 2 (inserted with overwrite in fixed mode)
+# ------------------------------------------------------------------------------
+fn nx_rb_push_back {
+    let _rb_h = nx_i0
+    let _rb_val = nx_i1
+    let _rb_cap = load64 [_rb_h + 8]
+    let _rb_len = load64 [_rb_h + 24]
+    let _rb_flags = load64 [_rb_h + 32]
+    let _rb_res = 1
+
+    if _rb_len >= _rb_cap {
+        if _rb_flags == 0 {
+            # Auto-grow mode
+            let nx_i0 = _rb_h
+            let nx_i1 = _rb_cap + 1
+            call nx_rb_grow
+            let _rb_cap = load64 [_rb_h + 8]
+            let _rb_head = load64 [_rb_h + 16]
+            let _rb_buf = load64 [_rb_h + 0]
+            let _rb_slot = _rb_head + _rb_len
+            let _rb_slot = _rb_slot % _rb_cap
+            store64 [_rb_buf + _rb_slot * 8] _rb_val
+            let _rb_new_len = _rb_len + 1
+            store64 [_rb_h + 24] _rb_new_len
+        } else {
+            # Fixed overwrite mode: overwrite element at head, advance head
+            let _rb_buf = load64 [_rb_h + 0]
+            let _rb_head = load64 [_rb_h + 16]
+            store64 [_rb_buf + _rb_head * 8] _rb_val
+            let _rb_new_head = _rb_head + 1
+            let _rb_new_head = _rb_new_head % _rb_cap
+            store64 [_rb_h + 16] _rb_new_head
+            let _rb_drop = load64 [_rb_h + 40]
+            let _rb_new_drop = _rb_drop + 1
+            store64 [_rb_h + 40] _rb_new_drop
+            let _rb_res = 2
+        }
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_slot = _rb_head + _rb_len
+        let _rb_slot = _rb_slot % _rb_cap
+        store64 [_rb_buf + _rb_slot * 8] _rb_val
+        let _rb_new_len = _rb_len + 1
+        store64 [_rb_h + 24] _rb_new_len
+    }
+    let nx_r0 = _rb_res
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_push_front : prepends value nx_i1 to the FRONT of RingBuffer nx_i0
+# Returns: nx_r0 = 1 (inserted), 2 (inserted with overwrite in fixed mode)
+# ------------------------------------------------------------------------------
+fn nx_rb_push_front {
+    let _rb_h = nx_i0
+    let _rb_val = nx_i1
+    let _rb_cap = load64 [_rb_h + 8]
+    let _rb_len = load64 [_rb_h + 24]
+    let _rb_flags = load64 [_rb_h + 32]
+    let _rb_res = 1
+
+    if _rb_len >= _rb_cap {
+        if _rb_flags == 0 {
+            # Auto-grow mode
+            let nx_i0 = _rb_h
+            let nx_i1 = _rb_cap + 1
+            call nx_rb_grow
+            let _rb_cap = load64 [_rb_h + 8]
+            let _rb_head = load64 [_rb_h + 16]
+            let _rb_buf = load64 [_rb_h + 0]
+            let _rb_new_head = _rb_head - 1 + _rb_cap
+            let _rb_new_head = _rb_new_head % _rb_cap
+            store64 [_rb_buf + _rb_new_head * 8] _rb_val
+            store64 [_rb_h + 16] _rb_new_head
+            let _rb_new_len = _rb_len + 1
+            store64 [_rb_h + 24] _rb_new_len
+        } else {
+            # Fixed overwrite mode: decrement head and overwrite back item
+            let _rb_buf = load64 [_rb_h + 0]
+            let _rb_head = load64 [_rb_h + 16]
+            let _rb_new_head = _rb_head - 1 + _rb_cap
+            let _rb_new_head = _rb_new_head % _rb_cap
+            store64 [_rb_buf + _rb_new_head * 8] _rb_val
+            store64 [_rb_h + 16] _rb_new_head
+            let _rb_drop = load64 [_rb_h + 40]
+            let _rb_new_drop = _rb_drop + 1
+            store64 [_rb_h + 40] _rb_new_drop
+            let _rb_res = 2
+        }
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_new_head = _rb_head - 1 + _rb_cap
+        let _rb_new_head = _rb_new_head % _rb_cap
+        store64 [_rb_buf + _rb_new_head * 8] _rb_val
+        store64 [_rb_h + 16] _rb_new_head
+        let _rb_new_len = _rb_len + 1
+        store64 [_rb_h + 24] _rb_new_len
+    }
+    let nx_r0 = _rb_res
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_pop_front : removes and returns FRONT value from RingBuffer nx_i0
+# Returns: nx_r0 = element value (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_rb_pop_front {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_len <= 0 {
+        let nx_r0 = 0
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_cap = load64 [_rb_h + 8]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_val = load64 [_rb_buf + _rb_head * 8]
+        let _rb_new_head = _rb_head + 1
+        let _rb_new_head = _rb_new_head % _rb_cap
+        store64 [_rb_h + 16] _rb_new_head
+        let _rb_new_len = _rb_len - 1
+        store64 [_rb_h + 24] _rb_new_len
+        let nx_r0 = _rb_val
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_pop_back : removes and returns BACK value from RingBuffer nx_i0
+# Returns: nx_r0 = element value (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_rb_pop_back {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_len <= 0 {
+        let nx_r0 = 0
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_cap = load64 [_rb_h + 8]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_slot = _rb_head + _rb_len - 1
+        let _rb_slot = _rb_slot % _rb_cap
+        let _rb_val = load64 [_rb_buf + _rb_slot * 8]
+        let _rb_new_len = _rb_len - 1
+        store64 [_rb_h + 24] _rb_new_len
+        let nx_r0 = _rb_val
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_peek_front : returns FRONT value without removing
+# Returns: nx_r0 = value (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_rb_peek_front {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_len <= 0 {
+        let nx_r0 = 0
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_head = load64 [_rb_h + 16]
+        let nx_r0 = load64 [_rb_buf + _rb_head * 8]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_peek_back : returns BACK value without removing
+# Returns: nx_r0 = value (0 if empty)
+# ------------------------------------------------------------------------------
+fn nx_rb_peek_back {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_len <= 0 {
+        let nx_r0 = 0
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_cap = load64 [_rb_h + 8]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_slot = _rb_head + _rb_len - 1
+        let _rb_slot = _rb_slot % _rb_cap
+        let nx_r0 = load64 [_rb_buf + _rb_slot * 8]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_get : retrieves element at logical index nx_i1 (0 = front)
+# Returns: nx_r0 = value (0 if out of bounds)
+# ------------------------------------------------------------------------------
+fn nx_rb_get {
+    let _rb_h = nx_i0
+    let _rb_idx = nx_i1
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_idx < 0 {
+        let nx_r0 = 0
+    } else if _rb_idx >= _rb_len {
+        let nx_r0 = 0
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_cap = load64 [_rb_h + 8]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_slot = _rb_head + _rb_idx
+        let _rb_slot = _rb_slot % _rb_cap
+        let nx_r0 = load64 [_rb_buf + _rb_slot * 8]
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_set : updates element at logical index nx_i1 to value nx_i2
+# Returns: nx_r0 = 1 on success, 0 on out of bounds
+# ------------------------------------------------------------------------------
+fn nx_rb_set {
+    let _rb_h = nx_i0
+    let _rb_idx = nx_i1
+    let _rb_new_val = nx_i2
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_idx < 0 {
+        let nx_r0 = 0
+    } else if _rb_idx >= _rb_len {
+        let nx_r0 = 0
+    } else {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_cap = load64 [_rb_h + 8]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_slot = _rb_head + _rb_idx
+        let _rb_slot = _rb_slot % _rb_cap
+        store64 [_rb_buf + _rb_slot * 8] _rb_new_val
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_contains : checks if value nx_i1 is present in RingBuffer nx_i0
+# Returns: nx_r0 = 1 if found, 0 if not
+# ------------------------------------------------------------------------------
+fn nx_rb_contains {
+    let _rb_h = nx_i0
+    let _rb_target = nx_i1
+    let _rb_len = load64 [_rb_h + 24]
+    let _rb_buf = load64 [_rb_h + 0]
+    let _rb_cap = load64 [_rb_h + 8]
+    let _rb_head = load64 [_rb_h + 16]
+    let _rb_found = 0
+    let _rb_ci = 0
+    while _rb_ci < _rb_len {
+        let _rb_slot = _rb_head + _rb_ci
+        let _rb_slot = _rb_slot % _rb_cap
+        let _rb_cur = load64 [_rb_buf + _rb_slot * 8]
+        if _rb_cur == _rb_target {
+            let _rb_found = 1
+            let _rb_ci = _rb_len
+        }
+        let _rb_ci = _rb_ci + 1
+    }
+    let nx_r0 = _rb_found
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_index_of : returns logical index of first occurrence of nx_i1
+# Returns: nx_r0 = index (0..len-1), or -1 if not found
+# ------------------------------------------------------------------------------
+fn nx_rb_index_of {
+    let _rb_h = nx_i0
+    let _rb_target = nx_i1
+    let _rb_len = load64 [_rb_h + 24]
+    let _rb_buf = load64 [_rb_h + 0]
+    let _rb_cap = load64 [_rb_h + 8]
+    let _rb_head = load64 [_rb_h + 16]
+    let _rb_match = 0 - 1
+    let _rb_ii = 0
+    while _rb_ii < _rb_len {
+        let _rb_slot = _rb_head + _rb_ii
+        let _rb_slot = _rb_slot % _rb_cap
+        let _rb_cur = load64 [_rb_buf + _rb_slot * 8]
+        if _rb_cur == _rb_target {
+            let _rb_match = _rb_ii
+            let _rb_ii = _rb_len
+        }
+        let _rb_ii = _rb_ii + 1
+    }
+    let nx_r0 = _rb_match
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_to_array : exports elements in logical order to a contiguous array
+# Returns: nx_r0 = newly allocated array pointer
+# ------------------------------------------------------------------------------
+fn nx_rb_to_array {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    let _rb_alloc_sz = _rb_len * 8
+    if _rb_alloc_sz < 8 {
+        let _rb_alloc_sz = 8
+    }
+    let _rb_arr = alloc _rb_alloc_sz
+    let _rb_buf = load64 [_rb_h + 0]
+    let _rb_cap = load64 [_rb_h + 8]
+    let _rb_head = load64 [_rb_h + 16]
+
+    let _rb_ai = 0
+    while _rb_ai < _rb_len {
+        let _rb_slot = _rb_head + _rb_ai
+        let _rb_slot = _rb_slot % _rb_cap
+        let _rb_cur = load64 [_rb_buf + _rb_slot * 8]
+        store64 [_rb_arr + _rb_ai * 8] _rb_cur
+        let _rb_ai = _rb_ai + 1
+    }
+    let nx_r0 = _rb_arr
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_clone : deep copies RingBuffer nx_i0 into a new RingBuffer
+# Returns: nx_r0 = new RingBuffer handle
+# ------------------------------------------------------------------------------
+fn nx_rb_clone {
+    let _rb_src = nx_i0
+    let _rb_cap = load64 [_rb_src + 8]
+    let _rb_len = load64 [_rb_src + 24]
+    let _rb_flags = load64 [_rb_src + 32]
+    let _rb_drop = load64 [_rb_src + 40]
+
+    let _rb_dst = alloc 48
+    let _rb_clone_bytes = _rb_cap * 8
+    let _rb_raw = alloc _rb_clone_bytes
+    store64 [_rb_dst + 0] _rb_raw
+    store64 [_rb_dst + 8] _rb_cap
+    store64 [_rb_dst + 16] 0
+    store64 [_rb_dst + 24] _rb_len
+    store64 [_rb_dst + 32] _rb_flags
+    store64 [_rb_dst + 40] _rb_drop
+
+    let _rb_src_buf = load64 [_rb_src + 0]
+    let _rb_src_head = load64 [_rb_src + 16]
+
+    let _rb_cli = 0
+    while _rb_cli < _rb_len {
+        let _rb_slot = _rb_src_head + _rb_cli
+        let _rb_slot = _rb_slot % _rb_cap
+        let _rb_v = load64 [_rb_src_buf + _rb_slot * 8]
+        store64 [_rb_raw + _rb_cli * 8] _rb_v
+        let _rb_cli = _rb_cli + 1
+    }
+    let nx_r0 = _rb_dst
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_equals : checks if RingBuffer nx_i0 equals RingBuffer nx_i1
+# Returns: nx_r0 = 1 if identical length and elements in order, else 0
+# ------------------------------------------------------------------------------
+fn nx_rb_equals {
+    let _rb_a = nx_i0
+    let _rb_b = nx_i1
+    let _rb_la = load64 [_rb_a + 24]
+    let _rb_lb = load64 [_rb_b + 24]
+    let _rb_eq = 1
+
+    if _rb_la != _rb_lb {
+        let _rb_eq = 0
+    } else {
+        let _rb_buf_a = load64 [_rb_a + 0]
+        let _rb_cap_a = load64 [_rb_a + 8]
+        let _rb_head_a = load64 [_rb_a + 16]
+
+        let _rb_buf_b = load64 [_rb_b + 0]
+        let _rb_cap_b = load64 [_rb_b + 8]
+        let _rb_head_b = load64 [_rb_b + 16]
+
+        let _rb_eqi = 0
+        while _rb_eqi < _rb_la {
+            let _rb_sa = _rb_head_a + _rb_eqi
+            let _rb_sa = _rb_sa % _rb_cap_a
+            let _rb_va = load64 [_rb_buf_a + _rb_sa * 8]
+
+            let _rb_sb = _rb_head_b + _rb_eqi
+            let _rb_sb = _rb_sb % _rb_cap_b
+            let _rb_vb = load64 [_rb_buf_b + _rb_sb * 8]
+
+            if _rb_va != _rb_vb {
+                let _rb_eq = 0
+                let _rb_eqi = _rb_la
+            }
+            let _rb_eqi = _rb_eqi + 1
+        }
+    }
+    let nx_r0 = _rb_eq
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_reverse : reverses element order in-place
+# ------------------------------------------------------------------------------
+fn nx_rb_reverse {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    if _rb_len > 1 {
+        let _rb_buf = load64 [_rb_h + 0]
+        let _rb_cap = load64 [_rb_h + 8]
+        let _rb_head = load64 [_rb_h + 16]
+        let _rb_half = _rb_len / 2
+        let _rb_ri = 0
+        while _rb_ri < _rb_half {
+            let _rb_rj = _rb_len - 1 - _rb_ri
+
+            let _rb_slot_i = _rb_head + _rb_ri
+            let _rb_slot_i = _rb_slot_i % _rb_cap
+
+            let _rb_slot_j = _rb_head + _rb_rj
+            let _rb_slot_j = _rb_slot_j % _rb_cap
+
+            let _rb_vi = load64 [_rb_buf + _rb_slot_i * 8]
+            let _rb_vj = load64 [_rb_buf + _rb_slot_j * 8]
+
+            store64 [_rb_buf + _rb_slot_i * 8] _rb_vj
+            store64 [_rb_buf + _rb_slot_j * 8] _rb_vi
+
+            let _rb_ri = _rb_ri + 1
+        }
+    }
+    let nx_r0 = 1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_rotate : rotates elements by nx_i1 positions (positive = right, negative = left)
+# ------------------------------------------------------------------------------
+fn nx_rb_rotate {
+    let _rb_rot_h = nx_i0
+    let _rb_rot_k = nx_i1
+    let _rb_rot_len = load64 [_rb_rot_h + 24]
+    if _rb_rot_len > 1 {
+        if _rb_rot_k > 0 {
+            let _rb_rot_steps = _rb_rot_k % _rb_rot_len
+            while _rb_rot_steps > 0 {
+                let nx_i0 = _rb_rot_h
+                call nx_rb_pop_back
+                let _rb_rot_popped = nx_r0
+                let nx_i0 = _rb_rot_h
+                let nx_i1 = _rb_rot_popped
+                call nx_rb_push_front
+                let _rb_rot_steps = _rb_rot_steps - 1
+            }
+        } else if _rb_rot_k < 0 {
+            let _rb_neg_k = 0 - _rb_rot_k
+            let _rb_rot_steps = _rb_neg_k % _rb_rot_len
+            while _rb_rot_steps > 0 {
+                let nx_i0 = _rb_rot_h
+                call nx_rb_pop_front
+                let _rb_rot_popped = nx_r0
+                let nx_i0 = _rb_rot_h
+                let nx_i1 = _rb_rot_popped
+                call nx_rb_push_back
+                let _rb_rot_steps = _rb_rot_steps - 1
+            }
+        }
+    }
+    let nx_r0 = 1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_rb_shrink_to_fit : reduces allocated buffer capacity to exact element count (min 4)
+# ------------------------------------------------------------------------------
+fn nx_rb_shrink_to_fit {
+    let _rb_h = nx_i0
+    let _rb_len = load64 [_rb_h + 24]
+    let _rb_cap = load64 [_rb_h + 8]
+    let _rb_target = _rb_len
+    if _rb_target < 4 {
+        let _rb_target = 4
+    }
+    if _rb_target < _rb_cap {
+        let _rb_shrink_bytes = _rb_target * 8
+        let _rb_new_buf = alloc _rb_shrink_bytes
+        let _rb_old_buf = load64 [_rb_h + 0]
+        let _rb_head = load64 [_rb_h + 16]
+
+        let _rb_si = 0
+        while _rb_si < _rb_len {
+            let _rb_phys = _rb_head + _rb_si
+            let _rb_phys = _rb_phys % _rb_cap
+            let _rb_v = load64 [_rb_old_buf + _rb_phys * 8]
+            store64 [_rb_new_buf + _rb_si * 8] _rb_v
+            let _rb_si = _rb_si + 1
+        }
+
+        store64 [_rb_h + 0] _rb_new_buf
+        store64 [_rb_h + 8] _rb_target
+        store64 [_rb_h + 16] 0
+    }
+    let nx_r0 = 1
+}

@@ -123,8 +123,8 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 71. **Hash Set (`HashSet<T>`)** *(COMPLETED)*: Open-addressing set collection (linear probing + tombstones) supporting integer and string elements, content-based string identity, and automatic doubling rehash for fast membership testing, duplicate elimination, and token categorization (`stdlib/hashset.nex`).
 72. **Ordered Map (`BTreeMap<K, V>`)**: Self-balancing B-Tree mapping keys in sorted order for line index lookups and bookmark positioning.
 73. **Ordered Set (`BTreeSet<T>`)**: Sorted set for tracking active breakpoint line numbers and diagnostic markers.
-74. **Double-Ended Queue (`Deque<T>`)**: Ring-buffer backed double-ended queue for efficient O(1) push and pop at both head and tail.
-75. **Circular Ring Buffer**: Fixed-size circular buffer for console output streaming, logging history, and audio sample mixing.
+74. [x] **Double-Ended Queue (`Deque<T>`) (`stdlib/ring_buffer.nex`)**: Ring-buffer backed double-ended queue with amortized O(1) push and pop at both head and tail, logical random access, and geometric auto-expansion.
+75. [x] **Circular Ring Buffer (`stdlib/ring_buffer.nex`)**: Fixed-capacity circular buffer with overwrite eviction mode, dropped count tracking, in-place rotation, linearization, and reversal for console output streaming, logging history, and audio sample mixing.
 76. **Priority Queue / Binary Heap**: Heap structure for scheduling asynchronous UI timer callbacks and sorting diagnostic errors by severity.
 77. **Doubly-Linked List**: Node-based list with bidirectional links for LRU cache management and tab ordering.
 78. [x] **Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset for tracking dirty line flags and boolean selection masks across large files. Supports creation, indexing, bit manipulation (set, clear, toggle, test), popcount/cardinality, first/next bit searches, and bitwise operations (AND, OR, XOR, NOT).

@@ -7,6 +7,7 @@
 ---
 
 ## 0.1 Unreleased — Standard Library Additions & Compiler Bugfixes (2026-10-17)
+- **Features #75 & #74: Circular Ring Buffer / Deque (`stdlib/ring_buffer.nex`)**: Production-grade, 48-byte heap-descriptor double-ended circular buffer with 25 standard library subroutines. Supports dual operating modes: dynamic auto-growing Deque (geometric doubling capacity expansion with amortized O(1) push and pop at both head and tail) and fixed-capacity circular buffer (bounded memory window with eviction tracking via `nx_rb_dropped_count`). Features logical O(1) indexing (`nx_rb_get`, `nx_rb_set`), element searching (`nx_rb_contains`, `nx_rb_index_of`), contiguous array export (`nx_rb_to_array`), deep copying (`nx_rb_clone`), equality testing (`nx_rb_equals`), in-place reversal (`nx_rb_reverse`), bidirectional rotation (`nx_rb_rotate`), and buffer compaction (`nx_rb_shrink_to_fit`). Verified with dedicated regression suite in `tests/test_ring_buffer.nex`.
 - **Operator Precedence in Emitted Code (BUG 4 RESOLVED)**: Fixed `prec_rewrite` in `tools/nexprep.c` to partition mixed infix expressions into multiplicative terms (`*`, `/`, `%`) separated by additive operators (`+`, `-`), extracting multi-operand terms into `_prec_K` temporaries while properly preserving Horner base-65536 expansions. `1 + 2 * 3 == 7`, `10 - 2 * 3 == 4`, `1 + 2 * 3 + 4 == 11`.
 - **Compiler Diagnostic Error Reporting & Exit Gating (BUGS 2 & 3 RESOLVED)**: Streamlined `report_err` in `compiler/nexc.nex` to print exact diagnostic strings without invoking the clobbered helper offset, preventing runaway jumps to the ELF emitter on syntax failures. All 13/13 compiler diagnostics now pass and failure gating correctly suppresses `app.exe`/`app.elf` on error.
 - **Feature #78: Dense BitSet / BitVector (`stdlib/bitset.nex`)**: Space-efficient bitset packing 8 flags per byte. Supports O(1) bit testing, setting, clearing, toggling, popcount/cardinality, first/next set/clear bit scanning, deep cloning, equality comparison, and in-place set logic (`AND`, `OR`, `XOR`, `NOT`). Verified with dedicated regression suite in `tests/test_bitset.nex`.
@@ -15,7 +16,7 @@
 - Added `nx_str_normalize_newlines` for mixed CRLF, LF, and CR input, including mutable in-place normalization (roadmap feature 148).
 - Added `nx_str_escape_literal` for quoted escaped string literals, including `\xHH` for non-printable bytes (roadmap feature 147).
 - Standard-library regression coverage increased from 94 to 122 assertions.
-- Verification: 27 example suites, 13/13 diagnostics, 50/50 foundation tests, stdlib, optimizer, interactive, type-inference, IDE, HYDRON, string-escape, hashset, and bitset suites passed. Fixed `examples/math_ecosystem_showcase.nex` code-size bloat by trimming unnecessary library includes. All green.
+- Verification: 27 example suites, 13/13 diagnostics, 50/50 foundation tests, stdlib, optimizer, interactive, type-inference, IDE, HYDRON, string-escape, hashset, bitset, and ring buffer suites passed. All green.
 
 ## 0. v8.2+ String Escapes & Optimization Release Snapshot (2026-10-13)
 - **Phase 1 String Escapes (COMPLETE)**: Full standard escape sequence decoding (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`, `\e`, `\xHH`) directly emitted into binary `.rdata` by the self-hosted compiler core (`compiler/nexc.nex`).

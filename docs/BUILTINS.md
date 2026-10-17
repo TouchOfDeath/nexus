@@ -245,6 +245,47 @@ Layout in memory (32-byte header struct on heap):
 | `nx_bitset_not` | (bs=nx_i0) -> nx_r0 | In-place bitwise NOT (inverts all bits) |
 | `nx_bitset_recount` | (bs=nx_i0) -> nx_r0 | Recalculates and caches popcount |
 
+### Circular Ring Buffer / Deque — `stdlib/ring_buffer.nex` (Features #74 & #75)
+
+A high-performance double-ended circular buffer (Deque) storing 64-bit integer elements (values, pointers, object handles). Supports two operating modes:
+1. **Dynamic Auto-Grow Deque** (`nx_rb_new`): Automatically doubles allocated capacity when full, providing amortized O(1) push and pop at BOTH ends.
+2. **Fixed-Capacity Circular Overwrite Buffer** (`nx_rb_new_fixed`): Bounded memory window where insertions on a full buffer overwrite the oldest elements with dropped eviction count tracking. Ideal for console scrollback, streaming log windows, packet buffers, and audio sample mixing.
+
+Layout in memory (48-byte header struct on heap):
+- Offset `0`: `buf_ptr` (pointer to raw element array)
+- Offset `8`: `capacity` (total slot count)
+- Offset `16`: `head` (physical index of front element)
+- Offset `24`: `len` (current live element count)
+- Offset `32`: `flags` (0 = dynamic auto-grow, 1 = fixed overwrite mode)
+- Offset `40`: `dropped_count` (total items evicted in overwrite mode)
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `nx_rb_new` | (init_cap=nx_i0) -> nx_r0 | Allocates auto-growing ring buffer (min capacity 4) |
+| `nx_rb_new_fixed` | (cap=nx_i0) -> nx_r0 | Allocates fixed-capacity circular buffer with overwrite mode |
+| `nx_rb_len` | (rb=nx_i0) -> nx_r0 | Current live element count |
+| `nx_rb_cap` | (rb=nx_i0) -> nx_r0 | Total allocated capacity |
+| `nx_rb_is_empty` | (rb=nx_i0) -> nx_r0 | 1 if len == 0, else 0 |
+| `nx_rb_is_full` | (rb=nx_i0) -> nx_r0 | 1 if len >= cap, else 0 |
+| `nx_rb_dropped_count` | (rb=nx_i0) -> nx_r0 | Total elements evicted in overwrite mode |
+| `nx_rb_clear` | (rb=nx_i0) -> nx_r0 | Resets buffer to empty state (head=0, len=0, dropped=0) |
+| `nx_rb_push_back` | (rb=nx_i0, val=nx_i1) -> nx_r0 | Appends element to back (1=inserted, 2=overwritten oldest) |
+| `nx_rb_push_front` | (rb=nx_i0, val=nx_i1) -> nx_r0 | Prepends element to front (1=inserted, 2=overwritten oldest) |
+| `nx_rb_pop_front` | (rb=nx_i0) -> nx_r0 | Removes and returns front element (0 if empty) |
+| `nx_rb_pop_back` | (rb=nx_i0) -> nx_r0 | Removes and returns back element (0 if empty) |
+| `nx_rb_peek_front` | (rb=nx_i0) -> nx_r0 | Returns front element without removing (0 if empty) |
+| `nx_rb_peek_back` | (rb=nx_i0) -> nx_r0 | Returns back element without removing (0 if empty) |
+| `nx_rb_get` | (rb=nx_i0, idx=nx_i1) -> nx_r0 | Logical index lookup (0=front, len-1=back, bounds checked) |
+| `nx_rb_set` | (rb=nx_i0, idx=nx_i1, val=nx_i2) -> nx_r0 | Updates element at logical index; 1 on success, 0 if OOB |
+| `nx_rb_contains` | (rb=nx_i0, val=nx_i1) -> nx_r0 | 1 if value exists, 0 otherwise |
+| `nx_rb_index_of` | (rb=nx_i0, val=nx_i1) -> nx_r0 | Returns logical index of first occurrence, or -1 if not found |
+| `nx_rb_to_array` | (rb=nx_i0) -> nx_r0 | Exports elements in logical order to a contiguous array |
+| `nx_rb_clone` | (rb=nx_i0) -> nx_r0 | Deep copy of ring buffer and element buffer |
+| `nx_rb_equals` | (rb1=nx_i0, rb2=nx_i1) -> nx_r0 | 1 if identical lengths and elements in order, else 0 |
+| `nx_rb_reverse` | (rb=nx_i0) -> nx_r0 | Reverses element order in-place |
+| `nx_rb_rotate` | (rb=nx_i0, k=nx_i1) -> nx_r0 | Rotates elements by k positions (positive=right, negative=left) |
+| `nx_rb_shrink_to_fit` | (rb=nx_i0) -> nx_r0 | Compacts allocated capacity to live element count (min 4) |
+
 ### Bitwise Operations — `stdlib/bitwise.nex`
 
 Software-emulated 64-bit bitwise primitives and shifts. When using operator syntax (`&`, `|`, `^`, `~`, `<<`, `>>`), `nexprep.c` automatically desugars them to these functions:
