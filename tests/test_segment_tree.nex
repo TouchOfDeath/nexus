@@ -1,0 +1,90 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/segment_tree.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Segment Tree (Feature #104)
+# ==============================================================================
+
+print "--- TEST 1: Build Segment Tree & Range Sum Queries ---"
+let raw_data = alloc 48
+store64 [raw_data + 0] 1
+store64 [raw_data + 8] 3
+store64 [raw_data + 16] 5
+store64 [raw_data + 24] 7
+store64 [raw_data + 32] 9
+store64 [raw_data + 40] 11
+
+let nx_i0 = 6
+call nx_segtree_new
+let st = nx_r0
+
+let nx_i0 = st
+let nx_i1 = raw_data
+let nx_i2 = 6
+call nx_segtree_build
+
+let nx_i0 = st
+let nx_i1 = 0
+let nx_i2 = 5
+call nx_segtree_query_sum
+assert_eq nx_r0, 36
+
+let nx_i0 = st
+let nx_i1 = 1
+let nx_i2 = 3
+call nx_segtree_query_sum
+assert_eq nx_r0, 15
+
+print "--- TEST 2: Range Min Queries ---"
+let nx_i0 = st
+let nx_i1 = 0
+let nx_i2 = 5
+call nx_segtree_query_min
+assert_eq nx_r0, 1
+
+let nx_i0 = st
+let nx_i1 = 2
+let nx_i2 = 4
+call nx_segtree_query_min
+assert_eq nx_r0, 5
+
+print "--- TEST 3: Range Max Queries ---"
+let nx_i0 = st
+let nx_i1 = 0
+let nx_i2 = 5
+call nx_segtree_query_max
+assert_eq nx_r0, 11
+
+let nx_i0 = st
+let nx_i1 = 1
+let nx_i2 = 3
+call nx_segtree_query_max
+assert_eq nx_r0, 7
+
+print "--- TEST 4: Point Update and Point Add ---"
+# Set index 1 to 10: array is now [1, 10, 5, 7, 9, 11]
+let nx_i0 = st
+let nx_i1 = 1
+let nx_i2 = 10
+call nx_segtree_update
+
+let nx_i0 = st
+let nx_i1 = 1
+let nx_i2 = 3
+call nx_segtree_query_sum
+assert_eq nx_r0, 22
+
+# Add 5 to index 1: index 1 becomes 15
+let nx_i0 = st
+let nx_i1 = 1
+let nx_i2 = 5
+call nx_segtree_add
+
+let nx_i0 = st
+let nx_i1 = 0
+let nx_i2 = 2
+call nx_segtree_query_max
+assert_eq nx_r0, 15
+
+print "SEGMENT_TREE_TEST_PASS"
+call nx_assert_summary

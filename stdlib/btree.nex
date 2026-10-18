@@ -1,0 +1,325 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: btree.nex
+#        Ordered Map (BTreeMap) & Ordered Set (BTreeSet) (Features #72 & #73)
+# ==============================================================================
+#
+# BTreeMap Functions:
+#   nx_btmap_new()                  -> map handle in nx_r0
+#   nx_btmap_put(map, key, val)     -> inserts or updates (key, val)
+#   nx_btmap_get(map, key)          -> val in nx_r0, or 0 if not found
+#   nx_btmap_contains(map, key)     -> 1 if found, 0 if not
+#   nx_btmap_remove(map, key)       -> 1 if removed, 0 if not
+#   nx_btmap_min_key(map)           -> minimum key in map
+#   nx_btmap_max_key(map)           -> maximum key in map
+#   nx_btmap_lower_bound(map, key)  -> smallest key >= query, or -1
+#   nx_btmap_key_at(map, index)     -> key at index
+#   nx_btmap_val_at(map, index)     -> val at index
+#   nx_btmap_len(map)               -> number of entries in map
+#
+# BTreeSet Functions:
+#   nx_btset_new()                  -> set handle in nx_r0
+#   nx_btset_add(set, key)          -> inserts key
+#   nx_btset_contains(set, key)     -> 1 if found, 0 if not
+#   nx_btset_remove(set, key)       -> 1 if removed, 0 if not
+#   nx_btset_at(set, index)         -> element at index
+#   nx_btset_len(set)               -> number of elements in set
+#
+# CALLING CONVENTION:
+#   nx_i0, nx_i1, nx_i2 as input registers, nx_r0 as output register.
+# ==============================================================================
+
+fn nx_btmap_new {
+    let _bm_cap = 256
+    let _bm_arr_sz = _bm_cap * 8
+    let _bm_keys = alloc _bm_arr_sz
+    let _bm_vals = alloc _bm_arr_sz
+
+    let _bm_desc = alloc 32
+    store64 [_bm_desc + 0] 0          # count
+    store64 [_bm_desc + 8] _bm_cap     # cap
+    store64 [_bm_desc + 16] _bm_keys  # keys
+    store64 [_bm_desc + 24] _bm_vals  # vals
+
+    let nx_r0 = _bm_desc
+}
+
+fn nx_btmap_put {
+    let _bp_map = nx_i0
+    let _bp_key = nx_i1
+    let _bp_val = nx_i2
+
+    let _bp_cnt = load64 [_bp_map + 0]
+    let _bp_keys = load64 [_bp_map + 16]
+    let _bp_vals = load64 [_bp_map + 24]
+
+    # Binary search for position
+    let _bp_lo = 0
+    let _bp_hi = _bp_cnt - 1
+    let _bp_pos = _bp_cnt
+
+    while _bp_lo <= _bp_hi {
+        let _bp_mid = _bp_lo + _bp_hi
+        let _bp_mid = _bp_mid / 2
+        let _bp_moff = _bp_mid * 8
+        let _bp_mk = load64 [_bp_keys + _bp_moff]
+
+        if _bp_mk == _bp_key {
+            # Update existing key
+            store64 [_bp_vals + _bp_moff] _bp_val
+            return
+        } else if _bp_mk > _bp_key {
+            let _bp_pos = _bp_mid
+            let _bp_hi = _bp_mid - 1
+        } else {
+            let _bp_lo = _bp_mid + 1
+        }
+    }
+
+    # Shift elements from _bp_cnt - 1 down to _bp_pos
+    let _bp_si = _bp_cnt
+    while _bp_si > _bp_pos {
+        let _bp_prev = _bp_si - 1
+        let _bp_prev_off = _bp_prev * 8
+        let _bp_cur_off = _bp_si * 8
+
+        let _bp_tk = load64 [_bp_keys + _bp_prev_off]
+        let _bp_tv = load64 [_bp_vals + _bp_prev_off]
+        store64 [_bp_keys + _bp_cur_off] _bp_tk
+        store64 [_bp_vals + _bp_cur_off] _bp_tv
+
+        let _bp_si = _bp_si - 1
+    }
+
+    let _bp_ins_off = _bp_pos * 8
+    store64 [_bp_keys + _bp_ins_off] _bp_key
+    store64 [_bp_vals + _bp_ins_off] _bp_val
+
+    let _bp_new_cnt = _bp_cnt + 1
+    store64 [_bp_map + 0] _bp_new_cnt
+}
+
+fn nx_btmap_get {
+    let _bg_map = nx_i0
+    let _bg_key = nx_i1
+
+    let _bg_cnt = load64 [_bg_map + 0]
+    let _bg_keys = load64 [_bg_map + 16]
+    let _bg_vals = load64 [_bg_map + 24]
+
+    let _bg_lo = 0
+    let _bg_hi = _bg_cnt - 1
+
+    while _bg_lo <= _bg_hi {
+        let _bg_mid = _bg_lo + _bg_hi
+        let _bg_mid = _bg_mid / 2
+        let _bg_moff = _bg_mid * 8
+        let _bg_mk = load64 [_bg_keys + _bg_moff]
+
+        if _bg_mk == _bg_key {
+            let nx_r0 = load64 [_bg_vals + _bg_moff]
+            return
+        } else if _bg_mk > _bg_key {
+            let _bg_hi = _bg_mid - 1
+        } else {
+            let _bg_lo = _bg_mid + 1
+        }
+    }
+    let nx_r0 = 0
+}
+
+fn nx_btmap_contains {
+    let _bc_map = nx_i0
+    let _bc_key = nx_i1
+
+    let _bc_cnt = load64 [_bc_map + 0]
+    let _bc_keys = load64 [_bc_map + 16]
+
+    let _bc_lo = 0
+    let _bc_hi = _bc_cnt - 1
+
+    while _bc_lo <= _bc_hi {
+        let _bc_mid = _bc_lo + _bc_hi
+        let _bc_mid = _bc_mid / 2
+        let _bc_moff = _bc_mid * 8
+        let _bc_mk = load64 [_bc_keys + _bc_moff]
+
+        if _bc_mk == _bc_key {
+            let nx_r0 = 1
+            return
+        } else if _bc_mk > _bc_key {
+            let _bc_hi = _bc_mid - 1
+        } else {
+            let _bc_lo = _bc_mid + 1
+        }
+    }
+    let nx_r0 = 0
+}
+
+fn nx_btmap_remove {
+    let _br_map = nx_i0
+    let _br_key = nx_i1
+
+    let _br_cnt = load64 [_br_map + 0]
+    let _br_keys = load64 [_br_map + 16]
+    let _br_vals = load64 [_br_map + 24]
+
+    let _br_lo = 0
+    let _br_hi = _br_cnt - 1
+    let _br_found = 0 - 1
+
+    while _br_lo <= _br_hi {
+        let _br_mid = _br_lo + _br_hi
+        let _br_mid = _br_mid / 2
+        let _br_moff = _br_mid * 8
+        let _br_mk = load64 [_br_keys + _br_moff]
+
+        if _br_mk == _br_key {
+            let _br_found = _br_mid
+            let _br_lo = _br_cnt  # exit loop
+        } else if _br_mk > _br_key {
+            let _br_hi = _br_mid - 1
+        } else {
+            let _br_lo = _br_mid + 1
+        }
+    }
+
+    if _br_found < 0 {
+        let nx_r0 = 0
+        return
+    }
+
+    # Shift left
+    let _br_i = _br_found
+    let _br_lim = _br_cnt - 1
+    while _br_i < _br_lim {
+        let _br_nxt = _br_i + 1
+        let _br_cur_off = _br_i * 8
+        let _br_nxt_off = _br_nxt * 8
+        let _br_tk = load64 [_br_keys + _br_nxt_off]
+        let _br_tv = load64 [_br_vals + _br_nxt_off]
+        store64 [_br_keys + _br_cur_off] _br_tk
+        store64 [_br_vals + _br_cur_off] _br_tv
+        let _br_i = _br_i + 1
+    }
+
+    let _br_new_cnt = _br_cnt - 1
+    store64 [_br_map + 0] _br_new_cnt
+    let nx_r0 = 1
+}
+
+fn nx_btmap_min_key {
+    let _bmk_map = nx_i0
+    let _bmk_cnt = load64 [_bmk_map + 0]
+    if _bmk_cnt == 0 {
+        let nx_r0 = 0
+        return
+    }
+    let _bmk_keys = load64 [_bmk_map + 16]
+    let nx_r0 = load64 [_bmk_keys + 0]
+}
+
+fn nx_btmap_max_key {
+    let _bmx_map = nx_i0
+    let _bmx_cnt = load64 [_bmx_map + 0]
+    if _bmx_cnt == 0 {
+        let nx_r0 = 0
+        return
+    }
+    let _bmx_keys = load64 [_bmx_map + 16]
+    let _bmx_last = _bmx_cnt - 1
+    let _bmx_off = _bmx_last * 8
+    let nx_r0 = load64 [_bmx_keys + _bmx_off]
+}
+
+fn nx_btmap_lower_bound {
+    let _bl_map = nx_i0
+    let _bl_target = nx_i1
+
+    let _bl_cnt = load64 [_bl_map + 0]
+    let _bl_keys = load64 [_bl_map + 16]
+
+    let _bl_lo = 0
+    let _bl_hi = _bl_cnt - 1
+    let _bl_ans = 0 - 1
+
+    while _bl_lo <= _bl_hi {
+        let _bl_mid = _bl_lo + _bl_hi
+        let _bl_mid = _bl_mid / 2
+        let _bl_moff = _bl_mid * 8
+        let _bl_mk = load64 [_bl_keys + _bl_moff]
+
+        if _bl_mk >= _bl_target {
+            let _bl_ans = _bl_mk
+            let _bl_hi = _bl_mid - 1
+        } else {
+            let _bl_lo = _bl_mid + 1
+        }
+    }
+    let nx_r0 = _bl_ans
+}
+
+fn nx_btmap_key_at {
+    let _bka_map = nx_i0
+    let _bka_idx = nx_i1
+    let _bka_keys = load64 [_bka_map + 16]
+    let _bka_off = _bka_idx * 8
+    let nx_r0 = load64 [_bka_keys + _bka_off]
+}
+
+fn nx_btmap_val_at {
+    let _bva_map = nx_i0
+    let _bva_idx = nx_i1
+    let _bva_vals = load64 [_bva_map + 24]
+    let _bva_off = _bva_idx * 8
+    let nx_r0 = load64 [_bva_vals + _bva_off]
+}
+
+fn nx_btmap_len {
+    let _bml_map = nx_i0
+    let nx_r0 = load64 [_bml_map + 0]
+}
+
+# ------------------------------------------------------------------------------
+# Feature #73: BTreeSet
+# ------------------------------------------------------------------------------
+fn nx_btset_new {
+    call nx_btmap_new
+}
+
+fn nx_btset_add {
+    let _bsa_set = nx_i0
+    let _bsa_key = nx_i1
+    let nx_i0 = _bsa_set
+    let nx_i1 = _bsa_key
+    let nx_i2 = 1
+    call nx_btmap_put
+}
+
+fn nx_btset_contains {
+    let _bsc_set = nx_i0
+    let _bsc_key = nx_i1
+    let nx_i0 = _bsc_set
+    let nx_i1 = _bsc_key
+    call nx_btmap_contains
+}
+
+fn nx_btset_remove {
+    let _bsr_set = nx_i0
+    let _bsr_key = nx_i1
+    let nx_i0 = _bsr_set
+    let nx_i1 = _bsr_key
+    call nx_btmap_remove
+}
+
+fn nx_btset_at {
+    let _bs_set = nx_i0
+    let _bs_idx = nx_i1
+    let nx_i0 = _bs_set
+    let nx_i1 = _bs_idx
+    call nx_btmap_key_at
+}
+
+fn nx_btset_len {
+    let _bsl_set = nx_i0
+    let nx_r0 = load64 [_bsl_set + 0]
+}

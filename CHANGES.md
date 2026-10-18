@@ -1,6 +1,23 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion (current)
+## v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures (current)
+
+### 1. Language Syntax, Compiler & Interpreter Upgrades (`tools/nexprep.c`, `tools/nexinterp.py`)
+- **64-Bit Struct Field Load/Store Bugfix**: Fixed `tools/nexprep.c` emitting 8-bit `load`/`store` instead of 64-bit `load64`/`store64` on struct fields, enabling full 64-bit signed integers, negative values, and pointers/strings in struct fields.
+- **Features #11, #12, #13 — Typed Structs, Struct Literal Initializers & `impl` Methods**: Added `struct Name { x: int, y: int }`, `let p = Name { x: 10, y: 20 }`, and `impl Name { fn method(&mut self, ...) { ... } }` with `obj.method(...)` and `Name.fn(...)` / `Name::fn(...)` call syntax.
+- **Features #16 & #17 — `enum` Declarations & `match` Pattern Matching**: Added `enum Name { A, B = 10, C }` and `match expr { p1 => { ... } p2 | p3 => { ... } _ => { ... } }`.
+- **Feature #31 — Scientific Float Literals (`2.5e4`, `1.5e-3`) & Single-Line Blocks**: Added scientific float literal normalization, single-line `{ stmt }` block splitting, and `else if` + float opcode support in `tools/nexinterp.py`.
+- **HYDRON Turbine 9 (`p2_algebraic_pass`)**: Added Phase 2 algebraic identity and annihilation simplification (`x + 0`, `0 + x`, `x - 0`, `x * 1`, `1 * x`, `x / 1`, `x * 0`, `x - x`, `x % 1`, and self-assignment elimination). Verified in `tests/test_lang_v88.nex` (37/37 assertions PASS).
+
+### 2. New Standard Library Modules & IDE Data Structures
+- **Features #72 & #73 — Ordered Map (`BTreeMap`) & Ordered Set (`BTreeSet`) (`stdlib/btree.nex`, `tests/test_btree.nex`)**: 20/20 assertions PASS.
+- **Feature #82 — Augmented Interval Tree (`stdlib/interval_tree.nex`, `tests/test_interval_tree.nex`)**: 7/7 assertions PASS.
+- **Feature #84 — Line Offset Index Table (`stdlib/line_index.nex`, `tests/test_line_index.nex`)**: 14/14 assertions PASS.
+- **Feature #95 — String Interning Pool (`stdlib/interner.nex`, `tests/test_interner.nex`)**: 9/9 assertions PASS.
+- **Feature #104 — Segment Tree (`stdlib/segment_tree.nex`, `tests/test_segment_tree.nex`)**: 8/8 assertions PASS.
+- **Features #141, #142, #145, #151 — Fuzzy Matcher, ANSI Stripper, URL Codec & Glob Matcher (`stdlib/fuzzy_glob.nex`, `tests/test_fuzzy_glob.nex`)**: 10/10 assertions PASS.
+
+## v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion
 
 ### 1. Compiler, Optimizer & Toolchain Fixes (`tools/nexprep.c`, `tools/nexir.c`, `tools/nexinterp.py`, `tools/nexelf.c`)
 - **HYDRON SCEV Recurrence Bugfix & Turbine 8 Gauss Triangular Summation Solver**: Removed the erroneous `nr == 3` (`D = D + V`) branch from the 2-line division recurrence attractor matcher that previously miscompiled standard summation loops (`while m <= 1000 { let sum = sum + m; let m = m + 1 }`) into `sum + m / 2`, fixing `tests/test_hydron_overflow.nex`. Added **Turbine 8** to collapse `step == 1` triangular summation loops in $O(1)$ via Gauss's formula (`cnt * (v0 + lim - 1) / 2`).

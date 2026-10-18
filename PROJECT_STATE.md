@@ -1,14 +1,38 @@
 # NEXUS Project State & Memory Log
 
 > **Last Updated**: 2026-10-18  
-> **Current Version**: v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion (#6, #29, #34, #69, #79, #89, #90, #105, #107, #135, #136, #137, #139, #144)  
+> **Current Version**: v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures (#11–#13, #16–#17, #31, #72–#73, #82, #84, #95, #104, #141–#142, #145, #151)  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
 
+## 0.4 v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures (2026-10-18)
+- **Critical 64-Bit Struct Field Load/Store Bugfix (`tools/nexprep.c`)**:
+  - Previously, `tools/nexprep.c` emitted 8-bit `load` and `store` instructions for struct fields even though `S[st].offs[nf] = nf * 8` allocated 64-bit (8-byte) slots, causing values `> 255` (`p.x = 1000` -> `232`), negative integers (`p.y = -50` -> `0`), 64-bit integers, and pointers/strings stored in struct fields to be silently truncated or corrupted.
+  - Upgraded `add_hoist`, `transform_seg`, and `emit_line` to emit 64-bit `load64` and `store64`, and routed negative / 64-bit / string / call field assignments through `emit_line`.
+- **Features #11, #12, #13: Typed Structs, Struct Literal Initializers (`Point { x: 10, y: 20 }`) & Struct Methods (`impl Point { ... }`)**:
+  - **Feature #11**: `struct Name { x: int, y: int }` now accepts comma-separated and type-annotated field declarations as well as single-line struct declarations.
+  - **Feature #13**: Single-line and multi-line struct literal initializers `let p = Vec3 { x: 100000, y: -5000, z: 9876543210 }` automatically allocate `Vec3.size`, validate field names, assign specified fields, and zero-initialize omitted fields.
+  - **Feature #12**: `impl StructName { fn method(&mut self, ...) { ... } fn create(...) { ... } }` attaches instance methods and associated functions to structs, supporting both `obj.method(args...)` (with automatic `self` injection and scoped field resolution) and `StructName.create(args...)` / `StructName::create(args...)`.
+- **Features #16 & #17: Enum Declarations (`enum`) & Pattern Matching (`match`)**:
+  - **Feature #16**: `enum TokenKind { TokEof, TokIdent, TokNumber = 10, TokPlus }` defines compile-time integer constants accessible via `TokenKind.TokIdent`, `TokenKind::TokNumber`, `TokenKind_TokPlus`, or unqualified `TokStar`.
+  - **Feature #17**: `match expr { pat1 => { ... } pat2 | pat3 => { ... } _ => { ... } }` supports single patterns, multi-value OR (`|`) patterns, enum constants, block arms, single-statement arms, and wildcard (`_`) fallback arms.
+- **Feature #31: Scientific Notation Float Literals & Single-Line Blocks**:
+  - Added `normalize_scientific_floats` (`2.5e4`, `1.5e-3`, `1.25e2`) and `desugar_single_line_block` (`if cond { stmt } else { stmt }`) in `tools/nexprep.c`, plus `else if` and float opcode (`fadd`, `fsub`, `fmul`, `fdiv`, `fsqrt`, `fneg`, `ftoi`, `itof`) support in `tools/nexinterp.py`.
+- **HYDRON Turbine 9: Algebraic Identity & Annihilation Pass (`p2_algebraic_pass`)**:
+  - Simplifies `x + 0`, `0 + x`, `x - 0`, `x * 1`, `1 * x`, `x / 1`, `x * 0`, `0 * x`, `x - x`, `x % 1` and eliminates no-op self-assignments `let x = x`.
+- **New Standard Library Modules (`stdlib/`) & Regression Suites (`tests/`)**:
+  - **Features #72 & #73: Ordered Map (`BTreeMap`) & Ordered Set (`BTreeSet`) (`stdlib/btree.nex`, `tests/test_btree.nex`)**: `nx_btmap_new`, `nx_btmap_put`, `nx_btmap_get`, `nx_btmap_contains`, `nx_btmap_remove`, `nx_btmap_min_key`, `nx_btmap_max_key`, `nx_btmap_lower_bound`, `nx_btmap_key_at`, `nx_btmap_val_at`, `nx_btset_new`, `nx_btset_add`, `nx_btset_contains`, `nx_btset_remove`, `nx_btset_at`.
+  - **Feature #82: Augmented Interval Tree (`stdlib/interval_tree.nex`, `tests/test_interval_tree.nex`)**: `nx_itree_new`, `nx_itree_insert`, `nx_itree_first_overlap`, `nx_itree_query_overlap`, `nx_itree_query_point`, `nx_itree_len`, `nx_itree_clear`.
+  - **Feature #84: Line Offset Index Table (`stdlib/line_index.nex`, `tests/test_line_index.nex`)**: `nx_line_index_build`, `nx_line_count`, `nx_line_start_offset`, `nx_line_end_offset`, `nx_line_length`, `nx_offset_to_line`, `nx_line_col_to_offset`.
+  - **Feature #95: String Interning Pool (`stdlib/interner.nex`, `tests/test_interner.nex`)**: `nx_intern_new`, `nx_intern_str`, `nx_intern_find`, `nx_intern_resolve`, `nx_intern_count`.
+  - **Feature #104: Segment Tree (`stdlib/segment_tree.nex`, `tests/test_segment_tree.nex`)**: `nx_segtree_new`, `nx_segtree_build`, `nx_segtree_update`, `nx_segtree_add`, `nx_segtree_query_sum`, `nx_segtree_query_min`, `nx_segtree_query_max`.
+  - **Features #141, #142, #145, #151: Fuzzy Matcher, ANSI Stripper, URL Codec & Glob Matcher (`stdlib/fuzzy_glob.nex`, `tests/test_fuzzy_glob.nex`)**: `nx_fuzzy_score`, `nx_fuzzy_match`, `nx_ansi_strip`, `nx_url_encode`, `nx_url_decode`, `nx_glob_match`.
+
 ## 0.3 v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion (2026-10-18)
 - **Critical HYDRON SCEV Recurrence False-Positive Fix + Turbine 8 Gauss Triangular Summation (`tools/nexprep.c`)**:
-  - Fixed a severe bug in `p2_try_transform` where 2-line triangular summation loops (`while m <= 1000 { let sum = sum + m; let m = m + 1 }`) were falsely classified (`nr == 3`) as division recurrence attractors ($acc_{n+1} = \lfloor(acc_n + i)/2floor$), corrupting the sum `1..1000` from `500500` into `999` (`tests/test_hydron_overflow.nex` assertion 11).
+  - Fixed a severe bug in `p2_try_transform` where 2-line triangular summation loops (`while m <= 1000 { let sum = sum + m; let m = m + 1 }`) were falsely classified (`nr == 3`) as division recurrence attractors ($acc_{n+1} = \lfloor(acc_n + i)/2
+floor$), corrupting the sum `1..1000` from `500500` into `999` (`tests/test_hydron_overflow.nex` assertion 11).
   - Added **HYDRON Turbine 8**: Closed-Form Gauss Triangular Series Elimination ($O(1)$ reduction $\sum_{v=v_0}^{L-1} v = rac{(L - v_0)(v_0 + L - 1)}{2}$) for `step == 1` non-negative bounds with exact fallback safety.
   - Preserved parenthesized and unparenthesized division recurrence attractor patterns (`let acc = (acc + i) * 2 / 4` and `let acc = acc + i * 2 / 4`).
 - **Transitive Call-Graph Dead Function Elimination — Feature #6 (`tools/nexprep.c`)**:
