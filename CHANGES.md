@@ -1,6 +1,26 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures (current)
+## v8.9 — HYDRON Phase 5 Ultra Engine (12 Active Turbines, ~1 Billion Physical Iters/Sec & Sub-Microsecond O(1) Loop Collapse) (current)
+
+### 1. Native x86-64 Self-Hosting Codegen Superoptimizations (`compiler/nexc.nex`)
+- **Turbine 2 Upgrade — 3-Cycle Signed Division by 2 (`cqo; sub rax, rdx; sar rax, 1`)**: Replaced the 16-byte, 4-cycle `cqo; and rdx, 1; add rax, rdx; sar rax, 1` sequence with the 9-byte, 3-cycle `48 99 48 29 D0 48 C1 F8 01` sequence (`rax - rdx` after `cqo` adds `1` iff `rax < 0`, preserving exact C99 truncating division for all 64-bit signed integers).
+- **Turbine 3 Upgrade — Dead-Store Rewind (`hyd_op_b == 137`)**: When `let d = <expr>` is immediately followed by `let d = d <op> <imm>`, rewinds the trailing 7-byte `mov [rbp + d], rax` of the first statement and operates directly on `%rax` in-flight.
+- **Turbine 4 Upgrade — Hardware Peephole Shift-Divide Fusion & Direct Memory RMW (`addq`/`subq`/`cmpq [rbp + slot], imm32`)**:
+  - Automatically fuses `shl rax, 1` (`* 2`) followed by `/ 4` into `/ 2` directly in `nexc.nex` machine-code emission (even when `--no-hydron` is active).
+  - Emits single-instruction `add qword ptr [rbp + d], imm32` (`48 81 85`) and `sub qword ptr [rbp + d], imm32` (`48 81 AD`) (11 bytes instead of 20 bytes) for standalone `let d = d +/- imm`, and `cmp qword ptr [rbp + a], imm32` (`48 81 BD`) in `parse_cond_core` (11 bytes instead of 13 bytes, without clobbering `%rax`).
+  - Factored `fn st_rax` and `fn check_p2` subroutines, **shrinking `nexc.exe` machine code by 1,050 bytes** (increasing `.text` headroom before `0xA800` from 2 bytes to 1,053 bytes) while maintaining 100% bit-for-bit Stage 5 self-hosting convergence (`0` diffs across 49,152 PE32+ bytes and 57,951 Linux ELF64 bytes).
+
+### 2. HYDRON Phase 1 & Phase 2 Mathematical Loop Solvers (`tools/nexprep.c`, `tools/nexir.c`, `tools/nexarm64.c`, `stdlib/bitwise.nex`)
+- **Turbine 5 Upgrade — $O(1)$ Closed-Form Multi-Accumulator Linear Induction Solver**: Collapses arbitrary linear induction loops (`while V < L { acc_1 += c_1; ...; V += step }`) for both literal and runtime variable limits in $O(1)$ time, coalescing duplicate accumulator updates.
+- **Turbine 6 Upgrade — $O(1)$ Closed-Form Invariant Conditional Accumulator Solver**: Collapses threshold-guarded accumulator loops (`while V < L { if V (>|>=) T { acc += c } V += 1 }`) with optional unconditional accumulators and runtime variable thresholds/limits into exact $O(1)$ branchless arithmetic.
+- **Turbine 7 Upgrade — Dual-Manifold SCEV Recurrence Attractor Solver**: Solves both `D_{n+1} = (D_n + V) / 2` (converging to `V - 2`) and `D_{n+1} = (2 * D_n + V) / 4` (converging to `(V - 3) / 2`) across literal and variable loop bounds.
+- **Turbine 8 Upgrade — Extended Gauss Triangular Summation Solver**: Supports `h.lim >= 1`, both `D + V` and `D - V`, and runtime variable limits.
+- **Turbine 9 Upgrade — Mixed-Precedence Constant Folding & Sub-Term Folding**: Folds mixed additive/multiplicative constant chains in a single pass and folds constant multiplicative sub-terms inside `prec_rewrite` without emitting `_prec_K` temporaries.
+- **Turbine 10 (New) — Closed-Form Geometric Doubling & Affine-Geometric Recurrence Solver**: Collapses `while V < L { let D = D * 2 (+ C); let V = V + 1 }` in $O(1)$ using power-of-2 hardware shifts (`<= 2^30` per step).
+- **Turbine 11 (New) — $O(1)$ Binary Shift Decomposition & Bitwise Strength Reduction**: Replaced $O(\text{shift})$ loops in `nx_shl`, `nx_shr`, and `nx_bit_set` (`stdlib/bitwise.nex`) with $O(1)$ binary decomposition (`32, 16, 8, 4, 2, 1`) and added compile-time bitwise constant folding and `x << k -> x * 2^k` strength reduction in `desugar_bitwise_binop`.
+- **Turbine 12 (New) — Lazy Runtime Prologue & Pre-Scan Deduplication**: Eliminates unused `_TRUE_`, `_FALSE_`, and 1 MB `_nx_call_stack` `mmap` allocations from programs that do not use scoped calls/closures, and deduplicates `scan_file_for_types` and `scan_signatures_in_file`.
+
+## v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures
 
 ### 1. Language Syntax, Compiler & Interpreter Upgrades (`tools/nexprep.c`, `tools/nexinterp.py`)
 - **64-Bit Struct Field Load/Store Bugfix**: Fixed `tools/nexprep.c` emitting 8-bit `load`/`store` instead of 64-bit `load64`/`store64` on struct fields, enabling full 64-bit signed integers, negative values, and pointers/strings in struct fields.

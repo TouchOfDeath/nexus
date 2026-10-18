@@ -247,6 +247,36 @@ fn ld_rax {
     call emit_d
 }
 
+# st_rax: emits 'mov [rbp + d], rax' (48 89 85 <d32>) - d holds the slot
+fn st_rax {
+    let b = 72
+    call emit_b
+    let b = 137
+    call emit_b
+    let b = 133
+    call emit_b
+    let v = d
+    call emit_d
+}
+
+# check_p2: checks if u is a power of 2 (2..2^30); sets hyd_is_p2 and hyd_shift
+fn check_p2 {
+    let hyd_k = 0
+    let hyd_val = 1
+    let hyd_is_p2 = 0
+    if u > 0 {
+        while hyd_k < 31 {
+            let hyd_k = hyd_k + 1
+            let hyd_val = hyd_val * 2
+            if hyd_val == u {
+                let hyd_is_p2 = 1
+                let hyd_shift = hyd_k
+                let hyd_k = 32
+            }
+        }
+    }
+}
+
 # ld_rcx: emits 'mov rcx, [rbp + w]' (48 8B 8D <w32>) - w holds the slot
 fn ld_rcx {
     let b = 72
@@ -866,16 +896,6 @@ fn parse_cond_core {
     let a = w
     call skip_ws
 
-    # mov rax, [rbp + a] (48 8B 85 <a32>)
-    let b = 72
-    call emit_b
-    let b = 139
-    call emit_b
-    let b = 133
-    call emit_b
-    let v = a
-    call emit_d
-
     # Relational operator: ==, !=, <, <=, >, >=
     let c = load [s + i]
     let o = 0
@@ -937,14 +957,20 @@ fn parse_cond_core {
         if n == 1 {
             let u = 0 - u
         }
-        # cmp rax, imm32 (48 3D <u32>)
+        # cmp qword ptr [rbp + a], imm32 (48 81 BD <a32> <u32>)
         let b = 72
         call emit_b
-        let b = 61
+        let b = 129
         call emit_b
+        let b = 189
+        call emit_b
+        let v = a
+        call emit_d
         let v = u
         call emit_d
     } else {
+        let w = a
+        call ld_rax
         call parse_ident
         call resolve_var
         # cmp rax, [rbp + w] (48 3B 85 <w32>)
@@ -1423,15 +1449,7 @@ fn parse_set {
             }
         }
     }
-    # store rax into [rbp + d] (48 89 85 <d32>)
-    let b = 72
-    call emit_b
-    let b = 137
-    call emit_b
-    let b = 133
-    call emit_b
-    let v = d
-    call emit_d
+    call st_rax
 }
 
 # ------------------------------------------------------------------------------
@@ -2607,40 +2625,92 @@ while r == 1 {
                                     if c <= 57 {
                                         # Op2 is immediate number
                                         call parse_uint
-                                        if o == 43 {
-                                            # add rax, imm32 (48 05 <u32>)
-                                            let b = 72
-                                            call emit_b
-                                            let b = 5
-                                            call emit_b
-                                            let v = u
-                                            call emit_d
-                                        }
-                                        if o == 45 {
-                                            # sub rax, imm32 (48 2D <u32>)
-                                            let b = 72
-                                            call emit_b
-                                            let b = 45
-                                            call emit_b
-                                            let v = u
-                                            call emit_d
-                                        }
-                                        if o == 42 {
-                                            # HYDRON: Fast Power-of-2 Multiplication
-                                            let hyd_k = 0
-                                            let hyd_val = 1
-                                            let hyd_is_p2 = 0
-                                            if u > 0 {
-                                                while hyd_k < 31 {
-                                                    let hyd_k = hyd_k + 1
-                                                    let hyd_val = hyd_val * 2
-                                                    if hyd_val == u {
-                                                        let hyd_is_p2 = 1
-                                                        let hyd_shift = hyd_k
-                                                        let hyd_k = 32
+                                        let hyd_mem_op = 0
+                                        if hyd_rax_var == d {
+                                            let hyd_op_prev = p - 6
+                                            let hyd_op_b = load [t + hyd_op_prev]
+                                            if hyd_op_b == 137 {
+                                                # Dead-store rewind: previous stmt ended with mov [rbp+d], rax
+                                                let p = p - 7
+                                                let hyd_rax_var = 0 - 1
+                                            }
+                                            if hyd_op_b == 139 {
+                                                call skip_sp
+                                                let hyd_eol = 0
+                                                if i >= l {
+                                                    let hyd_eol = 1
+                                                } else {
+                                                    let hyd_nc = load [s + i]
+                                                    if hyd_nc <= 32 {
+                                                        let hyd_eol = 1
+                                                    }
+                                                    if hyd_nc == 35 {
+                                                        let hyd_eol = 1
+                                                    }
+                                                    if hyd_nc == 59 {
+                                                        let hyd_eol = 1
+                                                    }
+                                                }
+                                                if hyd_eol == 1 {
+                                                    if o == 43 {
+                                                        let p = p - 7
+                                                        let b = 72
+                                                        call emit_b
+                                                        let b = 129
+                                                        call emit_b
+                                                        let b = 133
+                                                        call emit_b
+                                                        let v = d
+                                                        call emit_d
+                                                        let v = u
+                                                        call emit_d
+                                                        let hyd_mem_op = 1
+                                                        let is_f_dest = 1
+                                                        let hyd_rax_var = 0 - 1
+                                                    }
+                                                    if o == 45 {
+                                                        let p = p - 7
+                                                        let b = 72
+                                                        call emit_b
+                                                        let b = 129
+                                                        call emit_b
+                                                        let b = 173
+                                                        call emit_b
+                                                        let v = d
+                                                        call emit_d
+                                                        let v = u
+                                                        call emit_d
+                                                        let hyd_mem_op = 1
+                                                        let is_f_dest = 1
+                                                        let hyd_rax_var = 0 - 1
                                                     }
                                                 }
                                             }
+                                        }
+                                        let hyd_rax_var = 0 - 1
+                                        if hyd_mem_op == 0 {
+                                            if o == 43 {
+                                                # add rax, imm32 (48 05 <u32>)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 5
+                                                call emit_b
+                                                let v = u
+                                                call emit_d
+                                            }
+                                            if o == 45 {
+                                                # sub rax, imm32 (48 2D <u32>)
+                                                let b = 72
+                                                call emit_b
+                                                let b = 45
+                                                call emit_b
+                                                let v = u
+                                                call emit_d
+                                            }
+                                        }
+                                        if o == 42 {
+                                            # HYDRON: Fast Power-of-2 Multiplication
+                                            call check_p2
                                             if hyd_is_p2 == 1 {
                                                 # shl rax, hyd_shift (48 C1 E0 <hyd_shift>)
                                                 let b = 72
@@ -2664,43 +2734,61 @@ while r == 1 {
                                             }
                                         }
                                         if o == 47 {
-                                            # HYDRON: Fast Power-of-2 Signed Division (cqo + and + add + sar)
-                                            let hyd_k = 0
-                                            let hyd_val = 1
-                                            let hyd_is_p2 = 0
-                                            if u > 0 {
-                                                while hyd_k < 31 {
-                                                    let hyd_k = hyd_k + 1
-                                                    let hyd_val = hyd_val * 2
-                                                    if hyd_val == u {
-                                                        let hyd_is_p2 = 1
-                                                        let hyd_shift = hyd_k
-                                                        let hyd_k = 32
+                                            # HYDRON: Fuse preceding '* 2' (48 C1 E0 01) + '/ 4' into '/ 2'
+                                            if u == 4 {
+                                                let hyd_p1 = p - 1
+                                                let hyd_p2 = p - 2
+                                                let hyd_p3 = p - 3
+                                                let hyd_p4 = p - 4
+                                                let hyd_b1 = load [t + hyd_p1]
+                                                let hyd_b2 = load [t + hyd_p2]
+                                                let hyd_b3 = load [t + hyd_p3]
+                                                let hyd_b4 = load [t + hyd_p4]
+                                                if hyd_b1 == 1 {
+                                                    if hyd_b2 == 224 {
+                                                        if hyd_b3 == 193 {
+                                                            if hyd_b4 == 72 {
+                                                                let p = p - 4
+                                                                let u = 2
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
+                                            # HYDRON: Fast Power-of-2 Signed Division
+                                            call check_p2
                                             if hyd_is_p2 == 1 {
                                                 # cqo (48 99)
                                                 let b = 72
                                                 call emit_b
                                                 let b = 153
                                                 call emit_b
-                                                # and rdx, mask (48 81 E2 <mask32>)
-                                                let b = 72
-                                                call emit_b
-                                                let b = 129
-                                                call emit_b
-                                                let b = 226
-                                                call emit_b
-                                                let v = u - 1
-                                                call emit_d
-                                                # add rax, rdx (48 01 D0)
-                                                let b = 72
-                                                call emit_b
-                                                let b = 1
-                                                call emit_b
-                                                let b = 208
-                                                call emit_b
+                                                if hyd_shift == 1 {
+                                                    # 3-cycle '/ 2': sub rax, rdx (48 29 D0)
+                                                    let b = 72
+                                                    call emit_b
+                                                    let b = 41
+                                                    call emit_b
+                                                    let b = 208
+                                                    call emit_b
+                                                } else {
+                                                    # and rdx, mask (48 81 E2 <mask32>)
+                                                    let b = 72
+                                                    call emit_b
+                                                    let b = 129
+                                                    call emit_b
+                                                    let b = 226
+                                                    call emit_b
+                                                    let v = u - 1
+                                                    call emit_d
+                                                    # add rax, rdx (48 01 D0)
+                                                    let b = 72
+                                                    call emit_b
+                                                    let b = 1
+                                                    call emit_b
+                                                    let b = 208
+                                                    call emit_b
+                                                }
                                                 # sar rax, hyd_shift (48 C1 F8 <hyd_shift>)
                                                 let b = 72
                                                 call emit_b
@@ -2847,6 +2935,7 @@ while r == 1 {
                                             let b = 208
                                             call emit_b
                                         }
+                                        let hyd_rax_var = 0 - 1
                                     }
                                 }
                             }
@@ -2855,14 +2944,7 @@ while r == 1 {
                     if r == 1 {
                         if is_f_dest == 0 {
                             # 3. Store result from rax into [rbp + d] (48 89 85 <d32>)
-                            let b = 72
-                            call emit_b
-                            let b = 137
-                            call emit_b
-                            let b = 133
-                            call emit_b
-                            let v = d
-                            call emit_d
+                            call st_rax
                             let hyd_rax_var = d
                         }
                     }
@@ -3094,15 +3176,7 @@ while r == 1 {
                                 let v = 43132 - p
                                 call emit_d
 
-                                # Store result from rax into [rbp + d] (48 89 85 <d32>)
-                                let b = 72
-                                call emit_b
-                                let b = 137
-                                call emit_b
-                                let b = 133
-                                call emit_b
-                                let v = d
-                                call emit_d
+                                call st_rax
                             }
                         }
                     }

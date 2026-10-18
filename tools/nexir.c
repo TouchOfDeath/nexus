@@ -585,6 +585,36 @@ void ir_pass_algebraic_simplification(IRModule *mod) {
                     memset(&in->src2, 0, sizeof(in->src2));
                     mod->opt_algebraic_simplified++;
                 }
+                /* x & x -> x, x | x -> x */
+                else if ((in->op == OP_AND || in->op == OP_OR) && !in->src1.is_const && !in->src2.is_const &&
+                         strcmp(in->src1.name, in->src2.name) == 0) {
+                    in->op = OP_ASSIGN;
+                    memset(&in->src2, 0, sizeof(in->src2));
+                    mod->opt_algebraic_simplified++;
+                }
+                /* x % 1 -> 0 */
+                else if (in->op == OP_SREM && in->src2.is_const && in->src2.ival == 1) {
+                    in->op = OP_ASSIGN;
+                    in->src1 = make_const_i64(0);
+                    memset(&in->src2, 0, sizeof(in->src2));
+                    mod->opt_algebraic_simplified++;
+                }
+                /* x << 0 -> x, x >> 0 -> x, x | 0 -> x, x ^ 0 -> x */
+                else if ((in->op == OP_SHL || in->op == OP_SAR || in->op == OP_OR || in->op == OP_XOR) &&
+                         in->src2.is_const && in->src2.ival == 0) {
+                    in->op = OP_ASSIGN;
+                    memset(&in->src2, 0, sizeof(in->src2));
+                    mod->opt_algebraic_simplified++;
+                }
+                /* x & 0 -> 0, 0 & x -> 0 */
+                else if (in->op == OP_AND &&
+                         ((in->src2.is_const && in->src2.ival == 0) ||
+                          (in->src1.is_const && in->src1.ival == 0))) {
+                    in->op = OP_ASSIGN;
+                    in->src1 = make_const_i64(0);
+                    memset(&in->src2, 0, sizeof(in->src2));
+                    mod->opt_algebraic_simplified++;
+                }
             }
         }
     }
@@ -1029,13 +1059,13 @@ void ir_pass_hydron_loop_solver(IRModule *mod) {
                 IRInst *cmp_in = NULL;
                 IRInst *br_in = NULL;
                 for (IRInst *in = bb->first; in; in = in->next) {
-                    if (in->op == OP_ICMP_SLT) cmp_in = in;
+                    if (in->op == OP_ICMP_SLT || in->op == OP_ICMP_SLE) cmp_in = in;
                     if (in->op == OP_BR_COND) br_in = in;
                 }
 
                 if (!cmp_in || !br_in || !cmp_in->src2.is_const) continue;
 
-                int64_t limit = cmp_in->src2.ival;
+                int64_t limit = cmp_in->src2.ival + (cmp_in->op == OP_ICMP_SLE ? 1 : 0);
                 char ind_var[64];
                 safe_strcpy(ind_var, cmp_in->src1.name, sizeof(ind_var));
 

@@ -1,11 +1,7 @@
 # ==============================================================================
 #                 NEXUS STANDARD LIBRARY - MODULE: bitwise.nex
-#        Bitwise operations implemented via loops and arithmetic
+#        Bitwise operations with HYDRON early-exit & O(1) shift decomposition
 # ==============================================================================
-#
-# Since the NEXUS compiler's arithmetic dispatch loop supports +, -, *, /, %
-# and **, these bitwise operations are implemented using bit-by-bit
-# iteration over 64-bit integers.
 #
 # Operators (desugared by nexprep.c to these function calls):
 #   a & b   -> nx_band(a, b)   Bitwise AND
@@ -15,16 +11,13 @@
 #   a << n  -> nx_shl(a, n)    Left shift
 #   a >> n  -> nx_shr(a, n)    Arithmetic right shift
 #
-# Bit extraction: bit N of X is (X / 2^N) % 2
-# Bit setting:   set bit N to value V: X + V * 2^N (if bit was 0)
-#
 # CALLING CONVENTION: see math.nex header.
 #   nx_i0, nx_i1 = operands
 #   nx_r0 = result
 #   s0..s7 = scratch (clobbered)
 
 # ------------------------------------------------------------------------------
-# fn nx_band : nx_r0 = nx_i0 & nx_i1 (bitwise AND)
+# fn nx_band : nx_r0 = nx_i0 & nx_i1 (bitwise AND with zero-operand early exit)
 # ------------------------------------------------------------------------------
 fn nx_band {
     let s0 = nx_i0
@@ -33,6 +26,12 @@ fn nx_band {
     let s2 = 1
     let s3 = 0
     while s3 < 64 {
+        if s0 == 0 {
+            break
+        }
+        if s1 == 0 {
+            break
+        }
         let s4 = s0 % 2
         let s5 = s1 % 2
         if s4 == 1 {
@@ -48,7 +47,7 @@ fn nx_band {
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_bor : nx_r0 = nx_i0 | nx_i1 (bitwise OR)
+# fn nx_bor : nx_r0 = nx_i0 | nx_i1 (bitwise OR with dual-zero early exit)
 # ------------------------------------------------------------------------------
 fn nx_bor {
     let s0 = nx_i0
@@ -57,6 +56,11 @@ fn nx_bor {
     let s2 = 1
     let s3 = 0
     while s3 < 64 {
+        if s0 == 0 {
+            if s1 == 0 {
+                break
+            }
+        }
         let s4 = s0 % 2
         let s5 = s1 % 2
         if s4 == 1 {
@@ -75,24 +79,31 @@ fn nx_bor {
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_bxor : nx_r0 = nx_i0 ^ nx_i1 (bitwise XOR)
+# fn nx_bxor : nx_r0 = nx_i0 ^ nx_i1 (bitwise XOR with identity & zero early exit)
 # ------------------------------------------------------------------------------
 fn nx_bxor {
     let s0 = nx_i0
     let s1 = nx_i1
     let nx_r0 = 0
-    let s2 = 1
-    let s3 = 0
-    while s3 < 64 {
-        let s4 = s0 % 2
-        let s5 = s1 % 2
-        if s4 != s5 {
-            let nx_r0 = nx_r0 + s2
+    if s0 != s1 {
+        let s2 = 1
+        let s3 = 0
+        while s3 < 64 {
+            if s0 == 0 {
+                if s1 == 0 {
+                    break
+                }
+            }
+            let s4 = s0 % 2
+            let s5 = s1 % 2
+            if s4 != s5 {
+                let nx_r0 = nx_r0 + s2
+            }
+            let s0 = s0 / 2
+            let s1 = s1 / 2
+            let s2 = s2 * 2
+            let s3 = s3 + 1
         }
-        let s0 = s0 / 2
-        let s1 = s1 / 2
-        let s2 = s2 * 2
-        let s3 = s3 + 1
     }
 }
 
@@ -106,54 +117,121 @@ fn nx_bnot {
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_shl : nx_r0 = nx_i0 << nx_i1 (left shift)
-#   x << n = x * (2 ** n)
+# fn nx_shl : nx_r0 = nx_i0 << nx_i1 (O(1) hardware shift decomposition)
 # ------------------------------------------------------------------------------
 fn nx_shl {
-    let s0 = nx_i0
+    let nx_r0 = nx_i0
     let s1 = nx_i1
-    let nx_r0 = s0
-    let s2 = 0
-    while s2 < s1 {
+    if s1 >= 32 {
+        let nx_r0 = nx_r0 * 1073741824
+        let nx_r0 = nx_r0 * 4
+        let s1 = s1 - 32
+    }
+    if s1 >= 16 {
+        let nx_r0 = nx_r0 * 65536
+        let s1 = s1 - 16
+    }
+    if s1 >= 8 {
+        let nx_r0 = nx_r0 * 256
+        let s1 = s1 - 8
+    }
+    if s1 >= 4 {
+        let nx_r0 = nx_r0 * 16
+        let s1 = s1 - 4
+    }
+    if s1 >= 2 {
+        let nx_r0 = nx_r0 * 4
+        let s1 = s1 - 2
+    }
+    if s1 >= 1 {
         let nx_r0 = nx_r0 * 2
-        let s2 = s2 + 1
+        let s1 = s1 - 1
+    }
+    while s1 > 0 {
+        let nx_r0 = nx_r0 * 2
+        let s1 = s1 - 1
     }
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_shr : nx_r0 = nx_i0 >> nx_i1 (arithmetic right shift)
-#   For non-negative x: x >> n = x / (2 ** n)
-#   For negative x: use sign-preserving division
+# fn nx_shr : nx_r0 = nx_i0 >> nx_i1 (O(1) sign-preserving right shift)
 # ------------------------------------------------------------------------------
 fn nx_shr {
     let s0 = nx_i0
     let s1 = nx_i1
-    let s2 = 0
-    let s3 = 1
-    while s2 < s1 {
-        let s3 = s3 * 2
-        let s2 = s2 + 1
-    }
-    if s0 >= 0 {
-        let nx_r0 = s0 / s3
-    }
+    let s4 = s0
     if s0 < 0 {
         let s4 = 0 - s0
-        let s4 = s4 / s3
+    }
+    if s1 >= 32 {
+        let s4 = s4 / 1073741824
+        let s4 = s4 / 4
+        let s1 = s1 - 32
+    }
+    if s1 >= 16 {
+        let s4 = s4 / 65536
+        let s1 = s1 - 16
+    }
+    if s1 >= 8 {
+        let s4 = s4 / 256
+        let s1 = s1 - 8
+    }
+    if s1 >= 4 {
+        let s4 = s4 / 16
+        let s1 = s1 - 4
+    }
+    if s1 >= 2 {
+        let s4 = s4 / 4
+        let s1 = s1 - 2
+    }
+    if s1 >= 1 {
+        let s4 = s4 / 2
+        let s1 = s1 - 1
+    }
+    while s1 > 0 {
+        let s4 = s4 / 2
+        let s1 = s1 - 1
+    }
+    let nx_r0 = s4
+    if s0 < 0 {
         let nx_r0 = 0 - s4
     }
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_bit_set : nx_r0 = 1 if bit nx_i1 of nx_i0 is set, 0 otherwise
+# fn nx_bit_set : nx_r0 = 1 if bit nx_i1 of nx_i0 is set, 0 otherwise (O(1))
 # ------------------------------------------------------------------------------
 fn nx_bit_set {
     let s0 = nx_i0
     let s1 = nx_i1
-    let s2 = 0
-    while s2 < s1 {
+    if s1 >= 32 {
+        let s0 = s0 / 1073741824
+        let s0 = s0 / 4
+        let s1 = s1 - 32
+    }
+    if s1 >= 16 {
+        let s0 = s0 / 65536
+        let s1 = s1 - 16
+    }
+    if s1 >= 8 {
+        let s0 = s0 / 256
+        let s1 = s1 - 8
+    }
+    if s1 >= 4 {
+        let s0 = s0 / 16
+        let s1 = s1 - 4
+    }
+    if s1 >= 2 {
+        let s0 = s0 / 4
+        let s1 = s1 - 2
+    }
+    if s1 >= 1 {
         let s0 = s0 / 2
-        let s2 = s2 + 1
+        let s1 = s1 - 1
+    }
+    while s1 > 0 {
+        let s0 = s0 / 2
+        let s1 = s1 - 1
     }
     let nx_r0 = s0 % 2
 }

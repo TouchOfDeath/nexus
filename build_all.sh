@@ -27,20 +27,20 @@ echo -e "${CYAN}================================================================
 echo -e "\n${YELLOW}[+] STEP 1: Initializing Native x86-64 Execution Engine and ELF64 Emitter...${NC}"
 mkdir -p "$BIN_DIR"
 if [ ! -f "$NEXLOAD" ] || [ "$TOOLS_DIR/nexload.c" -nt "$NEXLOAD" ]; then
-    gcc -O2 "$TOOLS_DIR/nexload.c" -o "$NEXLOAD"
+    gcc -O3 -march=native "$TOOLS_DIR/nexload.c" -o "$NEXLOAD"
     echo -e "${GREEN}[+] Compiled $NEXLOAD (Zero-Dependency Bare-Metal Bridge)${NC}"
 else
     echo -e "${GREEN}[+] Native engine $NEXLOAD is up to date.${NC}"
 fi
 if [ ! -f "$NEXELF" ] || [ "$TOOLS_DIR/nexelf.c" -nt "$NEXELF" ]; then
-    gcc -O2 "$TOOLS_DIR/nexelf.c" -o "$NEXELF"
+    gcc -O3 -march=native "$TOOLS_DIR/nexelf.c" -o "$NEXELF"
     echo -e "${GREEN}[+] Compiled $NEXELF (Zero-Dependency Native ELF64 Emitter)${NC}"
 else
     echo -e "${GREEN}[+] Native ELF emitter $NEXELF is up to date.${NC}"
 fi
 NEXPREP="$BIN_DIR/nexprep"
 if [ ! -f "$NEXPREP" ] || [ "$TOOLS_DIR/nexprep.c" -nt "$NEXPREP" ]; then
-    gcc -O2 "$TOOLS_DIR/nexprep.c" -o "$NEXPREP"
+    gcc -O3 -march=native "$TOOLS_DIR/nexprep.c" -o "$NEXPREP"
     echo -e "${GREEN}[+] Compiled $NEXPREP (Zero-Dependency Multi-File Preprocessor)${NC}"
 else
     echo -e "${GREEN}[+] Native preprocessor $NEXPREP is up to date.${NC}"
