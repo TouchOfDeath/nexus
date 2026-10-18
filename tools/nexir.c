@@ -1324,13 +1324,42 @@ static IROperand lower_expression(IRBlock *bb, const char *expr, const char *tar
         return dst;
     }
 
+    /* Resolve innermost parenthesized sub-expressions first */
+    while (strchr(p, '(') && strchr(p, ')')) {
+        char *open_p = NULL;
+        char *close_p = NULL;
+        for (char *scan = p; *scan; scan++) {
+            if (*scan == '(') open_p = scan;
+            else if (*scan == ')' && open_p) { close_p = scan; break; }
+        }
+        if (!open_p || !close_p) break;
+        char inner[256];
+        size_t ilen = (size_t)(close_p - (open_p + 1));
+        if (ilen >= sizeof(inner)) ilen = sizeof(inner) - 1;
+        memcpy(inner, open_p + 1, ilen);
+        inner[ilen] = '\0';
+        IROperand sub_op = lower_expression(bb, inner, NULL);
+        char sub_repr[64];
+        if (sub_op.is_const) {
+            if (sub_op.type == TYPE_F64) snprintf(sub_repr, sizeof(sub_repr), "%f", sub_op.fval);
+            else snprintf(sub_repr, sizeof(sub_repr), "%lld", (long long)sub_op.ival);
+        } else {
+            safe_strcpy(sub_repr, sub_op.name, sizeof(sub_repr));
+        }
+        char rebuilt[512];
+        snprintf(rebuilt, sizeof(rebuilt), "%.*s%s%s",
+                 (int)(open_p - p), p, sub_repr, close_p + 1);
+        safe_strcpy(buf, rebuilt, sizeof(buf));
+        p = buf;
+    }
+
     /* Tokenize arithmetic chain */
-    char tokens[16][64];
-    char ops[16][8];
+    char tokens[32][64];
+    char ops[32][8];
     int num_toks = 0, num_ops = 0;
 
     char *token = strtok(p, " \t");
-    while (token) {
+    while (token && num_toks < 32) {
         if (strcmp(token, "+") == 0 || strcmp(token, "-") == 0 ||
             strcmp(token, "*") == 0 || strcmp(token, "/") == 0 ||
             strcmp(token, "%") == 0 || strcmp(token, "<<") == 0 ||
@@ -1357,6 +1386,71 @@ static IROperand lower_expression(IRBlock *bb, const char *expr, const char *tar
             return in->dst;
         }
         return val;
+    }
+
+    /* Pass 1: if chain mixes additive (+, -) and multiplicative (*, /, %),
+     * reduce multiplicative sub-terms first to match standard precedence. */
+    {
+        int has_add = 0, has_mul = 0;
+        for (int i = 0; i < num_ops; i++) {
+            if (!strcmp(ops[i], "+") || !strcmp(ops[i], "-") ||
+                !strcmp(ops[i], "+.") || !strcmp(ops[i], "-.")) has_add = 1;
+            else if (!strcmp(ops[i], "*") || !strcmp(ops[i], "/") || !strcmp(ops[i], "%") ||
+                     !strcmp(ops[i], "*.") || !strcmp(ops[i], "/.")) has_mul = 1;
+        }
+        if (has_add && has_mul) {
+            char new_toks[32][64];
+            char new_ops[32][8];
+            int n_nt = 0, n_no = 0;
+            int idx = 0;
+            while (idx < num_toks) {
+                IROperand cur_t = parse_atom(tokens[idx]);
+                while (idx < num_ops && (idx + 1) < num_toks &&
+                       (!strcmp(ops[idx], "*") || !strcmp(ops[idx], "/") || !strcmp(ops[idx], "%") ||
+                        !strcmp(ops[idx], "*.") || !strcmp(ops[idx], "/."))) {
+                    IROperand rhs_t = parse_atom(tokens[idx + 1]);
+                    IROperand tmp_d = new_temp_i64();
+                    IRInst *in = calloc(1, sizeof(IRInst));
+                    in->dst = tmp_d;
+                    in->src1 = cur_t;
+                    in->src2 = rhs_t;
+                    if (!strcmp(ops[idx], "*")) in->op = OP_MUL;
+                    else if (!strcmp(ops[idx], "/")) in->op = OP_SDIV;
+                    else if (!strcmp(ops[idx], "%")) in->op = OP_SREM;
+                    else if (!strcmp(ops[idx], "*.")) { in->op = OP_FMUL; in->dst.type = TYPE_F64; tmp_d.type = TYPE_F64; }
+                    else if (!strcmp(ops[idx], "/.")) { in->op = OP_FDIV; in->dst.type = TYPE_F64; tmp_d.type = TYPE_F64; }
+                    append_inst(bb, in);
+                    cur_t = tmp_d;
+                    idx++;
+                }
+                if (cur_t.is_const) {
+                    if (cur_t.type == TYPE_F64) snprintf(new_toks[n_nt++], 64, "%f", cur_t.fval);
+                    else snprintf(new_toks[n_nt++], 64, "%lld", (long long)cur_t.ival);
+                } else {
+                    safe_strcpy(new_toks[n_nt++], cur_t.name, 64);
+                }
+                if (idx < num_ops) {
+                    safe_strcpy(new_ops[n_no++], ops[idx], 8);
+                }
+                idx++;
+            }
+            for (int i = 0; i < n_nt; i++) safe_strcpy(tokens[i], new_toks[i], 64);
+            for (int i = 0; i < n_no; i++) safe_strcpy(ops[i], new_ops[i], 8);
+            num_toks = n_nt;
+            num_ops = n_no;
+            if (num_toks == 1) {
+                IROperand val = parse_atom(tokens[0]);
+                if (target_var && target_var[0]) {
+                    IRInst *in = calloc(1, sizeof(IRInst));
+                    in->op = OP_ASSIGN;
+                    in->dst = make_var(target_var, val.type);
+                    in->src1 = val;
+                    append_inst(bb, in);
+                    return in->dst;
+                }
+                return val;
+            }
+        }
     }
 
     IROperand cur = parse_atom(tokens[0]);

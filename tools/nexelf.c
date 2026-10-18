@@ -119,6 +119,12 @@ int main(int argc, char** argv) {
     }
     fclose(fin);
 
+    if (pe_data[0] != 'M' || pe_data[1] != 'Z') {
+        fprintf(stderr, "[-] Error: Input binary '%s' is not a valid PE executable (missing MZ signature)\n", in_path);
+        free(pe_data);
+        return 1;
+    }
+
     size_t stubs_len = sizeof(g_stubs);
     size_t elf_size = 0xE000 + stubs_len;
     uint8_t* elf_data = (uint8_t*)calloc(1, elf_size);

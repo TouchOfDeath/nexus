@@ -1,3 +1,5 @@
+include "stdlib/nstdlib.nex"
+
 ; ==============================================================================
 ;   NEXUS HYDRON Engine Correctness & Boundary Verification Suite
 ;   Tests mathematical attractor convergence, guards, limits, and fallback paths.
@@ -145,7 +147,7 @@ while vi < 2000 {
     let vi = vi + 1
 }
 print vacc
-assert_eq facc, 1998
+assert_eq vacc, 1998
 
 print "--- TEST: HYDRON >= Threshold Invariant Peeling ---"
 let gk = 0
@@ -160,3 +162,5 @@ print gh
 assert_eq gh, 14700
 
 print "=== ALL HYDRON CORRECTNESS TESTS PASSED ==="
+
+call nx_assert_summary

@@ -1,0 +1,139 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/base64.nex"
+
+# ==============================================================================
+#                 TEST SUITE: RFC 4648 Base64 (Feature #144)
+# ==============================================================================
+
+print "--- TEST 1: Basic Empty String ---"
+let empty_str = ""
+let nx_i0 = empty_str
+call nx_base64_encode
+let enc_empty = nx_r0
+let nx_i0 = enc_empty
+let nx_i1 = ""
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = enc_empty
+call nx_base64_decode
+let dec_empty = nx_r0
+let nx_i0 = dec_empty
+let nx_i1 = ""
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 2: Single Character 'M' (Padding ==) ---"
+let str_m = "M"
+let nx_i0 = str_m
+call nx_base64_encode
+let enc_m = nx_r0
+let nx_i0 = enc_m
+let nx_i1 = "TQ=="
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = enc_m
+call nx_base64_decode
+let dec_m = nx_r0
+let nx_i0 = dec_m
+let nx_i1 = "M"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 3: Two Characters 'Ma' (Padding =) ---"
+let str_ma = "Ma"
+let nx_i0 = str_ma
+call nx_base64_encode
+let enc_ma = nx_r0
+let nx_i0 = enc_ma
+let nx_i1 = "TWE="
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = enc_ma
+call nx_base64_decode
+let dec_ma = nx_r0
+let nx_i0 = dec_ma
+let nx_i1 = "Ma"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 4: Three Characters 'Man' (No Padding) ---"
+let str_man = "Man"
+let nx_i0 = str_man
+call nx_base64_encode
+let enc_man = nx_r0
+let nx_i0 = enc_man
+let nx_i1 = "TWFu"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = enc_man
+call nx_base64_decode
+let dec_man = nx_r0
+let nx_i0 = dec_man
+let nx_i1 = "Man"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 5: Sentence 'Hello, World!' ---"
+let str_hw = "Hello, World!"
+let nx_i0 = str_hw
+call nx_base64_encode
+let enc_hw = nx_r0
+let nx_i0 = enc_hw
+let nx_i1 = "SGVsbG8sIFdvcmxkIQ=="
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = enc_hw
+call nx_base64_decode
+let dec_hw = nx_r0
+let nx_i0 = dec_hw
+let nx_i1 = "Hello, World!"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 6: Nexus v8.7 string ---"
+let str_nx = "Nexus v8.7"
+let nx_i0 = str_nx
+call nx_base64_encode
+let enc_nx = nx_r0
+let nx_i0 = enc_nx
+call nx_base64_decode
+let dec_nx = nx_r0
+let nx_i0 = dec_nx
+let nx_i1 = "Nexus v8.7"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 7: Raw Bytes Encode ---"
+let raw_buf = alloc 4
+store [raw_buf + 0] 1
+store [raw_buf + 1] 2
+store [raw_buf + 2] 3
+store [raw_buf + 3] 4
+let nx_i0 = raw_buf
+let nx_i1 = 4
+call nx_base64_encode_bytes
+let enc_raw = nx_r0
+let nx_i0 = enc_raw
+let nx_i1 = "AQIDBA=="
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = enc_raw
+call nx_base64_decode
+let dec_raw = nx_r0
+let b0 = load [dec_raw + 0]
+let b1 = load [dec_raw + 1]
+let b2 = load [dec_raw + 2]
+let b3 = load [dec_raw + 3]
+assert_eq b0, 1
+assert_eq b1, 2
+assert_eq b2, 3
+assert_eq b3, 4
+
+print "BASE64_TEST_PASS"
+call nx_assert_summary

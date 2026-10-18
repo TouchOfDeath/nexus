@@ -1,0 +1,248 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: base64.nex
+#                   RFC 4648 Base64 Encoder & Decoder (Feature #144)
+# ==============================================================================
+#
+# Functions:
+#   nx_base64_encode(str)        -> returns freshly allocated Base64 string
+#   nx_base64_encode_bytes(buf, len) -> returns freshly allocated Base64 string
+#   nx_base64_decode(b64_str)    -> returns freshly allocated decoded byte string
+#
+# CALLING CONVENTION:
+#   nx_i0 = input pointer
+#   nx_i1 = length (for encode_bytes)
+#   nx_r0 = output pointer
+# ==============================================================================
+
+fn _b64_encode_char {
+    let _b64_ec_v = nx_i0
+    if _b64_ec_v < 26 {
+        let nx_r0 = 65 + _b64_ec_v
+    } else if _b64_ec_v < 52 {
+        let nx_r0 = 97 + _b64_ec_v - 26
+    } else if _b64_ec_v < 62 {
+        let nx_r0 = 48 + _b64_ec_v - 52
+    } else if _b64_ec_v == 62 {
+        let nx_r0 = 43
+    } else {
+        let nx_r0 = 47
+    }
+}
+
+fn _b64_decode_char {
+    let _b64_dc_c = nx_i0
+    if _b64_dc_c >= 65 {
+        if _b64_dc_c <= 90 {
+            let nx_r0 = _b64_dc_c - 65
+            return
+        }
+    }
+    if _b64_dc_c >= 97 {
+        if _b64_dc_c <= 122 {
+            let nx_r0 = _b64_dc_c - 97 + 26
+            return
+        }
+    }
+    if _b64_dc_c >= 48 {
+        if _b64_dc_c <= 57 {
+            let nx_r0 = _b64_dc_c - 48 + 52
+            return
+        }
+    }
+    if _b64_dc_c == 43 {
+        let nx_r0 = 62
+        return
+    }
+    if _b64_dc_c == 47 {
+        let nx_r0 = 63
+        return
+    }
+    let nx_r0 = 0 - 1
+}
+
+fn nx_base64_encode_bytes {
+    let _b64_eb_buf = nx_i0
+    let _b64_eb_len = nx_i1
+
+    if _b64_eb_len <= 0 {
+        let _b64_eb_empty = alloc 1
+        store [_b64_eb_empty + 0] 0
+        let nx_r0 = _b64_eb_empty
+    } else {
+        let _b64_eb_blocks = _b64_eb_len + 2
+        let _b64_eb_blocks = _b64_eb_blocks / 3
+        let _b64_eb_out_len = _b64_eb_blocks * 4
+        let _b64_eb_alloc_sz = _b64_eb_out_len + 1
+        let _b64_eb_out = alloc _b64_eb_alloc_sz
+
+        let _b64_eb_si = 0
+        let _b64_eb_di = 0
+        while _b64_eb_si < _b64_eb_len {
+            let _b64_eb_b0 = load [_b64_eb_buf + _b64_eb_si]
+            let _b64_eb_si = _b64_eb_si + 1
+
+            let _b64_eb_b1 = 0
+            let _b64_eb_has_b1 = 0
+            if _b64_eb_si < _b64_eb_len {
+                let _b64_eb_b1 = load [_b64_eb_buf + _b64_eb_si]
+                let _b64_eb_has_b1 = 1
+                let _b64_eb_si = _b64_eb_si + 1
+            }
+
+            let _b64_eb_b2 = 0
+            let _b64_eb_has_b2 = 0
+            if _b64_eb_si < _b64_eb_len {
+                let _b64_eb_b2 = load [_b64_eb_buf + _b64_eb_si]
+                let _b64_eb_has_b2 = 1
+                let _b64_eb_si = _b64_eb_si + 1
+            }
+
+            # 24-bit value = b0 * 65536 + b1 * 256 + b2
+            let _b64_eb_val = _b64_eb_b0 * 65536
+            let _b64_eb_val = _b64_eb_val + _b64_eb_b1 * 256
+            let _b64_eb_val = _b64_eb_val + _b64_eb_b2
+
+            # c0 = (val / 262144) % 64
+            let _b64_eb_i0 = _b64_eb_val / 262144
+            let _b64_eb_i0 = _b64_eb_i0 % 64
+            let nx_i0 = _b64_eb_i0
+            call _b64_encode_char
+            store [_b64_eb_out + _b64_eb_di] nx_r0
+            let _b64_eb_di = _b64_eb_di + 1
+
+            # c1 = (val / 4096) % 64
+            let _b64_eb_i1 = _b64_eb_val / 4096
+            let _b64_eb_i1 = _b64_eb_i1 % 64
+            let nx_i0 = _b64_eb_i1
+            call _b64_encode_char
+            store [_b64_eb_out + _b64_eb_di] nx_r0
+            let _b64_eb_di = _b64_eb_di + 1
+
+            # c2 = (val / 64) % 64 (or '=' if no b1)
+            if _b64_eb_has_b1 == 1 {
+                let _b64_eb_i2 = _b64_eb_val / 64
+                let _b64_eb_i2 = _b64_eb_i2 % 64
+                let nx_i0 = _b64_eb_i2
+                call _b64_encode_char
+                store [_b64_eb_out + _b64_eb_di] nx_r0
+            } else {
+                store [_b64_eb_out + _b64_eb_di] 61
+            }
+            let _b64_eb_di = _b64_eb_di + 1
+
+            # c3 = val % 64 (or '=' if no b2)
+            if _b64_eb_has_b2 == 1 {
+                let _b64_eb_i3 = _b64_eb_val % 64
+                let nx_i0 = _b64_eb_i3
+                call _b64_encode_char
+                store [_b64_eb_out + _b64_eb_di] nx_r0
+            } else {
+                store [_b64_eb_out + _b64_eb_di] 61
+            }
+            let _b64_eb_di = _b64_eb_di + 1
+        }
+        store [_b64_eb_out + _b64_eb_out_len] 0
+        let nx_r0 = _b64_eb_out
+    }
+}
+
+fn nx_base64_encode {
+    let _b64_e_str = nx_i0
+    let _b64_e_len = 0
+    let _b64_e_c = load [_b64_e_str + 0]
+    while _b64_e_c != 0 {
+        let _b64_e_len = _b64_e_len + 1
+        let _b64_e_c = load [_b64_e_str + _b64_e_len]
+    }
+    let nx_i0 = _b64_e_str
+    let nx_i1 = _b64_e_len
+    call nx_base64_encode_bytes
+}
+
+fn nx_base64_decode {
+    let _b64_d_str = nx_i0
+
+    let _b64_d_len = 0
+    let _b64_d_c = load [_b64_d_str + 0]
+    while _b64_d_c != 0 {
+        let _b64_d_len = _b64_d_len + 1
+        let _b64_d_c = load [_b64_d_str + _b64_d_len]
+    }
+
+    if _b64_d_len == 0 {
+        let _b64_d_empty = alloc 1
+        store [_b64_d_empty + 0] 0
+        let nx_r0 = _b64_d_empty
+    } else {
+        # Maximum output bytes: (len / 4) * 3 + 1
+        let _b64_d_max_out = _b64_d_len / 4
+        let _b64_d_max_out = _b64_d_max_out * 3
+        let _b64_d_alloc_sz = _b64_d_max_out + 1
+        let _b64_d_out = alloc _b64_d_alloc_sz
+
+        let _b64_d_si = 0
+        let _b64_d_di = 0
+        while _b64_d_si < _b64_d_len {
+            let _b64_d_c0 = load [_b64_d_str + _b64_d_si]
+            let _b64_d_si = _b64_d_si + 1
+            let _b64_d_c1 = load [_b64_d_str + _b64_d_si]
+            let _b64_d_si = _b64_d_si + 1
+            let _b64_d_c2 = load [_b64_d_str + _b64_d_si]
+            let _b64_d_si = _b64_d_si + 1
+            let _b64_d_c3 = load [_b64_d_str + _b64_d_si]
+            let _b64_d_si = _b64_d_si + 1
+
+            let nx_i0 = _b64_d_c0
+            call _b64_decode_char
+            let _b64_d_v0 = nx_r0
+
+            let nx_i0 = _b64_d_c1
+            call _b64_decode_char
+            let _b64_d_v1 = nx_r0
+
+            let nx_i0 = _b64_d_c2
+            call _b64_decode_char
+            let _b64_d_v2 = nx_r0
+
+            let nx_i0 = _b64_d_c3
+            call _b64_decode_char
+            let _b64_d_v3 = nx_r0
+
+            if _b64_d_v2 < 0 {
+                let _b64_d_v2_eff = 0
+            } else {
+                let _b64_d_v2_eff = _b64_d_v2
+            }
+            if _b64_d_v3 < 0 {
+                let _b64_d_v3_eff = 0
+            } else {
+                let _b64_d_v3_eff = _b64_d_v3
+            }
+
+            let _b64_d_trip = _b64_d_v0 * 262144
+            let _b64_d_trip = _b64_d_trip + _b64_d_v1 * 4096
+            let _b64_d_trip = _b64_d_trip + _b64_d_v2_eff * 64
+            let _b64_d_trip = _b64_d_trip + _b64_d_v3_eff
+
+            let _b64_d_byte0 = _b64_d_trip / 65536
+            let _b64_d_byte0 = _b64_d_byte0 % 256
+            store [_b64_d_out + _b64_d_di] _b64_d_byte0
+            let _b64_d_di = _b64_d_di + 1
+
+            if _b64_d_c2 != 61 {
+                let _b64_d_byte1 = _b64_d_trip / 256
+                let _b64_d_byte1 = _b64_d_byte1 % 256
+                store [_b64_d_out + _b64_d_di] _b64_d_byte1
+                let _b64_d_di = _b64_d_di + 1
+            }
+
+            if _b64_d_c3 != 61 {
+                let _b64_d_byte2 = _b64_d_trip % 256
+                store [_b64_d_out + _b64_d_di] _b64_d_byte2
+                let _b64_d_di = _b64_d_di + 1
+            }
+        }
+        store [_b64_d_out + _b64_d_di] 0
+        let nx_r0 = _b64_d_out
+    }
+}

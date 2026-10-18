@@ -612,3 +612,395 @@ fn nx_str_join {
     store [_jn_out + _jn_w] 0
     let nx_r0 = _jn_out
 }
+# ==============================================================================
+#            CASE CONVERSION, PADDING, REPLACE & LEVENSHTEIN (#135-#139)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_str_to_upper : copy string nx_i0 to buffer nx_i1 converting ASCII 'a'..'z'
+#                      (97..122) to 'A'..'Z' (65..90). May operate in-place
+#                      (nx_i0 == nx_i1). Returns byte length in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_to_upper {
+    let _up_src = nx_i0
+    let _up_dst = nx_i1
+    let _up_i = 0
+    let _up_c = load [_up_src + 0]
+    while _up_c != 0 {
+        if _up_c >= 97 {
+            if _up_c <= 122 {
+                let _up_c = _up_c - 32
+            }
+        }
+        store [_up_dst + _up_i] _up_c
+        let _up_i = _up_i + 1
+        let _up_c = load [_up_src + _up_i]
+    }
+    store [_up_dst + _up_i] 0
+    let nx_r0 = _up_i
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_to_lower : copy string nx_i0 to buffer nx_i1 converting ASCII 'A'..'Z'
+#                      (65..90) to 'a'..'z' (97..122). May operate in-place
+#                      (nx_i0 == nx_i1). Returns byte length in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_to_lower {
+    let _lo_src = nx_i0
+    let _lo_dst = nx_i1
+    let _lo_i = 0
+    let _lo_c = load [_lo_src + 0]
+    while _lo_c != 0 {
+        if _lo_c >= 65 {
+            if _lo_c <= 90 {
+                let _lo_c = _lo_c + 32
+            }
+        }
+        store [_lo_dst + _lo_i] _lo_c
+        let _lo_i = _lo_i + 1
+        let _lo_c = load [_lo_src + _lo_i]
+    }
+    store [_lo_dst + _lo_i] 0
+    let nx_r0 = _lo_i
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_pad_left : return a freshly allocated string containing nx_i0
+#                      left-padded to width nx_i1 with fill byte nx_i2.
+#                      If len(src) >= width, returns a fresh copy of src.
+# ------------------------------------------------------------------------------
+fn nx_str_pad_left {
+    let _pl_src = nx_i0
+    let _pl_width = nx_i1
+    let _pl_fill = nx_i2
+    if _pl_fill == 0 {
+        let _pl_fill = 32
+    }
+    let _pl_len = 0
+    let _pl_c = load [_pl_src + 0]
+    while _pl_c != 0 {
+        let _pl_len = _pl_len + 1
+        let _pl_c = load [_pl_src + _pl_len]
+    }
+    let _pl_out_len = _pl_len
+    if _pl_width > _pl_len {
+        let _pl_out_len = _pl_width
+    }
+    let _pl_alloc = _pl_out_len + 1
+    let _pl_out = alloc _pl_alloc
+    let _pl_pad = _pl_out_len - _pl_len
+    let _pl_i = 0
+    while _pl_i < _pl_pad {
+        store [_pl_out + _pl_i] _pl_fill
+        let _pl_i = _pl_i + 1
+    }
+    let _pl_j = 0
+    while _pl_j < _pl_len {
+        let _pl_c = load [_pl_src + _pl_j]
+        let _pl_dst_idx = _pl_pad + _pl_j
+        store [_pl_out + _pl_dst_idx] _pl_c
+        let _pl_j = _pl_j + 1
+    }
+    store [_pl_out + _pl_out_len] 0
+    let nx_r0 = _pl_out
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_pad_right : return a freshly allocated string containing nx_i0
+#                       right-padded to width nx_i1 with fill byte nx_i2.
+#                       If len(src) >= width, returns a fresh copy of src.
+# ------------------------------------------------------------------------------
+fn nx_str_pad_right {
+    let _pr_src = nx_i0
+    let _pr_width = nx_i1
+    let _pr_fill = nx_i2
+    if _pr_fill == 0 {
+        let _pr_fill = 32
+    }
+    let _pr_len = 0
+    let _pr_c = load [_pr_src + 0]
+    while _pr_c != 0 {
+        let _pr_len = _pr_len + 1
+        let _pr_c = load [_pr_src + _pr_len]
+    }
+    let _pr_out_len = _pr_len
+    if _pr_width > _pr_len {
+        let _pr_out_len = _pr_width
+    }
+    let _pr_alloc = _pr_out_len + 1
+    let _pr_out = alloc _pr_alloc
+    let _pr_i = 0
+    while _pr_i < _pr_len {
+        let _pr_c = load [_pr_src + _pr_i]
+        store [_pr_out + _pr_i] _pr_c
+        let _pr_i = _pr_i + 1
+    }
+    while _pr_i < _pr_out_len {
+        store [_pr_out + _pr_i] _pr_fill
+        let _pr_i = _pr_i + 1
+    }
+    store [_pr_out + _pr_out_len] 0
+    let nx_r0 = _pr_out
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_index_of : nx_r0 = first byte index of substring nx_i1 in nx_i0,
+#                      or -1 if not found. Empty needle returns 0.
+# ------------------------------------------------------------------------------
+fn nx_str_index_of {
+    let _io_hay = nx_i0
+    let _io_ndl = nx_i1
+    let _io_n = 0
+    let _io_c = load [_io_hay + 0]
+    while _io_c != 0 {
+        let _io_n = _io_n + 1
+        let _io_c = load [_io_hay + _io_n]
+    }
+    let _io_m = 0
+    let _io_c = load [_io_ndl + 0]
+    while _io_c != 0 {
+        let _io_m = _io_m + 1
+        let _io_c = load [_io_ndl + _io_m]
+    }
+    if _io_m == 0 {
+        let nx_r0 = 0
+    } else if _io_m > _io_n {
+        let nx_r0 = 0 - 1
+    } else {
+        let nx_r0 = 0 - 1
+        let _io_lim = _io_n - _io_m
+        let _io_i = 0
+        while _io_i <= _io_lim {
+            if nx_r0 < 0 {
+                let _io_ok = 1
+                let _io_j = 0
+                while _io_j < _io_m {
+                    let _io_hi = _io_i + _io_j
+                    let _io_hc = load [_io_hay + _io_hi]
+                    let _io_nc = load [_io_ndl + _io_j]
+                    if _io_hc != _io_nc {
+                        let _io_ok = 0
+                        let _io_j = _io_m
+                    } else {
+                        let _io_j = _io_j + 1
+                    }
+                }
+                if _io_ok == 1 {
+                    let nx_r0 = _io_i
+                }
+            }
+            let _io_i = _io_i + 1
+        }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_contains : nx_r0 = 1 if substring nx_i1 occurs in nx_i0, else 0
+# ------------------------------------------------------------------------------
+fn nx_str_contains {
+    call nx_str_index_of
+    if nx_r0 >= 0 {
+        let nx_r0 = 1
+    } else {
+        let nx_r0 = 0
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_replace : return a freshly allocated string with all non-overlapping
+#                     occurrences of substring nx_i1 in nx_i0 replaced by nx_i2.
+#                     If old_sub (nx_i1) is empty, returns a copy of src.
+# ------------------------------------------------------------------------------
+fn nx_str_replace {
+    let _rp_src = nx_i0
+    let _rp_old = nx_i1
+    let _rp_new = nx_i2
+
+    let _rp_slen = 0
+    let _rp_c = load [_rp_src + 0]
+    while _rp_c != 0 {
+        let _rp_slen = _rp_slen + 1
+        let _rp_c = load [_rp_src + _rp_slen]
+    }
+    let _rp_olen = 0
+    let _rp_c = load [_rp_old + 0]
+    while _rp_c != 0 {
+        let _rp_olen = _rp_olen + 1
+        let _rp_c = load [_rp_old + _rp_olen]
+    }
+    let _rp_nlen = 0
+    let _rp_c = load [_rp_new + 0]
+    while _rp_c != 0 {
+        let _rp_nlen = _rp_nlen + 1
+        let _rp_c = load [_rp_new + _rp_nlen]
+    }
+
+    if _rp_olen == 0 {
+        let _rp_alloc = _rp_slen + 1
+        let _rp_out = alloc _rp_alloc
+        let _rp_i = 0
+        while _rp_i < _rp_slen {
+            let _rp_c = load [_rp_src + _rp_i]
+            store [_rp_out + _rp_i] _rp_c
+            let _rp_i = _rp_i + 1
+        }
+        store [_rp_out + _rp_slen] 0
+        let nx_r0 = _rp_out
+    } else {
+        # pass 1: count non-overlapping occurrences
+        let _rp_cnt = 0
+        let _rp_i = 0
+        while _rp_i < _rp_slen {
+            let _rp_rem = _rp_slen - _rp_i
+            if _rp_rem >= _rp_olen {
+                let _rp_match = 1
+                let _rp_j = 0
+                while _rp_j < _rp_olen {
+                    let _rp_si = _rp_i + _rp_j
+                    let _rp_sc = load [_rp_src + _rp_si]
+                    let _rp_oc = load [_rp_old + _rp_j]
+                    if _rp_sc != _rp_oc {
+                        let _rp_match = 0
+                        let _rp_j = _rp_olen
+                    } else {
+                        let _rp_j = _rp_j + 1
+                    }
+                }
+                if _rp_match == 1 {
+                    let _rp_cnt = _rp_cnt + 1
+                    let _rp_i = _rp_i + _rp_olen
+                } else {
+                    let _rp_i = _rp_i + 1
+                }
+            } else {
+                let _rp_i = _rp_i + 1
+            }
+        }
+
+        let _rp_diff = _rp_nlen - _rp_olen
+        let _rp_delta = _rp_cnt * _rp_diff
+        let _rp_out_len = _rp_slen + _rp_delta
+        let _rp_alloc = _rp_out_len + 1
+        let _rp_out = alloc _rp_alloc
+
+        # pass 2: emit replaced output
+        let _rp_i = 0
+        let _rp_w = 0
+        while _rp_i < _rp_slen {
+            let _rp_rem = _rp_slen - _rp_i
+            let _rp_match = 0
+            if _rp_rem >= _rp_olen {
+                let _rp_match = 1
+                let _rp_j = 0
+                while _rp_j < _rp_olen {
+                    let _rp_si = _rp_i + _rp_j
+                    let _rp_sc = load [_rp_src + _rp_si]
+                    let _rp_oc = load [_rp_old + _rp_j]
+                    if _rp_sc != _rp_oc {
+                        let _rp_match = 0
+                        let _rp_j = _rp_olen
+                    } else {
+                        let _rp_j = _rp_j + 1
+                    }
+                }
+            }
+            if _rp_match == 1 {
+                let _rp_k = 0
+                while _rp_k < _rp_nlen {
+                    let _rp_nc = load [_rp_new + _rp_k]
+                    store [_rp_out + _rp_w] _rp_nc
+                    let _rp_w = _rp_w + 1
+                    let _rp_k = _rp_k + 1
+                }
+                let _rp_i = _rp_i + _rp_olen
+            } else {
+                let _rp_sc = load [_rp_src + _rp_i]
+                store [_rp_out + _rp_w] _rp_sc
+                let _rp_w = _rp_w + 1
+                let _rp_i = _rp_i + 1
+            }
+        }
+        store [_rp_out + _rp_w] 0
+        let nx_r0 = _rp_out
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_levenshtein : compute Wagner-Fischer Levenshtein edit distance
+#                         between strings nx_i0 and nx_i1 in O(min(N,M)) space
+#                         (two rolling rows). Returns edit distance in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_levenshtein {
+    let _lv_s1 = nx_i0
+    let _lv_s2 = nx_i1
+    let _lv_n = 0
+    let _lv_c = load [_lv_s1 + 0]
+    while _lv_c != 0 {
+        let _lv_n = _lv_n + 1
+        let _lv_c = load [_lv_s1 + _lv_n]
+    }
+    let _lv_m = 0
+    let _lv_c = load [_lv_s2 + 0]
+    while _lv_c != 0 {
+        let _lv_m = _lv_m + 1
+        let _lv_c = load [_lv_s2 + _lv_m]
+    }
+    if _lv_n == 0 {
+        let nx_r0 = _lv_m
+    } else if _lv_m == 0 {
+        let nx_r0 = _lv_n
+    } else {
+        let _lv_cols = _lv_m + 1
+        let _lv_row_bytes = _lv_cols * 8
+        let _lv_prev = alloc _lv_row_bytes
+        let _lv_curr = alloc _lv_row_bytes
+        let _lv_j = 0
+        while _lv_j <= _lv_m {
+            let _lv_j8 = _lv_j * 8
+            store64 [_lv_prev + _lv_j8] _lv_j
+            let _lv_j = _lv_j + 1
+        }
+        let _lv_i = 1
+        while _lv_i <= _lv_n {
+            let _lv_i_m1 = _lv_i - 1
+            let _lv_c1 = load [_lv_s1 + _lv_i_m1]
+            store64 [_lv_curr + 0] _lv_i
+            let _lv_j = 1
+            while _lv_j <= _lv_m {
+                let _lv_j_m1 = _lv_j - 1
+                let _lv_c2 = load [_lv_s2 + _lv_j_m1]
+                let _lv_cost = 1
+                if _lv_c1 == _lv_c2 {
+                    let _lv_cost = 0
+                }
+                let _lv_j8 = _lv_j * 8
+                let _lv_jm1_8 = _lv_j_m1 * 8
+                let _lv_del = load64 [_lv_prev + _lv_j8]
+                let _lv_del = _lv_del + 1
+                let _lv_ins = load64 [_lv_curr + _lv_jm1_8]
+                let _lv_ins = _lv_ins + 1
+                let _lv_sub = load64 [_lv_prev + _lv_jm1_8]
+                let _lv_sub = _lv_sub + _lv_cost
+                let _lv_best = _lv_del
+                if _lv_ins < _lv_best {
+                    let _lv_best = _lv_ins
+                }
+                if _lv_sub < _lv_best {
+                    let _lv_best = _lv_sub
+                }
+                store64 [_lv_curr + _lv_j8] _lv_best
+                let _lv_j = _lv_j + 1
+            }
+            let _lv_j = 0
+            while _lv_j <= _lv_m {
+                let _lv_j8 = _lv_j * 8
+                let _lv_v = load64 [_lv_curr + _lv_j8]
+                store64 [_lv_prev + _lv_j8] _lv_v
+                let _lv_j = _lv_j + 1
+            }
+            let _lv_i = _lv_i + 1
+        }
+        let _lv_m8 = _lv_m * 8
+        let nx_r0 = load64 [_lv_prev + _lv_m8]
+    }
+}

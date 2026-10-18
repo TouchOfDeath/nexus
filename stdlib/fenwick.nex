@@ -1,0 +1,205 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: fenwick.nex
+#                Fenwick Tree / Binary Indexed Tree (Feature #105)
+# ==============================================================================
+#
+# Memory Layout of Fenwick descriptor (24 bytes):
+#   offset 0:  tree_ptr - pointer to 1-based qword array (N + 1 elements)
+#   offset 8:  size N   - number of elements
+#   offset 16: vals_ptr - pointer to 0-based qword array (N elements)
+#
+# CALLING CONVENTION:
+#   nx_i0 = fenwick descriptor
+#   nx_i1 = param 1 (index, left bound, etc.)
+#   nx_i2 = param 2 (delta, right bound, value)
+#   nx_r0 = result
+# ==============================================================================
+
+fn nx_fenwick_new {
+    let _fnw_n = nx_i0
+    if _fnw_n < 1 {
+        let _fnw_n = 1
+    }
+    let _fnw_tree_bytes = (_fnw_n + 1) * 8
+    let _fnw_tree = alloc _fnw_tree_bytes
+    let _fnw_zi = 0
+    while _fnw_zi <= _fnw_n {
+        let _fnw_zi8 = _fnw_zi * 8
+        store64 [_fnw_tree + _fnw_zi8] 0
+        let _fnw_zi = _fnw_zi + 1
+    }
+
+    let _fnw_vals_bytes = _fnw_n * 8
+    let _fnw_vals = alloc _fnw_vals_bytes
+    let _fnw_vi = 0
+    while _fnw_vi < _fnw_n {
+        let _fnw_vi8 = _fnw_vi * 8
+        store64 [_fnw_vals + _fnw_vi8] 0
+        let _fnw_vi = _fnw_vi + 1
+    }
+
+    let _fnw_desc = alloc 24
+    store64 [_fnw_desc + 0] _fnw_tree
+    store64 [_fnw_desc + 8] _fnw_n
+    store64 [_fnw_desc + 16] _fnw_vals
+    let nx_r0 = _fnw_desc
+}
+
+fn nx_fenwick_len {
+    let _fnw_l_d = nx_i0
+    let nx_r0 = load64 [_fnw_l_d + 8]
+}
+
+fn nx_fenwick_add {
+    let _fnw_ad_d = nx_i0
+    let _fnw_ad_idx = nx_i1
+    let _fnw_ad_delta = nx_i2
+
+    let _fnw_ad_tree = load64 [_fnw_ad_d + 0]
+    let _fnw_ad_n = load64 [_fnw_ad_d + 8]
+    let _fnw_ad_vals = load64 [_fnw_ad_d + 16]
+
+    if _fnw_ad_idx >= 0 {
+        if _fnw_ad_idx < _fnw_ad_n {
+            let _fnw_ad_i8 = _fnw_ad_idx * 8
+            let _fnw_ad_cur = load64 [_fnw_ad_vals + _fnw_ad_i8]
+            let _fnw_ad_cur = _fnw_ad_cur + _fnw_ad_delta
+            store64 [_fnw_ad_vals + _fnw_ad_i8] _fnw_ad_cur
+
+            let _fnw_ad_i = _fnw_ad_idx + 1
+            while _fnw_ad_i <= _fnw_ad_n {
+                let _fnw_ad_ti8 = _fnw_ad_i * 8
+                let _fnw_ad_tval = load64 [_fnw_ad_tree + _fnw_ad_ti8]
+                let _fnw_ad_tval = _fnw_ad_tval + _fnw_ad_delta
+                store64 [_fnw_ad_tree + _fnw_ad_ti8] _fnw_ad_tval
+
+                let _fnw_ad_lb = 1
+                let _fnw_ad_lb2 = 2
+                let _fnw_ad_rem = _fnw_ad_i % _fnw_ad_lb2
+                while _fnw_ad_rem == 0 {
+                    let _fnw_ad_lb = _fnw_ad_lb2
+                    let _fnw_ad_lb2 = _fnw_ad_lb2 * 2
+                    let _fnw_ad_rem = _fnw_ad_i % _fnw_ad_lb2
+                }
+                let _fnw_ad_i = _fnw_ad_i + _fnw_ad_lb
+            }
+        }
+    }
+    let nx_r0 = _fnw_ad_d
+}
+
+fn nx_fenwick_prefix_sum {
+    let _fnw_ps_d = nx_i0
+    let _fnw_ps_idx = nx_i1
+
+    let _fnw_ps_tree = load64 [_fnw_ps_d + 0]
+    let _fnw_ps_n = load64 [_fnw_ps_d + 8]
+
+    if _fnw_ps_idx < 0 {
+        let nx_r0 = 0
+    } else {
+        if _fnw_ps_idx >= _fnw_ps_n {
+            let _fnw_ps_idx = _fnw_ps_n - 1
+        }
+        let _fnw_ps_sum = 0
+        let _fnw_ps_i = _fnw_ps_idx + 1
+        while _fnw_ps_i > 0 {
+            let _fnw_ps_ti8 = _fnw_ps_i * 8
+            let _fnw_ps_tval = load64 [_fnw_ps_tree + _fnw_ps_ti8]
+            let _fnw_ps_sum = _fnw_ps_sum + _fnw_ps_tval
+
+            let _fnw_ps_lb = 1
+            let _fnw_ps_lb2 = 2
+            let _fnw_ps_rem = _fnw_ps_i % _fnw_ps_lb2
+            while _fnw_ps_rem == 0 {
+                let _fnw_ps_lb = _fnw_ps_lb2
+                let _fnw_ps_lb2 = _fnw_ps_lb2 * 2
+                let _fnw_ps_rem = _fnw_ps_i % _fnw_ps_lb2
+            }
+            let _fnw_ps_i = _fnw_ps_i - _fnw_ps_lb
+        }
+        let nx_r0 = _fnw_ps_sum
+    }
+}
+
+fn nx_fenwick_range_sum {
+    let _fnw_rs_d = nx_i0
+    let _fnw_rs_l = nx_i1
+    let _fnw_rs_r = nx_i2
+
+    let nx_i0 = _fnw_rs_d
+    let nx_i1 = _fnw_rs_r
+    call nx_fenwick_prefix_sum
+    let _fnw_rs_sum_r = nx_r0
+
+    let _fnw_rs_l_minus_1 = _fnw_rs_l - 1
+    let nx_i0 = _fnw_rs_d
+    let nx_i1 = _fnw_rs_l_minus_1
+    call nx_fenwick_prefix_sum
+    let _fnw_rs_sum_l = nx_r0
+
+    let nx_r0 = _fnw_rs_sum_r - _fnw_rs_sum_l
+}
+
+fn nx_fenwick_get {
+    let _fnw_g_d = nx_i0
+    let _fnw_g_idx = nx_i1
+    let _fnw_g_vals = load64 [_fnw_g_d + 16]
+    let _fnw_g_n = load64 [_fnw_g_d + 8]
+    if _fnw_g_idx < 0 {
+        let nx_r0 = 0
+    } else if _fnw_g_idx >= _fnw_g_n {
+        let nx_r0 = 0
+    } else {
+        let _fnw_g_i8 = _fnw_g_idx * 8
+        let nx_r0 = load64 [_fnw_g_vals + _fnw_g_i8]
+    }
+}
+
+fn nx_fenwick_set {
+    let _fnw_st_d = nx_i0
+    let _fnw_st_idx = nx_i1
+    let _fnw_st_val = nx_i2
+
+    let nx_i0 = _fnw_st_d
+    let nx_i1 = _fnw_st_idx
+    call nx_fenwick_get
+    let _fnw_st_cur = nx_r0
+    let _fnw_st_delta = _fnw_st_val - _fnw_st_cur
+
+    let nx_i0 = _fnw_st_d
+    let nx_i1 = _fnw_st_idx
+    let nx_i2 = _fnw_st_delta
+    call nx_fenwick_add
+    let nx_r0 = _fnw_st_d
+}
+
+fn nx_fenwick_find_kth {
+    let _fnw_fk_d = nx_i0
+    let _fnw_fk_target = nx_i1
+
+    let _fnw_fk_tree = load64 [_fnw_fk_d + 0]
+    let _fnw_fk_n = load64 [_fnw_fk_d + 8]
+
+    # Find highest power of 2 <= n
+    let _fnw_fk_mask = 1
+    while (_fnw_fk_mask * 2) <= _fnw_fk_n {
+        let _fnw_fk_mask = _fnw_fk_mask * 2
+    }
+
+    let _fnw_fk_idx = 0
+    while _fnw_fk_mask > 0 {
+        let _fnw_fk_nxt = _fnw_fk_idx + _fnw_fk_mask
+        if _fnw_fk_nxt <= _fnw_fk_n {
+            let _fnw_fk_nxt8 = _fnw_fk_nxt * 8
+            let _fnw_fk_tval = load64 [_fnw_fk_tree + _fnw_fk_nxt8]
+            if _fnw_fk_target > _fnw_fk_tval {
+                let _fnw_fk_idx = _fnw_fk_nxt
+                let _fnw_fk_target = _fnw_fk_target - _fnw_fk_tval
+            }
+        }
+        let _fnw_fk_mask = _fnw_fk_mask / 2
+    }
+    # 0-based index is _fnw_fk_idx (which was 1-based index of item just before target)
+    let nx_r0 = _fnw_fk_idx
+}

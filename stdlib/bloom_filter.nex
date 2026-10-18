@@ -1,0 +1,326 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: bloom_filter.nex
+#                    Probabilistic Bloom Filter (Feature #79)
+# ==============================================================================
+#
+# Memory Layout of BloomFilter descriptor (48 bytes):
+#   offset 0:  bit_buf     - pointer to raw bit array
+#   offset 8:  bit_size    - total bit capacity m (>= 64)
+#   offset 16: num_hashes  - number of hash functions k (e.g. 4)
+#   offset 24: count       - number of distinct insertions
+#   offset 32: popcount    - count of set bits (1s)
+#   offset 40: byte_size   - total byte length of bit_buf: (m + 7) / 8
+#
+# Double Hashing Scheme:
+#   index(i) = ((h1 + i * h2) % m + m) % m, for i in 0 .. k-1
+#
+# Bit Operations:
+#   Bit mask for bit b (0..7) is 2^b.
+#   Bit test: (byte_val / mask) % 2 == 1
+#   Bit set:  if ((byte_val / mask) % 2 == 0) { byte_val = byte_val + mask }
+#
+# CALLING CONVENTION:
+#   nx_i0 = filter descriptor
+#   nx_i1 = key (integer or string pointer)
+#   nx_r0 = result
+# ==============================================================================
+
+fn nx_bloom_new {
+    let _bf_bits = nx_i0
+    let _bf_k = nx_i1
+    if _bf_bits < 64 {
+        let _bf_bits = 64
+    }
+    if _bf_k < 1 {
+        let _bf_k = 4
+    }
+    if _bf_k > 16 {
+        let _bf_k = 16
+    }
+    let _bf_bytes = _bf_bits + 7
+    let _bf_bytes = _bf_bytes / 8
+    let _bf_raw = alloc _bf_bytes
+    # Zero buffer
+    let _bf_zi = 0
+    while _bf_zi < _bf_bytes {
+        store [_bf_raw + _bf_zi] 0
+        let _bf_zi = _bf_zi + 1
+    }
+
+    let _bf_desc = alloc 48
+    store64 [_bf_desc + 0] _bf_raw
+    store64 [_bf_desc + 8] _bf_bits
+    store64 [_bf_desc + 16] _bf_k
+    store64 [_bf_desc + 24] 0
+    store64 [_bf_desc + 32] 0
+    store64 [_bf_desc + 40] _bf_bytes
+    let nx_r0 = _bf_desc
+}
+
+fn nx_bloom_add {
+    let _bfa_d = nx_i0
+    let _bfa_key = nx_i1
+
+    let _bfa_buf = load64 [_bfa_d + 0]
+    let _bfa_m = load64 [_bfa_d + 8]
+    let _bfa_k = load64 [_bfa_d + 16]
+
+    let _bfa_h1 = _bfa_key * 2654435761 + 97
+    if _bfa_h1 < 0 {
+        let _bfa_h1 = 0 - _bfa_h1
+    }
+    let _bfa_h2 = _bfa_key * 2246822519 + 101
+    if _bfa_h2 < 0 {
+        let _bfa_h2 = 0 - _bfa_h2
+    }
+    if _bfa_h2 == 0 {
+        let _bfa_h2 = 1
+    }
+
+    let _bfa_i = 0
+    while _bfa_i < _bfa_k {
+        let _bfa_comb = _bfa_h1 + _bfa_i * _bfa_h2
+        if _bfa_comb < 0 {
+            let _bfa_comb = 0 - _bfa_comb
+        }
+        let _bfa_bit = _bfa_comb % _bfa_m
+        let _bfa_byte_off = _bfa_bit / 8
+        let _bfa_bit_rem = _bfa_bit % 8
+
+        let _bfa_mask = 1
+        let _bfa_s = 0
+        while _bfa_s < _bfa_bit_rem {
+            let _bfa_mask = _bfa_mask * 2
+            let _bfa_s = _bfa_s + 1
+        }
+
+        let _bfa_cur = load [_bfa_buf + _bfa_byte_off]
+        let _bfa_bit_val = _bfa_cur / _bfa_mask
+        let _bfa_bit_val = _bfa_bit_val % 2
+        if _bfa_bit_val == 0 {
+            let _bfa_new_byte = _bfa_cur + _bfa_mask
+            store [_bfa_buf + _bfa_byte_off] _bfa_new_byte
+            let _bfa_pop = load64 [_bfa_d + 32]
+            let _bfa_pop = _bfa_pop + 1
+            store64 [_bfa_d + 32] _bfa_pop
+        }
+        let _bfa_i = _bfa_i + 1
+    }
+
+    let _bfa_cnt = load64 [_bfa_d + 24]
+    let _bfa_cnt = _bfa_cnt + 1
+    store64 [_bfa_d + 24] _bfa_cnt
+    let nx_r0 = _bfa_d
+}
+
+fn nx_bloom_might_contain {
+    let _bmc_d = nx_i0
+    let _bmc_key = nx_i1
+
+    let _bmc_buf = load64 [_bmc_d + 0]
+    let _bmc_m = load64 [_bmc_d + 8]
+    let _bmc_k = load64 [_bmc_d + 16]
+
+    let _bmc_h1 = _bmc_key * 2654435761 + 97
+    if _bmc_h1 < 0 {
+        let _bmc_h1 = 0 - _bmc_h1
+    }
+    let _bmc_h2 = _bmc_key * 2246822519 + 101
+    if _bmc_h2 < 0 {
+        let _bmc_h2 = 0 - _bmc_h2
+    }
+    if _bmc_h2 == 0 {
+        let _bmc_h2 = 1
+    }
+
+    let _bmc_res = 1
+    let _bmc_i = 0
+    while _bmc_i < _bmc_k {
+        let _bmc_comb = _bmc_h1 + _bmc_i * _bmc_h2
+        if _bmc_comb < 0 {
+            let _bmc_comb = 0 - _bmc_comb
+        }
+        let _bmc_bit = _bmc_comb % _bmc_m
+        let _bmc_byte_off = _bmc_bit / 8
+        let _bmc_bit_rem = _bmc_bit % 8
+
+        let _bmc_mask = 1
+        let _bmc_s = 0
+        while _bmc_s < _bmc_bit_rem {
+            let _bmc_mask = _bmc_mask * 2
+            let _bmc_s = _bmc_s + 1
+        }
+
+        let _bmc_cur = load [_bmc_buf + _bmc_byte_off]
+        let _bmc_bit_val = _bmc_cur / _bmc_mask
+        let _bmc_bit_val = _bmc_bit_val % 2
+        if _bmc_bit_val == 0 {
+            let _bmc_res = 0
+            let _bmc_i = _bmc_k
+        } else {
+            let _bmc_i = _bmc_i + 1
+        }
+    }
+    let nx_r0 = _bmc_res
+}
+
+fn nx_bloom_add_str {
+    let _bfa_sd = nx_i0
+    let _bfa_sstr = nx_i1
+
+    let _bfa_sbuf = load64 [_bfa_sd + 0]
+    let _bfa_sm = load64 [_bfa_sd + 8]
+    let _bfa_sk = load64 [_bfa_sd + 16]
+
+    let _bfa_sh1 = 5381
+    let _bfa_si = 0
+    let _bfa_sc = load [_bfa_sstr + 0]
+    while _bfa_sc != 0 {
+        let _bfa_sh1 = _bfa_sh1 * 33 + _bfa_sc
+        let _bfa_si = _bfa_si + 1
+        let _bfa_sc = load [_bfa_sstr + _bfa_si]
+    }
+    if _bfa_sh1 < 0 {
+        let _bfa_sh1 = 0 - _bfa_sh1
+    }
+
+    let _bfa_sh2 = 10007
+    let _bfa_si = 0
+    let _bfa_sc = load [_bfa_sstr + 0]
+    while _bfa_sc != 0 {
+        let _bfa_sh2 = _bfa_sh2 * 31 + _bfa_sc
+        let _bfa_si = _bfa_si + 1
+        let _bfa_sc = load [_bfa_sstr + _bfa_si]
+    }
+    if _bfa_sh2 < 0 {
+        let _bfa_sh2 = 0 - _bfa_sh2
+    }
+    if _bfa_sh2 == 0 {
+        let _bfa_sh2 = 1
+    }
+
+    let _bfa_j = 0
+    while _bfa_j < _bfa_sk {
+        let _bfa_comb = _bfa_sh1 + _bfa_j * _bfa_sh2
+        if _bfa_comb < 0 {
+            let _bfa_comb = 0 - _bfa_comb
+        }
+        let _bfa_bit = _bfa_comb % _bfa_sm
+        let _bfa_byte_off = _bfa_bit / 8
+        let _bfa_bit_rem = _bfa_bit % 8
+
+        let _bfa_mask = 1
+        let _bfa_s = 0
+        while _bfa_s < _bfa_bit_rem {
+            let _bfa_mask = _bfa_mask * 2
+            let _bfa_s = _bfa_s + 1
+        }
+
+        let _bfa_cur = load [_bfa_sbuf + _bfa_byte_off]
+        let _bfa_bit_val = _bfa_cur / _bfa_mask
+        let _bfa_bit_val = _bfa_bit_val % 2
+        if _bfa_bit_val == 0 {
+            let _bfa_new_byte = _bfa_cur + _bfa_mask
+            store [_bfa_sbuf + _bfa_byte_off] _bfa_new_byte
+            let _bfa_pop = load64 [_bfa_sd + 32]
+            let _bfa_pop = _bfa_pop + 1
+            store64 [_bfa_sd + 32] _bfa_pop
+        }
+        let _bfa_j = _bfa_j + 1
+    }
+
+    let _bfa_cnt = load64 [_bfa_sd + 24]
+    let _bfa_cnt = _bfa_cnt + 1
+    store64 [_bfa_sd + 24] _bfa_cnt
+    let nx_r0 = _bfa_sd
+}
+
+fn nx_bloom_might_contain_str {
+    let _bmcs_d = nx_i0
+    let _bmcs_str = nx_i1
+
+    let _bmcs_buf = load64 [_bmcs_d + 0]
+    let _bmcs_m = load64 [_bmcs_d + 8]
+    let _bmcs_k = load64 [_bmcs_d + 16]
+
+    let _bmcs_h1 = 5381
+    let _bmcs_i = 0
+    let _bmcs_c = load [_bmcs_str + 0]
+    while _bmcs_c != 0 {
+        let _bmcs_h1 = _bmcs_h1 * 33 + _bmcs_c
+        let _bmcs_i = _bmcs_i + 1
+        let _bmcs_c = load [_bmcs_str + _bmcs_i]
+    }
+    if _bmcs_h1 < 0 {
+        let _bmcs_h1 = 0 - _bmcs_h1
+    }
+
+    let _bmcs_h2 = 10007
+    let _bmcs_i = 0
+    let _bmcs_c = load [_bmcs_str + 0]
+    while _bmcs_c != 0 {
+        let _bmcs_h2 = _bmcs_h2 * 31 + _bmcs_c
+        let _bmcs_i = _bmcs_i + 1
+        let _bmcs_c = load [_bmcs_str + _bmcs_i]
+    }
+    if _bmcs_h2 < 0 {
+        let _bmcs_h2 = 0 - _bmcs_h2
+    }
+    if _bmcs_h2 == 0 {
+        let _bmcs_h2 = 1
+    }
+
+    let _bmcs_res = 1
+    let _bmcs_j = 0
+    while _bmcs_j < _bmcs_k {
+        let _bmcs_comb = _bmcs_h1 + _bmcs_j * _bmcs_h2
+        if _bmcs_comb < 0 {
+            let _bmcs_comb = 0 - _bmcs_comb
+        }
+        let _bmcs_bit = _bmcs_comb % _bmcs_m
+        let _bmcs_byte_off = _bmcs_bit / 8
+        let _bmcs_bit_rem = _bmcs_bit % 8
+
+        let _bmcs_mask = 1
+        let _bmcs_s = 0
+        while _bmcs_s < _bmcs_bit_rem {
+            let _bmcs_mask = _bmcs_mask * 2
+            let _bmcs_s = _bmcs_s + 1
+        }
+
+        let _bmcs_cur = load [_bmcs_buf + _bmcs_byte_off]
+        let _bmcs_bit_val = _bmcs_cur / _bmcs_mask
+        let _bmcs_bit_val = _bmcs_bit_val % 2
+        if _bmcs_bit_val == 0 {
+            let _bmcs_res = 0
+            let _bmcs_j = _bmcs_k
+        } else {
+            let _bmcs_j = _bmcs_j + 1
+        }
+    }
+    let nx_r0 = _bmcs_res
+}
+
+fn nx_bloom_count {
+    let _bc_d = nx_i0
+    let nx_r0 = load64 [_bc_d + 24]
+}
+
+fn nx_bloom_popcount {
+    let _bp_d = nx_i0
+    let nx_r0 = load64 [_bp_d + 32]
+}
+
+fn nx_bloom_clear {
+    let _bcl_d = nx_i0
+    let _bcl_buf = load64 [_bcl_d + 0]
+    let _bcl_bytes = load64 [_bcl_d + 40]
+    let _bcl_i = 0
+    while _bcl_i < _bcl_bytes {
+        store [_bcl_buf + _bcl_i] 0
+        let _bcl_i = _bcl_i + 1
+    }
+    store64 [_bcl_d + 24] 0
+    store64 [_bcl_d + 32] 0
+    let nx_r0 = _bcl_d
+}

@@ -226,14 +226,9 @@ PYBUILD
         fi
         ;;
     prep)
-        [ -z "${2:-}" ] && usage
-        src="$(realpath "$2")"
-        out="${3:-}"
-        if [ -n "$out" ]; then
-            "$NEXPREP" "$src" "$out"
-        else
-            "$NEXPREP" "$src"
-        fi
+        shift
+        [ $# -eq 0 ] && usage
+        exec "$NEXPREP" "$@"
         ;;
     run)
         [ -z "${2:-}" ] && usage
@@ -422,6 +417,8 @@ def log_pass(msg):
 
 base_dir = "'"$SCRIPT_DIR"'"
 compiler_dir = os.path.join(base_dir, "compiler")
+code_nex_path = os.path.join(compiler_dir, "code.nex")
+saved_code_nex = open(code_nex_path, "rb").read() if os.path.exists(code_nex_path) else None
 nexload = os.path.join(base_dir, "bin", "nexload")
 nexelf = os.path.join(base_dir, "bin", "nexelf")
 nexprep = os.path.join(base_dir, "bin", "nexprep")
@@ -1013,6 +1010,56 @@ if os.path.exists(search_src):
         else:
             print("[-] Binary search suite: FAIL")
 
+# HYDRON Overflow & Turbine 8 Gauss Triangular Sum Suite (21 assertions)
+hyd_ovf_ok = False
+hyd_ovf_src = os.path.join(base_dir, "tests", "test_hydron_overflow.nex")
+if os.path.exists(hyd_ovf_src):
+    subprocess.run([nexprep, hyd_ovf_src, os.path.join(compiler_dir, "code.nex")], check=True)
+    for f_clean in ["app.exe", "app.elf"]:
+        fp = os.path.join(compiler_dir, f_clean)
+        if os.path.exists(fp): os.remove(fp)
+    subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+    if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+    if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+        out_ho = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+        if "ASSERTIONS: 21 passed, 0 failed" in out_ho:
+            log_pass("[+] HYDRON overflow & Gauss suite: 21 assertions PASS")
+            hyd_ovf_ok = True
+        else:
+            print("[-] HYDRON overflow suite: FAIL")
+
+# v8.7 Standard Library & Compiler Ergonomics Suites
+v87_suites = [
+    ("tests/test_gap_buffer.nex", "GAP_BUFFER_TEST_PASS", "Gap buffer suite: Feature #69 (insert, delete, cursor, auto-grow)"),
+    ("tests/test_bloom_filter.nex", "BLOOM_FILTER_TEST_PASS", "Bloom filter suite: Feature #79 (double hashing, int/str keys)"),
+    ("tests/test_pattern_search.nex", "PATTERN_SEARCH_TEST_PASS", "Pattern search suite: Features #89 & #90 (KMP & Boyer-Moore-Horspool)"),
+    ("tests/test_fenwick_uf.nex", "FENWICK_UF_TEST_PASS", "Fenwick & Union-Find suite: Features #105 & #107 (BIT & DSU)"),
+    ("tests/test_base64.nex", "BASE64_TEST_PASS", "Base64 suite: Feature #144 (RFC 4648 encode & decode)"),
+    ("tests/test_strings_v87.nex", "STRINGS_V87_TEST_PASS", "Strings & Ergonomics v8.7: #29, #34, #135-#139, parens & Gauss")
+]
+v87_ok = True
+for rel_p, marker, desc in v87_suites:
+    sp = os.path.join(base_dir, rel_p)
+    if os.path.exists(sp):
+        subprocess.run([nexprep, sp, os.path.join(compiler_dir, "code.nex")], check=True)
+        for f_clean in ["app.exe", "app.elf"]:
+            fp = os.path.join(compiler_dir, f_clean)
+            if os.path.exists(fp): os.remove(fp)
+        subprocess.run([os.path.join(compiler_dir, "nexc.elf")], cwd=compiler_dir, capture_output=True)
+        if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
+            subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)
+        if os.path.exists(os.path.join(compiler_dir, "app.elf")):
+            out_s = subprocess.run([os.path.join(compiler_dir, "app.elf")], capture_output=True, text=True).stdout
+            if marker in out_s and "0 failed" in out_s:
+                log_pass(f"[+] {desc} PASS")
+            else:
+                print(f"[-] {desc} FAIL")
+                v87_ok = False
+        else:
+            print(f"[-] {desc} FAIL (compile)")
+            v87_ok = False
+
 # N-IR Engine & VM Verification Suite
 nir_ok = False
 nexir_bin = os.path.join(base_dir, "bin", "nexir")
@@ -1055,10 +1102,14 @@ utf_status = "PASS" if utf_ok else "FAIL"
 splitjoin_status = "PASS" if splitjoin_ok else "FAIL"
 search_status = "PASS" if search_ok else "FAIL"
 nir_status = "PASS" if nir_ok else "FAIL"
+ho_status = "PASS" if hyd_ovf_ok else "FAIL"
+v87_status = "PASS" if v87_ok else "FAIL"
+if saved_code_nex is not None:
+    open(code_nex_path, "wb").write(saved_code_nex)
 if quiet:
-    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle, memory_bundle, byte_buffer_bundle, bit_stream_bundle, priority_queue_bundle, linked_list_bundle, trie_bundle, lru_bundle, arena_bundle, unicode_bundle, split_join_bundle, binary_search_bundle, nir_bundle (ALL GREEN PASS)")
+    print(f"\033[0;32m[SUCCESS]\033[0m All {passed} example suites, {diag_passed} diagnostics, {found_passed} foundation tests, {interactive_passed} interactive tests, stdlib, optimizer, type_infer, native_ide, hydron, hydron_overflow, string_escapes, piece_table, syntax_bundle, loop_range_bundle, hashset_bundle, bitset_bundle, ring_buffer_bundle, memory_bundle, byte_buffer_bundle, bit_stream_bundle, priority_queue_bundle, linked_list_bundle, trie_bundle, lru_bundle, arena_bundle, unicode_bundle, split_join_bundle, binary_search_bundle, v87_bundle, nir_bundle (ALL GREEN PASS)")
 else:
-    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}, memory={mem_status}, byte_buffer={bb_status}, bit_stream={bitstream_status}, priority_queue={pq_status}, linked_list={ll_status}, trie={trie_status}, lru={lru_status}, arena={arena_status}, unicode={utf_status}, split_join={splitjoin_status}, binary_search={search_status}, nir={nir_status}")
+    print(f"\nCompleted: {passed} example suites, {diag_passed}/{len(diag_tests)} diagnostics, {found_passed}/{len(foundation_tests)} foundation tests, {interactive_passed}/{len(interactive_tests)} interactive tests, stdlib={s_ok}, optimizer={o_ok}, type_infer={t_ok}, native_ide={i_ok}, hydron_correctness={h_ok}, hydron_overflow={ho_status}, string_escapes={e_ok}, piece_table={p_ok}, syntax={syn_status}, loop_range={range_status}, hashset={hashset_status}, bitset={bitset_status}, ring_buffer={ring_buffer_status}, memory={mem_status}, byte_buffer={bb_status}, bit_stream={bitstream_status}, priority_queue={pq_status}, linked_list={ll_status}, trie={trie_status}, lru={lru_status}, arena={arena_status}, unicode={utf_status}, split_join={splitjoin_status}, binary_search={search_status}, v87_suites={v87_status}, nir={nir_status}")
 '
         ;;
     self-host)
@@ -1219,6 +1270,7 @@ print(f"    Runtime Mode:        Direct Linux x86-64 ELF64 (0% libc, direct kern
         echo -e "    \033[0;32m[+] Turbine 5:\033[0m Loop Optimization & Induction Scaling (128x Step Scaling)"
         echo -e "    \033[0;32m[+] Turbine 6:\033[0m Register Promotion Engine (Zero Stack RAM Writes & Invariant Peeling)"
         echo -e "    \033[0;32m[+] Turbine 7:\033[0m Scalar Evolution (SCEV) Recurrence Attractor Solver"
+        echo -e "    \033[0;32m[+] Turbine 8:\033[0m Closed-Form Gauss Triangular Summation Solver (O(1) Collapse)"
         echo -e "\n\033[1;33m[*] Benchmarking Semantic Loop Elimination (50M logical iterations)...\033[0m"
         python3 -c '
 import subprocess, time, os, sys

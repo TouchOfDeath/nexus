@@ -26,13 +26,13 @@ class ProgramGenerator:
         self.var_names = ["a", "b", "c", "d", "acc", "sum", "val"]
 
     def gen_arith_expr(self, depth=0):
-        if depth > 2 or self.rng.random() < 0.4:
+        if depth > 1 or self.rng.random() < 0.5:
             if self.rng.random() < 0.6:
-                return str(self.rng.randint(1, 100))
+                return str(self.rng.randint(1, 50))
             return self.rng.choice(self.var_names)
-        op = self.rng.choice(["+", "-", "*", "/"])
+        op = self.rng.choice(["+", "-", "*"])
         left = self.gen_arith_expr(depth + 1)
-        right = self.rng.randint(1, 20) if op in ("/", "*") else self.gen_arith_expr(depth + 1)
+        right = str(self.rng.randint(1, 15)) if op == "*" else self.gen_arith_expr(depth + 1)
         return f"{left} {op} {right}"
 
     def generate_program(self):
@@ -41,7 +41,11 @@ class ProgramGenerator:
         
         # Initialize variables
         for v in self.var_names:
-            lines.append(f"let {v} = {self.rng.randint(0, 50)}")
+            lines.append(f"let {v} = {self.rng.randint(1, 50)}")
+
+        # Exercise multi-operator precedence expressions via gen_arith_expr
+        target_expr = self.rng.choice(self.var_names)
+        lines.append(f"let {target_expr} = {self.gen_arith_expr(0)}")
 
         # Add counting loop
         limit = self.rng.randint(10, 200)

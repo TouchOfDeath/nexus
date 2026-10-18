@@ -1,0 +1,272 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: pattern_search.nex
+#           KMP & Boyer-Moore-Horspool Substring Search (Features #89 & #90)
+# ==============================================================================
+#
+# Algorithms:
+#   1. Knuth-Morris-Pratt (KMP):
+#      - nx_kmp_search(text, pattern) -> first 0-based match index, or -1
+#      - nx_kmp_count(text, pattern)  -> total count of pattern matches
+#   2. Boyer-Moore-Horspool (BMH):
+#      - nx_bmh_search(text, pattern) -> first 0-based match index, or -1
+#
+# CALLING CONVENTION:
+#   nx_i0 = text string pointer (null-terminated)
+#   nx_i1 = pattern string pointer (null-terminated)
+#   nx_r0 = result (index or count)
+# ==============================================================================
+
+fn nx_kmp_search {
+    let _kmp_text = nx_i0
+    let _kmp_pat = nx_i1
+
+    let _kmp_n = 0
+    let _kmp_c = load [_kmp_text + 0]
+    while _kmp_c != 0 {
+        let _kmp_n = _kmp_n + 1
+        let _kmp_c = load [_kmp_text + _kmp_n]
+    }
+
+    let _kmp_m = 0
+    let _kmp_c = load [_kmp_pat + 0]
+    while _kmp_c != 0 {
+        let _kmp_m = _kmp_m + 1
+        let _kmp_c = load [_kmp_pat + _kmp_m]
+    }
+
+    if _kmp_m == 0 {
+        let nx_r0 = 0
+    } else if _kmp_m > _kmp_n {
+        let nx_r0 = 0 - 1
+    } else {
+        # Build prefix table pi[m]
+        let _kmp_pi_bytes = _kmp_m * 8
+        let _kmp_pi = alloc _kmp_pi_bytes
+        store64 [_kmp_pi + 0] 0
+
+        let _kmp_j = 0
+        let _kmp_i = 1
+        while _kmp_i < _kmp_m {
+            let _kmp_pc_i = load [_kmp_pat + _kmp_i]
+            let _kmp_pc_j = load [_kmp_pat + _kmp_j]
+            while _kmp_j > 0 {
+                if _kmp_pc_i != _kmp_pc_j {
+                    let _kmp_j_prev = _kmp_j - 1
+                    let _kmp_j_prev_8 = _kmp_j_prev * 8
+                    let _kmp_j = load64 [_kmp_pi + _kmp_j_prev_8]
+                    let _kmp_pc_j = load [_kmp_pat + _kmp_j]
+                } else {
+                    let _kmp_pc_i = _kmp_pc_j
+                    # Break loop
+                    let _kmp_j = 0 - _kmp_j
+                }
+            }
+            if _kmp_j < 0 {
+                let _kmp_j = 0 - _kmp_j
+            }
+            if _kmp_pc_i == _kmp_pc_j {
+                let _kmp_j = _kmp_j + 1
+            }
+            let _kmp_i8 = _kmp_i * 8
+            store64 [_kmp_pi + _kmp_i8] _kmp_j
+            let _kmp_i = _kmp_i + 1
+        }
+
+        # Search in text
+        let _kmp_match_idx = 0 - 1
+        let _kmp_ti = 0
+        let _kmp_pj = 0
+        while _kmp_ti < _kmp_n {
+            let _kmp_tc = load [_kmp_text + _kmp_ti]
+            let _kmp_pc = load [_kmp_pat + _kmp_pj]
+            while _kmp_pj > 0 {
+                if _kmp_tc != _kmp_pc {
+                    let _kmp_pj_prev = _kmp_pj - 1
+                    let _kmp_pj_prev_8 = _kmp_pj_prev * 8
+                    let _kmp_pj = load64 [_kmp_pi + _kmp_pj_prev_8]
+                    let _kmp_pc = load [_kmp_pat + _kmp_pj]
+                } else {
+                    let _kmp_tc = _kmp_pc
+                    let _kmp_pj = 0 - _kmp_pj
+                }
+            }
+            if _kmp_pj < 0 {
+                let _kmp_pj = 0 - _kmp_pj
+            }
+            if _kmp_tc == _kmp_pc {
+                let _kmp_pj = _kmp_pj + 1
+            }
+            if _kmp_pj == _kmp_m {
+                let _kmp_match_idx = _kmp_ti - _kmp_m + 1
+                let _kmp_ti = _kmp_n
+            }
+            let _kmp_ti = _kmp_ti + 1
+        }
+        let nx_r0 = _kmp_match_idx
+    }
+}
+
+fn nx_kmp_count {
+    let _kmpc_text = nx_i0
+    let _kmpc_pat = nx_i1
+
+    let _kmpc_n = 0
+    let _kmpc_c = load [_kmpc_text + 0]
+    while _kmpc_c != 0 {
+        let _kmpc_n = _kmpc_n + 1
+        let _kmpc_c = load [_kmpc_text + _kmpc_n]
+    }
+
+    let _kmpc_m = 0
+    let _kmpc_c = load [_kmpc_pat + 0]
+    while _kmpc_c != 0 {
+        let _kmpc_m = _kmpc_m + 1
+        let _kmpc_c = load [_kmpc_pat + _kmpc_m]
+    }
+
+    if _kmpc_m == 0 {
+        let nx_r0 = 0
+    } else if _kmpc_m > _kmpc_n {
+        let nx_r0 = 0
+    } else {
+        let _kmpc_pi_bytes = _kmpc_m * 8
+        let _kmpc_pi = alloc _kmpc_pi_bytes
+        store64 [_kmpc_pi + 0] 0
+
+        let _kmpc_j = 0
+        let _kmpc_i = 1
+        while _kmpc_i < _kmpc_m {
+            let _kmpc_pc_i = load [_kmpc_pat + _kmpc_i]
+            let _kmpc_pc_j = load [_kmpc_pat + _kmpc_j]
+            while _kmpc_j > 0 {
+                if _kmpc_pc_i != _kmpc_pc_j {
+                    let _kmpc_j_prev = _kmpc_j - 1
+                    let _kmpc_j_prev_8 = _kmpc_j_prev * 8
+                    let _kmpc_j = load64 [_kmpc_pi + _kmpc_j_prev_8]
+                    let _kmpc_pc_j = load [_kmpc_pat + _kmpc_j]
+                } else {
+                    let _kmpc_pc_i = _kmpc_pc_j
+                    let _kmpc_j = 0 - _kmpc_j
+                }
+            }
+            if _kmpc_j < 0 {
+                let _kmpc_j = 0 - _kmpc_j
+            }
+            if _kmpc_pc_i == _kmpc_pc_j {
+                let _kmpc_j = _kmpc_j + 1
+            }
+            let _kmpc_i8 = _kmpc_i * 8
+            store64 [_kmpc_pi + _kmpc_i8] _kmpc_j
+            let _kmpc_i = _kmpc_i + 1
+        }
+
+        let _kmpc_total = 0
+        let _kmpc_ti = 0
+        let _kmpc_pj = 0
+        while _kmpc_ti < _kmpc_n {
+            let _kmpc_tc = load [_kmpc_text + _kmpc_ti]
+            let _kmpc_pc = load [_kmpc_pat + _kmpc_pj]
+            while _kmpc_pj > 0 {
+                if _kmpc_tc != _kmpc_pc {
+                    let _kmpc_pj_prev = _kmpc_pj - 1
+                    let _kmpc_pj_prev_8 = _kmpc_pj_prev * 8
+                    let _kmpc_pj = load64 [_kmpc_pi + _kmpc_pj_prev_8]
+                    let _kmpc_pc = load [_kmpc_pat + _kmpc_pj]
+                } else {
+                    let _kmpc_tc = _kmpc_pc
+                    let _kmpc_pj = 0 - _kmpc_pj
+                }
+            }
+            if _kmpc_pj < 0 {
+                let _kmpc_pj = 0 - _kmpc_pj
+            }
+            if _kmpc_tc == _kmpc_pc {
+                let _kmpc_pj = _kmpc_pj + 1
+            }
+            if _kmpc_pj == _kmpc_m {
+                let _kmpc_total = _kmpc_total + 1
+                let _kmpc_pj_prev = _kmpc_m - 1
+                let _kmpc_pj_prev_8 = _kmpc_pj_prev * 8
+                let _kmpc_pj = load64 [_kmpc_pi + _kmpc_pj_prev_8]
+            }
+            let _kmpc_ti = _kmpc_ti + 1
+        }
+        let nx_r0 = _kmpc_total
+    }
+}
+
+fn nx_bmh_search {
+    let _bmh_text = nx_i0
+    let _bmh_pat = nx_i1
+
+    let _bmh_n = 0
+    let _bmh_c = load [_bmh_text + 0]
+    while _bmh_c != 0 {
+        let _bmh_n = _bmh_n + 1
+        let _bmh_c = load [_bmh_text + _bmh_n]
+    }
+
+    let _bmh_m = 0
+    let _bmh_c = load [_bmh_pat + 0]
+    while _bmh_c != 0 {
+        let _bmh_m = _bmh_m + 1
+        let _bmh_c = load [_bmh_pat + _bmh_m]
+    }
+
+    if _bmh_m == 0 {
+        let nx_r0 = 0
+    } else if _bmh_m > _bmh_n {
+        let nx_r0 = 0 - 1
+    } else {
+        # Shift table for all 256 bytes (256 * 8 = 2048 bytes)
+        let _bmh_shift = alloc 2048
+        let _bmh_si = 0
+        while _bmh_si < 256 {
+            let _bmh_si8 = _bmh_si * 8
+            store64 [_bmh_shift + _bmh_si8] _bmh_m
+            let _bmh_si = _bmh_si + 1
+        }
+
+        # Populate shift table for pattern[0 .. m - 2]
+        let _bmh_m_minus_1 = _bmh_m - 1
+        let _bmh_k = 0
+        while _bmh_k < _bmh_m_minus_1 {
+            let _bmh_ch = load [_bmh_pat + _bmh_k]
+            let _bmh_ch8 = _bmh_ch * 8
+            let _bmh_sval = _bmh_m_minus_1 - _bmh_k
+            store64 [_bmh_shift + _bmh_ch8] _bmh_sval
+            let _bmh_k = _bmh_k + 1
+        }
+
+        # Search
+        let _bmh_res = 0 - 1
+        let _bmh_i = 0
+        let _bmh_limit = _bmh_n - _bmh_m
+        while _bmh_i <= _bmh_limit {
+            let _bmh_j = _bmh_m_minus_1
+            let _bmh_match = 1
+            while _bmh_j >= 0 {
+                let _bmh_t_idx = _bmh_i + _bmh_j
+                let _bmh_tc = load [_bmh_text + _bmh_t_idx]
+                let _bmh_pc = load [_bmh_pat + _bmh_j]
+                if _bmh_tc != _bmh_pc {
+                    let _bmh_match = 0
+                    let _bmh_j = 0 - 1
+                } else {
+                    let _bmh_j = _bmh_j - 1
+                }
+            }
+            if _bmh_match == 1 {
+                let _bmh_res = _bmh_i
+                let _bmh_i = _bmh_limit + 1
+            } else {
+                let _bmh_last_idx = _bmh_i + _bmh_m_minus_1
+                let _bmh_last_c = load [_bmh_text + _bmh_last_idx]
+                let _bmh_last_c8 = _bmh_last_c * 8
+                let _bmh_step = load64 [_bmh_shift + _bmh_last_c8]
+                let _bmh_i = _bmh_i + _bmh_step
+            }
+        }
+        let nx_r0 = _bmh_res
+    }
+}
