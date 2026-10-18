@@ -1,0 +1,185 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/strings.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Strings & Ergonomics v8.7
+#      Features: #29 (Char Lits), #34 (Booleans), #135-#139, Parens & Gauss
+# ==============================================================================
+
+print "--- TEST 1: nx_str_to_upper & nx_str_to_lower (#135) ---"
+let orig_str = "Hello, Nexus World 2026!"
+let buf_up = alloc 32
+let nx_i0 = orig_str
+let nx_i1 = buf_up
+call nx_str_to_upper
+assert_eq nx_r0, 24
+
+let nx_i0 = buf_up
+let nx_i1 = "HELLO, NEXUS WORLD 2026!"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let buf_lo = alloc 32
+let nx_i0 = buf_up
+let nx_i1 = buf_lo
+call nx_str_to_lower
+assert_eq nx_r0, 24
+
+let nx_i0 = buf_lo
+let nx_i1 = "hello, nexus world 2026!"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 2: nx_str_pad_left & nx_str_pad_right (#136) ---"
+let num_str = "42"
+let nx_i0 = num_str
+let nx_i1 = 5
+let nx_i2 = 48  # '0'
+call nx_str_pad_left
+let padded_left = nx_r0
+let nx_i0 = padded_left
+let nx_i1 = "00042"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let str_abc = "abc"
+let nx_i0 = str_abc
+let nx_i1 = 6
+let nx_i2 = 45  # '-'
+call nx_str_pad_right
+let padded_right = nx_r0
+let nx_i0 = padded_right
+let nx_i1 = "abc---"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+# Width smaller than length should return fresh copy
+let nx_i0 = str_abc
+let nx_i1 = 2
+let nx_i2 = 32
+call nx_str_pad_left
+let padded_short = nx_r0
+let nx_i0 = padded_short
+let nx_i1 = "abc"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 3: nx_str_index_of & nx_str_contains (#137) ---"
+let hay = "The quick brown fox jumps over the lazy dog"
+let nx_i0 = hay
+let nx_i1 = "brown"
+call nx_str_index_of
+assert_eq nx_r0, 10
+
+let nx_i0 = hay
+let nx_i1 = "brown"
+call nx_str_contains
+assert_eq nx_r0, 1
+
+let nx_i0 = hay
+let nx_i1 = "cat"
+call nx_str_index_of
+assert_eq nx_r0, -1
+
+let nx_i0 = hay
+let nx_i1 = "cat"
+call nx_str_contains
+assert_eq nx_r0, 0
+
+let nx_i0 = hay
+let nx_i1 = ""
+call nx_str_index_of
+assert_eq nx_r0, 0
+
+print "--- TEST 4: nx_str_replace (#138) ---"
+let rep_src = "banana split banana"
+let nx_i0 = rep_src
+let nx_i1 = "banana"
+let nx_i2 = "apple"
+call nx_str_replace
+let rep_res = nx_r0
+let nx_i0 = rep_res
+let nx_i1 = "apple split apple"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+let nx_i0 = rep_src
+let nx_i1 = "nomatch"
+let nx_i2 = "xyz"
+call nx_str_replace
+let rep_res2 = nx_r0
+let nx_i0 = rep_res2
+let nx_i1 = "banana split banana"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 5: nx_str_levenshtein (#139) ---"
+let nx_i0 = "kitten"
+let nx_i1 = "sitting"
+call nx_str_levenshtein
+assert_eq nx_r0, 3
+
+let nx_i0 = "flaw"
+let nx_i1 = "lawn"
+call nx_str_levenshtein
+assert_eq nx_r0, 2
+
+let nx_i0 = "nexus"
+let nx_i1 = "nexus"
+call nx_str_levenshtein
+assert_eq nx_r0, 0
+
+let nx_i0 = ""
+let nx_i1 = "abc"
+call nx_str_levenshtein
+assert_eq nx_r0, 3
+
+print "--- TEST 6: Parenthesized Expressions & Precedence ---"
+let paren1 = (1 + 2) * 3
+assert_eq paren1, 9
+
+let paren2 = 2 * (3 + 4)
+assert_eq paren2, 14
+
+let paren3 = (10 - (2 + 3)) * 2
+assert_eq paren3, 10
+
+let paren4 = ((10 + 20) / 2) - 5
+assert_eq paren4, 10
+
+print "--- TEST 7: Character Literals (#29) & Booleans (#34) ---"
+let lit_a = 'A'
+assert_eq lit_a, 65
+
+let lit_nl = '\n'
+assert_eq lit_nl, 10
+
+let lit_tab = '\t'
+assert_eq lit_tab, 9
+
+let lit_zero = '\0'
+assert_eq lit_zero, 0
+
+let lit_slash = '\\'
+assert_eq lit_slash, 92
+
+let lit_hex = '\x41'
+assert_eq lit_hex, 65
+
+let bool_t = true
+assert_eq bool_t, 1
+
+let bool_f = false
+assert_eq bool_f, 0
+
+print "--- TEST 8: Gauss Triangular Summation (Turbine 8) ---"
+let g_sum = 0
+let g_i = 1
+while g_i <= 100 {
+    let g_sum = g_sum + g_i
+    let g_i = g_i + 1
+}
+assert_eq g_sum, 5050
+
+print "STRINGS_V87_TEST_PASS"
+call nx_assert_summary

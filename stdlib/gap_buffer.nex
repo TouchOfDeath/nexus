@@ -1,0 +1,269 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: gap_buffer.nex
+#                     Gap Buffer Text Editor Buffer (Feature #69)
+# ==============================================================================
+#
+# Memory Layout of GapBuffer descriptor (40 bytes):
+#   offset 0:  buf_ptr   - pointer to allocated memory buffer
+#   offset 8:  capacity  - total allocated capacity in bytes
+#   offset 16: gap_start - byte index of the beginning of the gap (cursor position)
+#   offset 24: gap_end   - byte index of the end of the gap
+#   offset 32: _reserved - reserved (0)
+#
+# Logical string length = capacity - (gap_end - gap_start)
+# Gap size = gap_end - gap_start
+# Cursor position = gap_start
+#
+# CALLING CONVENTION:
+#   nx_i0 = gap buffer descriptor pointer
+#   nx_i1 = parameter 1 (char, pos, string pointer, index)
+#   nx_r0 = result
+# ==============================================================================
+
+fn nx_gb_new {
+    let _gb_init_cap = nx_i0
+    if _gb_init_cap < 16 {
+        let _gb_init_cap = 16
+    }
+    let _gb_raw = alloc _gb_init_cap
+    let _gb_desc = alloc 40
+    store64 [_gb_desc + 0] _gb_raw
+    store64 [_gb_desc + 8] _gb_init_cap
+    store64 [_gb_desc + 16] 0
+    store64 [_gb_desc + 24] _gb_init_cap
+    store64 [_gb_desc + 32] 0
+    let nx_r0 = _gb_desc
+}
+
+fn nx_gb_len {
+    let _gb_d = nx_i0
+    let _gb_cap = load64 [_gb_d + 8]
+    let _gb_gs = load64 [_gb_d + 16]
+    let _gb_ge = load64 [_gb_d + 24]
+    let _gb_gsize = _gb_ge - _gb_gs
+    let nx_r0 = _gb_cap - _gb_gsize
+}
+
+fn nx_gb_gap_size {
+    let _gb_d = nx_i0
+    let _gb_gs = load64 [_gb_d + 16]
+    let _gb_ge = load64 [_gb_d + 24]
+    let nx_r0 = _gb_ge - _gb_gs
+}
+
+fn nx_gb_cursor {
+    let _gb_d = nx_i0
+    let nx_r0 = load64 [_gb_d + 16]
+}
+
+fn nx_gb_grow {
+    let _gb_gr_d = nx_i0
+    let _gb_gr_buf = load64 [_gb_gr_d + 0]
+    let _gb_gr_cap = load64 [_gb_gr_d + 8]
+    let _gb_gr_gs = load64 [_gb_gr_d + 16]
+    let _gb_gr_ge = load64 [_gb_gr_d + 24]
+
+    let _gb_gr_new_cap = _gb_gr_cap * 2
+    if _gb_gr_new_cap < 32 {
+        let _gb_gr_new_cap = 32
+    }
+    let _gb_gr_new_buf = alloc _gb_gr_new_cap
+
+    # Copy prefix [0 .. _gb_gr_gs - 1]
+    let _gb_gr_i = 0
+    while _gb_gr_i < _gb_gr_gs {
+        let _gb_gr_b = load [_gb_gr_buf + _gb_gr_i]
+        store [_gb_gr_new_buf + _gb_gr_i] _gb_gr_b
+        let _gb_gr_i = _gb_gr_i + 1
+    }
+
+    # Suffix length:
+    let _gb_gr_suf_len = _gb_gr_cap - _gb_gr_ge
+    let _gb_gr_new_ge = _gb_gr_new_cap - _gb_gr_suf_len
+
+    # Copy suffix [_gb_gr_ge .. _gb_gr_cap - 1] -> [_gb_gr_new_ge .. _gb_gr_new_cap - 1]
+    let _gb_gr_j = 0
+    while _gb_gr_j < _gb_gr_suf_len {
+        let _gb_gr_src_idx = _gb_gr_ge + _gb_gr_j
+        let _gb_gr_dst_idx = _gb_gr_new_ge + _gb_gr_j
+        let _gb_gr_b = load [_gb_gr_buf + _gb_gr_src_idx]
+        store [_gb_gr_new_buf + _gb_gr_dst_idx] _gb_gr_b
+        let _gb_gr_j = _gb_gr_j + 1
+    }
+
+    store64 [_gb_gr_d + 0] _gb_gr_new_buf
+    store64 [_gb_gr_d + 8] _gb_gr_new_cap
+    store64 [_gb_gr_d + 24] _gb_gr_new_ge
+}
+
+fn nx_gb_move_cursor {
+    let _gb_mc_d = nx_i0
+    let _gb_mc_target = nx_i1
+
+    let _gb_mc_buf = load64 [_gb_mc_d + 0]
+    let _gb_mc_cap = load64 [_gb_mc_d + 8]
+    let _gb_mc_gs = load64 [_gb_mc_d + 16]
+    let _gb_mc_ge = load64 [_gb_mc_d + 24]
+    let _gb_mc_len = _gb_mc_cap - (_gb_mc_ge - _gb_mc_gs)
+
+    if _gb_mc_target < 0 {
+        let _gb_mc_target = 0
+    }
+    if _gb_mc_target > _gb_mc_len {
+        let _gb_mc_target = _gb_mc_len
+    }
+
+    if _gb_mc_target < _gb_mc_gs {
+        # Move gap left: shift text between target and _gb_mc_gs to right
+        let _gb_mc_shift = _gb_mc_gs - _gb_mc_target
+        let _gb_mc_k = 1
+        while _gb_mc_k <= _gb_mc_shift {
+            let _gb_mc_from = _gb_mc_gs - _gb_mc_k
+            let _gb_mc_to = _gb_mc_ge - _gb_mc_k
+            let _gb_mc_val = load [_gb_mc_buf + _gb_mc_from]
+            store [_gb_mc_buf + _gb_mc_to] _gb_mc_val
+            let _gb_mc_k = _gb_mc_k + 1
+        }
+        let _gb_mc_gs = _gb_mc_target
+        let _gb_mc_ge = _gb_mc_ge - _gb_mc_shift
+        store64 [_gb_mc_d + 16] _gb_mc_gs
+        store64 [_gb_mc_d + 24] _gb_mc_ge
+    } else if _gb_mc_target > _gb_mc_gs {
+        # Move gap right: shift text after gap to left
+        let _gb_mc_shift = _gb_mc_target - _gb_mc_gs
+        let _gb_mc_k = 0
+        while _gb_mc_k < _gb_mc_shift {
+            let _gb_mc_from = _gb_mc_ge + _gb_mc_k
+            let _gb_mc_to = _gb_mc_gs + _gb_mc_k
+            let _gb_mc_val = load [_gb_mc_buf + _gb_mc_from]
+            store [_gb_mc_buf + _gb_mc_to] _gb_mc_val
+            let _gb_mc_k = _gb_mc_k + 1
+        }
+        let _gb_mc_gs = _gb_mc_target
+        let _gb_mc_ge = _gb_mc_ge + _gb_mc_shift
+        store64 [_gb_mc_d + 16] _gb_mc_gs
+        store64 [_gb_mc_d + 24] _gb_mc_ge
+    }
+
+    let nx_r0 = _gb_mc_gs
+}
+
+fn nx_gb_insert_char {
+    let _gb_ic_d = nx_i0
+    let _gb_ic_ch = nx_i1
+
+    let _gb_ic_gs = load64 [_gb_ic_d + 16]
+    let _gb_ic_ge = load64 [_gb_ic_d + 24]
+    if _gb_ic_gs == _gb_ic_ge {
+        let nx_i0 = _gb_ic_d
+        call nx_gb_grow
+        let _gb_ic_gs = load64 [_gb_ic_d + 16]
+        let _gb_ic_ge = load64 [_gb_ic_d + 24]
+    }
+
+    let _gb_ic_buf = load64 [_gb_ic_d + 0]
+    store [_gb_ic_buf + _gb_ic_gs] _gb_ic_ch
+    let _gb_ic_gs = _gb_ic_gs + 1
+    store64 [_gb_ic_d + 16] _gb_ic_gs
+    let nx_r0 = _gb_ic_d
+}
+
+fn nx_gb_insert_str {
+    let _gb_is_d = nx_i0
+    let _gb_is_str = nx_i1
+    let _gb_is_i = 0
+    let _gb_is_c = load [_gb_is_str + 0]
+    while _gb_is_c != 0 {
+        let nx_i0 = _gb_is_d
+        let nx_i1 = _gb_is_c
+        call nx_gb_insert_char
+        let _gb_is_i = _gb_is_i + 1
+        let _gb_is_c = load [_gb_is_str + _gb_is_i]
+    }
+    let nx_r0 = _gb_is_d
+}
+
+fn nx_gb_delete_back {
+    let _gb_db_d = nx_i0
+    let _gb_db_gs = load64 [_gb_db_d + 16]
+    if _gb_db_gs > 0 {
+        let _gb_db_gs = _gb_db_gs - 1
+        store64 [_gb_db_d + 16] _gb_db_gs
+        let nx_r0 = 1
+    } else {
+        let nx_r0 = 0
+    }
+}
+
+fn nx_gb_delete_fwd {
+    let _gb_df_d = nx_i0
+    let _gb_df_cap = load64 [_gb_df_d + 8]
+    let _gb_df_ge = load64 [_gb_df_d + 24]
+    if _gb_df_ge < _gb_df_cap {
+        let _gb_df_ge = _gb_df_ge + 1
+        store64 [_gb_df_d + 24] _gb_df_ge
+        let nx_r0 = 1
+    } else {
+        let nx_r0 = 0
+    }
+}
+
+fn nx_gb_get_char {
+    let _gb_gc_d = nx_i0
+    let _gb_gc_idx = nx_i1
+    let _gb_gc_buf = load64 [_gb_gc_d + 0]
+    let _gb_gc_cap = load64 [_gb_gc_d + 8]
+    let _gb_gc_gs = load64 [_gb_gc_d + 16]
+    let _gb_gc_ge = load64 [_gb_gc_d + 24]
+    let _gb_gc_len = _gb_gc_cap - (_gb_gc_ge - _gb_gc_gs)
+
+    if _gb_gc_idx < 0 {
+        let nx_r0 = 0 - 1
+    } else if _gb_gc_idx >= _gb_gc_len {
+        let nx_r0 = 0 - 1
+    } else if _gb_gc_idx < _gb_gc_gs {
+        let nx_r0 = load [_gb_gc_buf + _gb_gc_idx]
+    } else {
+        let _gb_gc_off = _gb_gc_idx + (_gb_gc_ge - _gb_gc_gs)
+        let nx_r0 = load [_gb_gc_buf + _gb_gc_off]
+    }
+}
+
+fn nx_gb_to_str {
+    let _gb_ts_d = nx_i0
+    let _gb_ts_buf = load64 [_gb_ts_d + 0]
+    let _gb_ts_cap = load64 [_gb_ts_d + 8]
+    let _gb_ts_gs = load64 [_gb_ts_d + 16]
+    let _gb_ts_ge = load64 [_gb_ts_d + 24]
+    let _gb_ts_len = _gb_ts_cap - (_gb_ts_ge - _gb_ts_gs)
+
+    let _gb_ts_alloc = _gb_ts_len + 1
+    let _gb_ts_out = alloc _gb_ts_alloc
+    # Copy prefix
+    let _gb_ts_i = 0
+    while _gb_ts_i < _gb_ts_gs {
+        let _gb_ts_c = load [_gb_ts_buf + _gb_ts_i]
+        store [_gb_ts_out + _gb_ts_i] _gb_ts_c
+        let _gb_ts_i = _gb_ts_i + 1
+    }
+    # Copy suffix
+    let _gb_ts_suf = _gb_ts_cap - _gb_ts_ge
+    let _gb_ts_j = 0
+    while _gb_ts_j < _gb_ts_suf {
+        let _gb_ts_src = _gb_ts_ge + _gb_ts_j
+        let _gb_ts_dst = _gb_ts_gs + _gb_ts_j
+        let _gb_ts_c = load [_gb_ts_buf + _gb_ts_src]
+        store [_gb_ts_out + _gb_ts_dst] _gb_ts_c
+        let _gb_ts_j = _gb_ts_j + 1
+    }
+    store [_gb_ts_out + _gb_ts_len] 0
+    let nx_r0 = _gb_ts_out
+}
+
+fn nx_gb_clear {
+    let _gb_cl_d = nx_i0
+    let _gb_cl_cap = load64 [_gb_cl_d + 8]
+    store64 [_gb_cl_d + 16] 0
+    store64 [_gb_cl_d + 24] _gb_cl_cap
+    let nx_r0 = _gb_cl_d
+}

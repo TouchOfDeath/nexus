@@ -15,6 +15,9 @@
 #                      nx_str_chr nx_str_starts_with nx_str_ends_with
 #                      nx_str_trim nx_str_normalize_newlines
 #                      nx_str_escape_literal nx_str_to_int nx_int_to_str
+#                      nx_str_to_upper nx_str_to_lower nx_str_pad_left
+#                      nx_str_pad_right nx_str_index_of nx_str_contains
+#                      nx_str_replace nx_str_levenshtein
 #   stdlib/qarrays.nex nx_qarr_fill nx_qarr_iota nx_qarr_sum nx_qarr_max
 #                      nx_qarr_min nx_qarr_index_of nx_qarr_reverse
 #                      nx_qarr_count nx_qarr_sort nx_qarr_avg
@@ -31,6 +34,12 @@
 #                      nx_hashset_len nx_hashset_cap nx_hashset_clear
 #
 # Additional standalone modules (include directly, not bundled here):
+#   stdlib/gap_buffer.nex     Feature #69   (nx_gb_* text gap buffer)
+#   stdlib/bloom_filter.nex   Feature #79   (nx_bloom_* probabilistic filter)
+#   stdlib/pattern_search.nex Features #89 & #90 (nx_kmp_* / nx_bmh_* substring search)
+#   stdlib/fenwick.nex        Feature #105  (nx_fenwick_* binary indexed tree)
+#   stdlib/union_find.nex     Feature #107  (nx_uf_* disjoint set union)
+#   stdlib/base64.nex         Feature #144  (nx_base64_* RFC 4648 encoder & decoder)
 #   stdlib/memory.nex         Features #87 & #88  (nx_memmove nx_memcpy
 #                             nx_memset nx_memzero)
 #   stdlib/byte_buffer.nex    Feature #99   (nx_buf_* growable byte buffer)

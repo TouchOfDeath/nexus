@@ -1,0 +1,67 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/pattern_search.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Pattern Search (Features #89 & #90)
+# ==============================================================================
+
+let text = "ABC ABCDAB ABCDABCDABDE"
+let pat1 = "ABCDABD"
+let pat2 = "XYZ"
+let pat3 = "AB"
+
+print "--- TEST 1: KMP Substring Search ---"
+let nx_i0 = text
+let nx_i1 = pat1
+call nx_kmp_search
+assert_eq nx_r0, 15
+
+let nx_i0 = text
+let nx_i1 = pat2
+call nx_kmp_search
+assert_eq nx_r0, -1
+
+let nx_i0 = text
+let nx_i1 = "ABC"
+call nx_kmp_search
+assert_eq nx_r0, 0
+
+print "--- TEST 2: KMP Count Occurrences ---"
+let nx_i0 = text
+let nx_i1 = pat3
+call nx_kmp_count
+assert_eq nx_r0, 6
+
+let nx_i0 = text
+let nx_i1 = "ABCDAB"
+call nx_kmp_count
+assert_eq nx_r0, 3
+
+let nx_i0 = text
+let nx_i1 = "NOTFOUND"
+call nx_kmp_count
+assert_eq nx_r0, 0
+
+print "--- TEST 3: Boyer-Moore-Horspool Search ---"
+let nx_i0 = text
+let nx_i1 = pat1
+call nx_bmh_search
+assert_eq nx_r0, 15
+
+let nx_i0 = text
+let nx_i1 = pat2
+call nx_bmh_search
+assert_eq nx_r0, -1
+
+let nx_i0 = text
+let nx_i1 = "DE"
+call nx_bmh_search
+assert_eq nx_r0, 21
+
+let nx_i0 = text
+let nx_i1 = "ABC "
+call nx_bmh_search
+assert_eq nx_r0, 0
+
+print "PATTERN_SEARCH_TEST_PASS"
+call nx_assert_summary

@@ -1,0 +1,147 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/gap_buffer.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Gap Buffer (Feature #69)
+# ==============================================================================
+
+print "--- TEST 1: Creation and Empty State ---"
+let gb = 0
+let nx_i0 = 16
+call nx_gb_new
+let gb = nx_r0
+
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 0
+
+let nx_i0 = gb
+call nx_gb_cursor
+assert_eq nx_r0, 0
+
+let nx_i0 = gb
+call nx_gb_gap_size
+assert_eq nx_r0, 16
+
+print "--- TEST 2: Single Character Insertions ---"
+let nx_i0 = gb
+let nx_i1 = 65  # 'A'
+call nx_gb_insert_char
+
+let nx_i0 = gb
+let nx_i1 = 66  # 'B'
+call nx_gb_insert_char
+
+let nx_i0 = gb
+let nx_i1 = 67  # 'C'
+call nx_gb_insert_char
+
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 3
+
+let nx_i0 = gb
+call nx_gb_cursor
+assert_eq nx_r0, 3
+
+let nx_i0 = gb
+let nx_i1 = 0
+call nx_gb_get_char
+assert_eq nx_r0, 65
+
+let nx_i0 = gb
+let nx_i1 = 1
+call nx_gb_get_char
+assert_eq nx_r0, 66
+
+let nx_i0 = gb
+let nx_i1 = 2
+call nx_gb_get_char
+assert_eq nx_r0, 67
+
+print "--- TEST 3: String Insertion and Auto-Grow ---"
+let test_str = "DEF_GHIJKLMNOP"
+let nx_i0 = gb
+let nx_i1 = test_str
+call nx_gb_insert_str
+
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 17  # 3 + 14 = 17
+
+# Verify to_str
+let nx_i0 = gb
+call nx_gb_to_str
+let s = nx_r0
+let nx_i0 = s
+call nx_str_len
+assert_eq nx_r0, 17
+
+print "--- TEST 4: Cursor Movement & Backspace/Delete ---"
+# Move cursor to pos 3 (right after 'C')
+let nx_i0 = gb
+let nx_i1 = 3
+call nx_gb_move_cursor
+assert_eq nx_r0, 3
+
+# Delete 'C' via backspace
+let nx_i0 = gb
+call nx_gb_delete_back
+assert_eq nx_r0, 1
+
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 16
+
+let nx_i0 = gb
+let nx_i1 = 2
+call nx_gb_get_char
+assert_eq nx_r0, 68  # 'D'
+
+# Delete forward ('D')
+let nx_i0 = gb
+call nx_gb_delete_fwd
+assert_eq nx_r0, 1
+
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 15
+
+let nx_i0 = gb
+let nx_i1 = 2
+call nx_gb_get_char
+assert_eq nx_r0, 69  # 'E'
+
+# Insert "XYZ" at cursor (pos 2)
+let nx_i0 = gb
+let nx_i1 = "XYZ"
+call nx_gb_insert_str
+
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 18
+
+let nx_i0 = gb
+let nx_i1 = 2
+call nx_gb_get_char
+assert_eq nx_r0, 88  # 'X'
+
+let nx_i0 = gb
+let nx_i1 = 3
+call nx_gb_get_char
+assert_eq nx_r0, 89  # 'Y'
+
+let nx_i0 = gb
+let nx_i1 = 4
+call nx_gb_get_char
+assert_eq nx_r0, 90  # 'Z'
+
+print "--- TEST 5: Clear Buffer ---"
+let nx_i0 = gb
+call nx_gb_clear
+let nx_i0 = gb
+call nx_gb_len
+assert_eq nx_r0, 0
+
+print "GAP_BUFFER_TEST_PASS"
+call nx_assert_summary

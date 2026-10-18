@@ -1,0 +1,161 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: union_find.nex
+#              Disjoint-Set Union / Union-Find (Feature #107)
+# ==============================================================================
+#
+# Memory Layout of UnionFind descriptor (32 bytes):
+#   offset 0:  parent_ptr     - pointer to qword array of parent indices
+#   offset 8:  size_ptr       - pointer to qword array of component sizes
+#   offset 16: num_elements   - total items N
+#   offset 24: num_components - number of disjoint sets (starts at N)
+#
+# CALLING CONVENTION:
+#   nx_i0 = union-find descriptor
+#   nx_i1 = item x
+#   nx_i2 = item y
+#   nx_r0 = result
+# ==============================================================================
+
+fn nx_uf_new {
+    let _uf_n = nx_i0
+    if _uf_n < 1 {
+        let _uf_n = 1
+    }
+    let _uf_bytes = _uf_n * 8
+    let _uf_parent = alloc _uf_bytes
+    let _uf_size = alloc _uf_bytes
+
+    let _uf_i = 0
+    while _uf_i < _uf_n {
+        let _uf_i8 = _uf_i * 8
+        store64 [_uf_parent + _uf_i8] _uf_i
+        store64 [_uf_size + _uf_i8] 1
+        let _uf_i = _uf_i + 1
+    }
+
+    let _uf_desc = alloc 32
+    store64 [_uf_desc + 0] _uf_parent
+    store64 [_uf_desc + 8] _uf_size
+    store64 [_uf_desc + 16] _uf_n
+    store64 [_uf_desc + 24] _uf_n
+    let nx_r0 = _uf_desc
+}
+
+fn nx_uf_find {
+    let _uff_d = nx_i0
+    let _uff_curr = nx_i1
+
+    let _uff_parent = load64 [_uff_d + 0]
+    let _uff_n = load64 [_uff_d + 16]
+
+    if _uff_curr < 0 {
+        let nx_r0 = 0 - 1
+    } else if _uff_curr >= _uff_n {
+        let nx_r0 = 0 - 1
+    } else {
+        let _uff_loop = 1
+        while _uff_loop == 1 {
+            let _uff_c8 = _uff_curr * 8
+            let _uff_p = load64 [_uff_parent + _uff_c8]
+            if _uff_curr == _uff_p {
+                let _uff_loop = 0
+            } else {
+                let _uff_p8 = _uff_p * 8
+                let _uff_gp = load64 [_uff_parent + _uff_p8]
+                store64 [_uff_parent + _uff_c8] _uff_gp
+                let _uff_curr = _uff_p
+            }
+        }
+        let nx_r0 = _uff_curr
+    }
+}
+
+fn nx_uf_union {
+    let _ufu_d = nx_i0
+    let _ufu_x = nx_i1
+    let _ufu_y = nx_i2
+
+    let nx_i0 = _ufu_d
+    let nx_i1 = _ufu_x
+    call nx_uf_find
+    let _ufu_rx = nx_r0
+
+    let nx_i0 = _ufu_d
+    let nx_i1 = _ufu_y
+    call nx_uf_find
+    let _ufu_ry = nx_r0
+
+    if _ufu_rx == _ufu_ry {
+        let nx_r0 = 0
+    } else {
+        let _ufu_parent = load64 [_ufu_d + 0]
+        let _ufu_size = load64 [_ufu_d + 8]
+
+        let _ufu_rx8 = _ufu_rx * 8
+        let _ufu_ry8 = _ufu_ry * 8
+        let _ufu_sx = load64 [_ufu_size + _ufu_rx8]
+        let _ufu_sy = load64 [_ufu_size + _ufu_ry8]
+
+        if _ufu_sx < _ufu_sy {
+            # Attach rx under ry
+            store64 [_ufu_parent + _ufu_rx8] _ufu_ry
+            let _ufu_new_sy = _ufu_sy + _ufu_sx
+            store64 [_ufu_size + _ufu_ry8] _ufu_new_sy
+        } else {
+            # Attach ry under rx
+            store64 [_ufu_parent + _ufu_ry8] _ufu_rx
+            let _ufu_new_sx = _ufu_sx + _ufu_sy
+            store64 [_ufu_size + _ufu_rx8] _ufu_new_sx
+        }
+
+        let _ufu_comps = load64 [_ufu_d + 24]
+        let _ufu_comps = _ufu_comps - 1
+        store64 [_ufu_d + 24] _ufu_comps
+        let nx_r0 = 1
+    }
+}
+
+fn nx_uf_connected {
+    let _ufc_d = nx_i0
+    let _ufc_x = nx_i1
+    let _ufc_y = nx_i2
+
+    let nx_i0 = _ufc_d
+    let nx_i1 = _ufc_x
+    call nx_uf_find
+    let _ufc_rx = nx_r0
+
+    let nx_i0 = _ufc_d
+    let nx_i1 = _ufc_y
+    call nx_uf_find
+    let _ufc_ry = nx_r0
+
+    if _ufc_rx == _ufc_ry {
+        let nx_r0 = 1
+    } else {
+        let nx_r0 = 0
+    }
+}
+
+fn nx_uf_set_size {
+    let _ufs_d = nx_i0
+    let _ufs_x = nx_i1
+
+    let nx_i0 = _ufs_d
+    let nx_i1 = _ufs_x
+    call nx_uf_find
+    let _ufs_root = nx_r0
+
+    if _ufs_root < 0 {
+        let nx_r0 = 0
+    } else {
+        let _ufs_size = load64 [_ufs_d + 8]
+        let _ufs_r8 = _ufs_root * 8
+        let nx_r0 = load64 [_ufs_size + _ufs_r8]
+    }
+}
+
+fn nx_uf_count_sets {
+    let _ufcs_d = nx_i0
+    let nx_r0 = load64 [_ufcs_d + 24]
+}

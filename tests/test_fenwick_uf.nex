@@ -1,0 +1,169 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/fenwick.nex"
+include "stdlib/union_find.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Fenwick Tree & Union-Find
+#                          (Features #105 & #107)
+# ==============================================================================
+
+print "--- PART 1: Fenwick Tree Tests ---"
+let nx_i0 = 8
+call nx_fenwick_new
+let ft = nx_r0
+
+let nx_i0 = ft
+call nx_fenwick_len
+assert_eq nx_r0, 8
+
+# Add values: [1, 2, 3, 4, 5, 6, 7, 8]
+let nx_i0 = ft
+let nx_i1 = 0
+let nx_i2 = 1
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 1
+let nx_i2 = 2
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 2
+let nx_i2 = 3
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 3
+let nx_i2 = 4
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 4
+let nx_i2 = 5
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 5
+let nx_i2 = 6
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 6
+let nx_i2 = 7
+call nx_fenwick_add
+
+let nx_i0 = ft
+let nx_i1 = 7
+let nx_i2 = 8
+call nx_fenwick_add
+
+# Test get
+let nx_i0 = ft
+let nx_i1 = 3
+call nx_fenwick_get
+assert_eq nx_r0, 4
+
+# Test prefix_sum: 0..3 is 1 + 2 + 3 + 4 = 10
+let nx_i0 = ft
+let nx_i1 = 3
+call nx_fenwick_prefix_sum
+assert_eq nx_r0, 10
+
+# Test prefix_sum: 0..7 is sum(1..8) = 36
+let nx_i0 = ft
+let nx_i1 = 7
+call nx_fenwick_prefix_sum
+assert_eq nx_r0, 36
+
+# Test range_sum: 2..5 is 3 + 4 + 5 + 6 = 18
+let nx_i0 = ft
+let nx_i1 = 2
+let nx_i2 = 5
+call nx_fenwick_range_sum
+assert_eq nx_r0, 18
+
+# Test set: change index 2 from 3 to 10 (+7)
+let nx_i0 = ft
+let nx_i1 = 2
+let nx_i2 = 10
+call nx_fenwick_set
+
+let nx_i0 = ft
+let nx_i1 = 2
+call nx_fenwick_get
+assert_eq nx_r0, 10
+
+# prefix_sum(7) was 36, now 36 + 7 = 43
+let nx_i0 = ft
+let nx_i1 = 7
+call nx_fenwick_prefix_sum
+assert_eq nx_r0, 43
+
+print "--- PART 2: Union-Find Tests ---"
+let nx_i0 = 6
+call nx_uf_new
+let uf = nx_r0
+
+let nx_i0 = uf
+call nx_uf_count_sets
+assert_eq nx_r0, 6
+
+let nx_i0 = uf
+let nx_i1 = 0
+let nx_i2 = 1
+call nx_uf_connected
+assert_eq nx_r0, 0
+
+# Union 0 and 1
+let nx_i0 = uf
+let nx_i1 = 0
+let nx_i2 = 1
+call nx_uf_union
+assert_eq nx_r0, 1
+
+let nx_i0 = uf
+let nx_i1 = 0
+let nx_i2 = 1
+call nx_uf_connected
+assert_eq nx_r0, 1
+
+let nx_i0 = uf
+call nx_uf_count_sets
+assert_eq nx_r0, 5
+
+# Union 2 and 3
+let nx_i0 = uf
+let nx_i1 = 2
+let nx_i2 = 3
+call nx_uf_union
+
+# Union 1 and 2 (merges {0,1} and {2,3})
+let nx_i0 = uf
+let nx_i1 = 1
+let nx_i2 = 2
+call nx_uf_union
+
+let nx_i0 = uf
+let nx_i1 = 0
+let nx_i2 = 3
+call nx_uf_connected
+assert_eq nx_r0, 1
+
+let nx_i0 = uf
+let nx_i1 = 0
+call nx_uf_set_size
+assert_eq nx_r0, 4
+
+let nx_i0 = uf
+call nx_uf_count_sets
+assert_eq nx_r0, 3
+
+# Redundant union
+let nx_i0 = uf
+let nx_i1 = 0
+let nx_i2 = 3
+call nx_uf_union
+assert_eq nx_r0, 0
+
+print "FENWICK_UF_TEST_PASS"
+call nx_assert_summary

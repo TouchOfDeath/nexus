@@ -204,10 +204,63 @@ class NexusInterpreter:
             exp = self.eval_expr(parts[1])
             return int(base) ** int(exp)
 
-        # Left-to-right integer/float chained evaluation
-        tokens = re.findall(r'(\+|-|\*|/|%|<=|>=|<|>|==|!=|\S+)', expr)
-        if not tokens: return 0
-        res = self.eval_atom(tokens[0])
+        # Parenthesized sub-expressions: evaluate innermost ( ... ) first
+        while '(' in expr and ')' in expr:
+            m_par = re.search(r'\(([^()]+)\)', expr)
+            if not m_par:
+                break
+            sub_val = self.eval_expr(m_par.group(1))
+            expr = expr[:m_par.start()] + str(sub_val) + expr[m_par.end():]
+
+        # Tokenize and evaluate multiplicative (*, /, %) before additive (+, -)
+        raw_tokens = re.findall(r'(\+\.|\-\.|\*\.|/\.|\+|-|\*|/|%|<=|>=|<|>|==|!=|\S+)', expr)
+        if not raw_tokens: return 0
+        # Merge unary minus on numbers/atoms at start or after an operator
+        merged = []
+        idx_t = 0
+        ops_set = {'+', '-', '*', '/', '%', '+.', '-.', '*.', '/.', '<=', '>=', '<', '>', '==', '!='}
+        while idx_t < len(raw_tokens):
+            if raw_tokens[idx_t] == '-' and (idx_t == 0 or raw_tokens[idx_t - 1] in ops_set) and idx_t + 1 < len(raw_tokens):
+                merged.append(str(-self.eval_atom(raw_tokens[idx_t + 1])))
+                idx_t += 2
+            else:
+                merged.append(raw_tokens[idx_t])
+                idx_t += 1
+
+        # Pass 1: reduce *, /, %, *., /.
+        vals = [self.eval_atom(merged[0])]
+        ops = []
+        idx_t = 1
+        while idx_t + 1 < len(merged):
+            op = merged[idx_t]
+            rhs = self.eval_atom(merged[idx_t + 1])
+            idx_t += 2
+            if op in ('*', '/', '%', '*.', '/.'):
+                lhs = vals[-1]
+                is_fl = isinstance(lhs, float) or isinstance(rhs, float) or op.endswith('.')
+                if op in ('*', '*.'):
+                    vals[-1] = (float(lhs) * float(rhs)) if is_fl else to_int64(lhs * rhs)
+                elif op in ('/', '/.'):
+                    if is_fl:
+                        vals[-1] = (float(lhs) / float(rhs)) if float(rhs) != 0.0 else 0.0
+                    else:
+                        a = to_int64(lhs); b = to_int64(rhs)
+                        if b == 0: vals[-1] = 0
+                        else:
+                            sign = -1 if (a < 0) ^ (b < 0) else 1
+                            vals[-1] = to_int64(sign * (abs(a) // abs(b)))
+                elif op == '%':
+                    a = to_int64(lhs); b = to_int64(rhs)
+                    vals[-1] = to_int64((abs(a) % abs(b)) * (-1 if a < 0 else 1) if b != 0 else 0)
+            else:
+                ops.append(op)
+                vals.append(rhs)
+
+        tokens = [str(vals[0])]
+        for o_i, op in enumerate(ops):
+            tokens.append(op)
+            tokens.append(str(vals[o_i + 1]))
+        res = vals[0]
         i = 1
         while i < len(tokens):
             op = tokens[i]

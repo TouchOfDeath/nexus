@@ -6,6 +6,7 @@
 
 # Global state for X11 connection and window
 let x11_fd = 0
+let x11_headless = 0
 let x11_win_id = 0
 let x11_gc_id = 0
 let x11_root_win = 0
@@ -40,7 +41,9 @@ let x11_scratch = alloc 16384
 # ------------------------------------------------------------------------------
 fn x11_flush {
     if x11_draw_p > 0 {
-        let wr = syscall3 1, x11_fd, x11_draw_buf, x11_draw_p
+        if x11_headless == 0 {
+            let wr = syscall3 1, x11_fd, x11_draw_buf, x11_draw_p
+        }
         let x11_draw_p = 0
     }
 }
@@ -136,10 +139,12 @@ fn x11_clear {
 fn x11_present {
     call x11_flush
 
-    # Precise 60 FPS pacing via sys_nanosleep (16.0 ms)
-    store64 [x11_ts + 0] 0
-    store64 [x11_ts + 8] 16000000
-    let slp = syscall2 35, x11_ts, 0
+    if x11_headless == 0 {
+        # Precise 60 FPS pacing via sys_nanosleep (16.0 ms)
+        store64 [x11_ts + 0] 0
+        store64 [x11_ts + 8] 16000000
+        let slp = syscall2 35, x11_ts, 0
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -149,6 +154,9 @@ fn x11_present {
 fn x11_poll_events {
     let x11_key = 0
     let polling = 1
+    if x11_headless == 1 {
+        let polling = 0
+    }
 
     while polling == 1 {
         let ev_n = syscall6 45, x11_fd, x11_ev_buf, 32, 64, 0, 0
@@ -227,11 +235,15 @@ fn x11_poll_events {
 # Inputs: x11_width, x11_height
 # ------------------------------------------------------------------------------
 fn x11_init {
+    let x11_headless = 0
     # 1. Open UNIX domain socket: socket(AF_UNIX=1, SOCK_STREAM=1, 0)
     let x11_fd = syscall3 41, 1, 1, 0
     if x11_fd < 0 {
-        print "[-] Error: Failed to open X11 UNIX socket"
-        syscall1 60, 1
+        let x11_fd = 0
+        let x11_headless = 1
+        let x11_win_id = 1
+        let x11_gc_id = 2
+        return
     }
 
     # 2. Build sockaddr_un for "/tmp/.X11-unix/X0"
@@ -255,11 +267,15 @@ fn x11_init {
     store [x11_sock_addr + 18] 48  # 0
     store [x11_sock_addr + 19] 0   # \0
 
-    # 3. Connect to X server
+    # 3. Connect to X server (graceful headless offscreen fallback if unavailable)
     let conn = syscall3 42, x11_fd, x11_sock_addr, 110
     if conn < 0 {
-        print "[-] Error: Failed to connect to /tmp/.X11-unix/X0"
-        syscall1 60, 1
+        let cl = syscall1 3, x11_fd
+        let x11_fd = 0
+        let x11_headless = 1
+        let x11_win_id = 1
+        let x11_gc_id = 2
+        return
     }
 
     # 4. Send 12-byte Setup Request

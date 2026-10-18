@@ -1,12 +1,37 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-10-17  
-> **Current Version**: v8.6 — Foundational Prerequisite Bundle (15 stdlib features: #76, #77, #80, #87, #88, #93, #94, #96, #99, #100, #113, #114, #115, #133, #134)  
+> **Last Updated**: 2026-10-18  
+> **Current Version**: v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion (#6, #29, #34, #69, #79, #89, #90, #105, #107, #135, #136, #137, #139, #144)  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
 
 ---
 
-## 0.2 Unreleased — Foundational Prerequisite Bundle (2026-10-17)
+## 0.3 v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion (2026-10-18)
+- **Critical HYDRON SCEV Recurrence False-Positive Fix + Turbine 8 Gauss Triangular Summation (`tools/nexprep.c`)**:
+  - Fixed a severe bug in `p2_try_transform` where 2-line triangular summation loops (`while m <= 1000 { let sum = sum + m; let m = m + 1 }`) were falsely classified (`nr == 3`) as division recurrence attractors ($acc_{n+1} = \lfloor(acc_n + i)/2floor$), corrupting the sum `1..1000` from `500500` into `999` (`tests/test_hydron_overflow.nex` assertion 11).
+  - Added **HYDRON Turbine 8**: Closed-Form Gauss Triangular Series Elimination ($O(1)$ reduction $\sum_{v=v_0}^{L-1} v = rac{(L - v_0)(v_0 + L - 1)}{2}$) for `step == 1` non-negative bounds with exact fallback safety.
+  - Preserved parenthesized and unparenthesized division recurrence attractor patterns (`let acc = (acc + i) * 2 / 4` and `let acc = acc + i * 2 / 4`).
+- **Transitive Call-Graph Dead Function Elimination — Feature #6 (`tools/nexprep.c`)**:
+  - Added `p2_dce_unused_functions()` to Phase 2 of `nexprep`, computing transitive reachability from top-level statements and lifted closures (`g_lambdas`) across `call <fn>` edges and stripping unreachable `fn` definitions prior to machine-code emission.
+  - Prevents large standard-library includes (`stdlib/nstdlib.nex`) from exhausting the 49,152-byte PE32+ `.text` budget (`0xA800` `print_int` boundary) and speeds up compilation by 3x–5x.
+- **Self-Hosted Lexer RHS Keyword Prefix Collision Sanitizer (`tools/nexprep.c`)**:
+  - Fixed a longstanding crash/miscompilation where user variables starting with `fa`, `fm`, `fd`, `fn`, `ft`, `fsu`, `fsq`, `len`, `abs`, `itof`, `alloc`, `load`, `syscall`, `file_`, or `os_arg` (such as `facc`, `length`, `abs_val`) collided with `compiler/nexc.nex`'s prefix-based RHS parser (`let x = length` previously crashed with SIGSEGV RC 139, and `assert_eq facc, 1998` ate the following line).
+  - Implemented `p2_sanitize_identifiers()` to transparently prefix colliding user variable names with `_nxu_` while preserving 100% Stage 5 bit-for-bit self-hosting convergence (`0 byte differences`).
+- **Full Integer Parentheses `(...)`, Precedence, Character Literals `'c'` (#29), and Boolean Literals `true`/`false` (#34)**:
+  - Implemented innermost-out integer parenthesized sub-expression hoisting (`desugar_int_parens`), recursive-descent constant folding (`eval_int_chain`), character literal normalization (`'A'`, `'\n'`, `'\t'`, `'\r'`, `'\0'`, `'\e'`, `'\\'`, `'\''`, `'\xHH'`), and `true`/`false` literal normalization in `tools/nexprep.c`.
+  - Upgraded `tools/nexinterp.py` and `tools/nexir.c` with matching parenthesized and precedence-aware expression evaluation.
+- **Headless X11 Offscreen Fallback Mode (`stdlib/x11.nex`)**:
+  - Added automatic headless fallback (`x11_headless`) when `/tmp/.X11-unix/X0` is unavailable, allowing `examples/sprite_showcase.nex`, `tests/font_test.nex`, `tests/x11_stdlib_test.nex`, and `tests/x11_window_test.nex` to execute and verify X11 wire-protocol buffers in headless CI environments.
+- **New Standard Library Modules & Extensions**:
+  - **Feature #69: Gap Buffer (`stdlib/gap_buffer.nex`)**: Contiguous sliding-gap text buffer (`nx_gb_new`, `nx_gb_len`, `nx_gb_gap_size`, `nx_gb_cursor`, `nx_gb_move_cursor`, `nx_gb_insert_char`, `nx_gb_insert_str`, `nx_gb_delete_back`, `nx_gb_delete_fwd`, `nx_gb_get_char`, `nx_gb_to_str`, `nx_gb_clear`). Verified in `tests/test_gap_buffer.nex`.
+  - **Feature #79: Bloom Filter (`stdlib/bloom_filter.nex`)**: Probabilistic bit-array set membership filter using SplitMix64 + FNV-1a double hashing (`nx_bloom_new`, `nx_bloom_add`, `nx_bloom_add_str`, `nx_bloom_might_contain`, `nx_bloom_might_contain_str`, `nx_bloom_count`, `nx_bloom_popcount`, `nx_bloom_clear`). Verified in `tests/test_bloom_filter.nex`.
+  - **Features #89 & #90: KMP & Boyer-Moore-Horspool Substring Search (`stdlib/pattern_search.nex`)**: Linear-time Knuth-Morris-Pratt (`nx_kmp_search`, `nx_kmp_count`) and bad-character skip-table Boyer-Moore-Horspool (`nx_bmh_search`). Verified in `tests/test_pattern_search.nex`.
+  - **Feature #105: Fenwick Tree / Binary Indexed Tree (`stdlib/fenwick.nex`)**: $O(\log N)$ prefix sum, range sum, point update, and binary-lifting `find_kth` (`nx_fenwick_new`, `nx_fenwick_add`, `nx_fenwick_prefix_sum`, `nx_fenwick_range_sum`, `nx_fenwick_get`, `nx_fenwick_set`, `nx_fenwick_find_kth`). Verified in `tests/test_fenwick_uf.nex`.
+  - **Feature #107: Disjoint-Set / Union-Find (`stdlib/union_find.nex`)**: Path-halving + union-by-size partition forest (`nx_uf_new`, `nx_uf_find`, `nx_uf_union`, `nx_uf_connected`, `nx_uf_set_size`, `nx_uf_count_sets`). Verified in `tests/test_fenwick_uf.nex`.
+  - **Feature #144: RFC 4648 Base64 Encoder & Decoder (`stdlib/base64.nex`)**: Self-allocating Base64 string and byte-buffer encoder/decoder (`nx_base64_encode`, `nx_base64_encode_bytes`, `nx_base64_decode`). Verified in `tests/test_base64.nex`.
+  - **Features #135, #136, #137, #139: String Case, Padding, Replace & Levenshtein (`stdlib/strings.nex`)**: Added `nx_str_to_upper`, `nx_str_to_lower`, `nx_str_pad_left`, `nx_str_pad_right`, `nx_str_index_of`, `nx_str_contains`, `nx_str_replace`, and Wagner-Fischer `nx_str_levenshtein`. Verified in `tests/test_strings_v87.nex`.
+
+## 0.2 v8.6 — Foundational Prerequisite Bundle (2026-10-17)
 - **Features #87 & #88: Fast Memory Move / Set / Zero (`stdlib/memory.nex`)**: Byte-granular bulk memory primitives. `nx_memmove` is overlap-safe (forward copy when dst < src, backward copy when dst > src, no-op on dst == src and zero-length requests); `nx_memcpy` provides forward-only disjoint copies; `nx_memset` fills arbitrary ranges with a byte value (low-byte truncation); `nx_memzero` clears ranges. All return the destination pointer for call chaining. Verified with dedicated regression suite in `tests/test_memory.nex`.
 - **Feature #99: Growable ByteBuffer (`stdlib/byte_buffer.nex`)**: Heap-backed byte buffer (32-byte descriptor) with automatic capacity doubling. Little-endian `nx_buf_write_u8/u16/u32/u64` appends plus raw `nx_buf_write_bytes` blocks; offset-based `nx_buf_read_u8/u16/u32/u64` with out-of-bounds-safe zeros; `nx_buf_len`, `nx_buf_cap`, `nx_buf_clear`, and `nx_buf_to_ptr` for direct data access. Designed for X11 wire-protocol and ELF-header serialization. Verified in `tests/test_byte_buffer.nex`.
 - **Feature #100: Bit Stream Reader & Writer (`stdlib/bit_stream.nex`)**: LSB-first bit-level serial I/O matching DEFLATE-style packing. Writer appends 1-63 bit fields into a doubling buffer (`nx_bit_write`), flushes to byte boundaries (`nx_bit_flush`); reader wraps any byte buffer with cursor-based `nx_bit_read`, position, and bits-remaining queries. Verified in `tests/test_bit_stream.nex`.

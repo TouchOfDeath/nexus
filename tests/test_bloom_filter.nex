@@ -1,0 +1,127 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/bloom_filter.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Bloom Filter (Feature #79)
+# ==============================================================================
+
+print "--- TEST 1: Creation and Empty Checks ---"
+let nx_i0 = 256
+let nx_i1 = 4
+call nx_bloom_new
+let bf = nx_r0
+
+let nx_i0 = bf
+call nx_bloom_count
+assert_eq nx_r0, 0
+
+let nx_i0 = bf
+call nx_bloom_popcount
+assert_eq nx_r0, 0
+
+# Check presence of non-inserted item
+let nx_i0 = bf
+let nx_i1 = 42
+call nx_bloom_might_contain
+assert_eq nx_r0, 0
+
+print "--- TEST 2: Integer Insertions & Membership ---"
+let nx_i0 = bf
+let nx_i1 = 42
+call nx_bloom_add
+
+let nx_i0 = bf
+let nx_i1 = 100
+call nx_bloom_add
+
+let nx_i0 = bf
+let nx_i1 = 9999
+call nx_bloom_add
+
+let nx_i0 = bf
+call nx_bloom_count
+assert_eq nx_r0, 3
+
+let nx_i0 = bf
+call nx_bloom_popcount
+let pop1 = nx_r0
+assert_ne pop1, 0
+
+# Verify inserted keys are found
+let nx_i0 = bf
+let nx_i1 = 42
+call nx_bloom_might_contain
+assert_eq nx_r0, 1
+
+let nx_i0 = bf
+let nx_i1 = 100
+call nx_bloom_might_contain
+assert_eq nx_r0, 1
+
+let nx_i0 = bf
+let nx_i1 = 9999
+call nx_bloom_might_contain
+assert_eq nx_r0, 1
+
+# Non-inserted key
+let nx_i0 = bf
+let nx_i1 = 55555
+call nx_bloom_might_contain
+assert_eq nx_r0, 0
+
+print "--- TEST 3: String Insertions & Membership ---"
+let s1 = "alpha"
+let s2 = "bravo"
+let s3 = "charlie"
+
+let nx_i0 = bf
+let nx_i1 = s1
+call nx_bloom_add_str
+
+let nx_i0 = bf
+let nx_i1 = s2
+call nx_bloom_add_str
+
+let nx_i0 = bf
+call nx_bloom_count
+assert_eq nx_r0, 5
+
+let nx_i0 = bf
+let nx_i1 = s1
+call nx_bloom_might_contain_str
+assert_eq nx_r0, 1
+
+let nx_i0 = bf
+let nx_i1 = s2
+call nx_bloom_might_contain_str
+assert_eq nx_r0, 1
+
+let nx_i0 = bf
+let nx_i1 = s3
+call nx_bloom_might_contain_str
+assert_eq nx_r0, 0
+
+print "--- TEST 4: Clear Filter ---"
+let nx_i0 = bf
+call nx_bloom_clear
+
+let nx_i0 = bf
+call nx_bloom_count
+assert_eq nx_r0, 0
+
+let nx_i0 = bf
+call nx_bloom_popcount
+assert_eq nx_r0, 0
+
+let nx_i0 = bf
+let nx_i1 = 42
+call nx_bloom_might_contain
+assert_eq nx_r0, 0
+
+let nx_i0 = bf
+let nx_i1 = s1
+call nx_bloom_might_contain_str
+assert_eq nx_r0, 0
+
+print "BLOOM_FILTER_TEST_PASS"
+call nx_assert_summary

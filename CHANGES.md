@@ -1,6 +1,24 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.6 — Foundational Prerequisite Bundle (current)
+## v8.7 — Compiler Bugfixes, HYDRON Turbine 8 + Call-Graph DCE & Standard Library Expansion (current)
+
+### 1. Compiler, Optimizer & Toolchain Fixes (`tools/nexprep.c`, `tools/nexir.c`, `tools/nexinterp.py`, `tools/nexelf.c`)
+- **HYDRON SCEV Recurrence Bugfix & Turbine 8 Gauss Triangular Summation Solver**: Removed the erroneous `nr == 3` (`D = D + V`) branch from the 2-line division recurrence attractor matcher that previously miscompiled standard summation loops (`while m <= 1000 { let sum = sum + m; let m = m + 1 }`) into `sum + m / 2`, fixing `tests/test_hydron_overflow.nex`. Added **Turbine 8** to collapse `step == 1` triangular summation loops in $O(1)$ via Gauss's formula (`cnt * (v0 + lim - 1) / 2`).
+- **Feature #6: Transitive Call-Graph Dead Function Elimination (`p2_dce_unused_functions`)**: Computes reachable `fn` blocks from top-level statements and lifted closures (`g_lambdas`), stripping unreferenced functions before codegen so large `stdlib` includes never overflow the `0xA800` PE32+ `.text` boundary.
+- **Lexer RHS Keyword Prefix Collision Sanitizer (`p2_sanitize_identifiers`)**: Automatically renames user identifiers that collide with `nexc.nex`'s prefix-matched built-in keywords (`fa*`, `fm*`, `fd*`, `fn*`, `ft*`, `fsu*`, `fsq*`, `len*`, `abs*`, `itof*`, `alloc*`, `load*`, `syscall*`, `file_*`, `os_arg*`), fixing crashes (`let x = length`) and silent line-skipping (`assert_eq facc, 1998`) while keeping `compiler/nexc.nex` 100% bit-for-bit identical.
+- **Parenthesized Integer Expressions, Precedence, Character Literals (#29) & Boolean Literals (#34)**: Added `desugar_int_parens`, recursive-descent `eval_int_chain`, character literal normalization (`'A'`, `'\n'`, `'\xHH'`), and `true`/`false` literal normalization across `nexprep`, `nexinterp.py`, and `nexir.c`.
+- **Headless X11 Offscreen Mode (`stdlib/x11.nex`) & PE Magic Validation (`tools/nexelf.c`)**: `x11_init` gracefully falls back to in-memory wire-buffer verification when `/tmp/.X11-unix/X0` is absent; `nexelf` now validates the `MZ` header before translating PE32+ images.
+
+### 2. New Standard Library Modules & String Algorithms
+- **Feature #69: Gap Buffer (`stdlib/gap_buffer.nex`, `tests/test_gap_buffer.nex`)**: `nx_gb_new`, `nx_gb_len`, `nx_gb_gap_size`, `nx_gb_cursor`, `nx_gb_move_cursor`, `nx_gb_insert_char`, `nx_gb_insert_str`, `nx_gb_delete_back`, `nx_gb_delete_fwd`, `nx_gb_get_char`, `nx_gb_to_str`, `nx_gb_clear`.
+- **Feature #79: Bloom Filter (`stdlib/bloom_filter.nex`, `tests/test_bloom_filter.nex`)**: `nx_bloom_new`, `nx_bloom_add`, `nx_bloom_add_str`, `nx_bloom_might_contain`, `nx_bloom_might_contain_str`, `nx_bloom_count`, `nx_bloom_popcount`, `nx_bloom_clear`.
+- **Features #89 & #90: KMP & Boyer-Moore-Horspool (`stdlib/pattern_search.nex`, `tests/test_pattern_search.nex`)**: `nx_kmp_search`, `nx_kmp_count`, `nx_bmh_search`.
+- **Feature #105: Fenwick Tree / Binary Indexed Tree (`stdlib/fenwick.nex`, `tests/test_fenwick_uf.nex`)**: `nx_fenwick_new`, `nx_fenwick_len`, `nx_fenwick_add`, `nx_fenwick_prefix_sum`, `nx_fenwick_range_sum`, `nx_fenwick_get`, `nx_fenwick_set`, `nx_fenwick_find_kth`.
+- **Feature #107: Disjoint-Set / Union-Find (`stdlib/union_find.nex`, `tests/test_fenwick_uf.nex`)**: `nx_uf_new`, `nx_uf_find`, `nx_uf_union`, `nx_uf_connected`, `nx_uf_set_size`, `nx_uf_count_sets`.
+- **Feature #144: RFC 4648 Base64 (`stdlib/base64.nex`, `tests/test_base64.nex`)**: `nx_base64_encode`, `nx_base64_encode_bytes`, `nx_base64_decode`.
+- **Features #135, #136, #137, #139: String Extensions (`stdlib/strings.nex`, `tests/test_strings_v87.nex`)**: `nx_str_to_upper`, `nx_str_to_lower`, `nx_str_pad_left`, `nx_str_pad_right`, `nx_str_index_of`, `nx_str_contains`, `nx_str_replace`, `nx_str_levenshtein`.
+
+## v8.6 — Foundational Prerequisite Bundle
 
 ### 0. Standard Library Additions: Features #76, #77, #80, #87, #88, #93, #94, #96, #99, #100, #113, #114, #115, #133, #134
 - **Features #87 & #88: Fast Memory Move / Set / Zero (`stdlib/memory.nex`)**: Byte-granular bulk memory primitives with overlap-safe `nx_memmove` (directional copy selection for gap-buffer shifts), `nx_memcpy`, `nx_memset`, and `nx_memzero`, all returning the destination pointer. Verified with dedicated regression suite in `tests/test_memory.nex`.
