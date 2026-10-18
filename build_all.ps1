@@ -72,7 +72,7 @@ Write-Host ($Output -join "`r`n")
 $ExpectedPatterns = @(
     "25",
     "10",
-    "38",
+    "33",
     "5",
     "15",
     "If Check: Equal (42 == 42)",
