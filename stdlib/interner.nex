@@ -1,0 +1,183 @@
+include "stdlib/strings.nex"
+
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: interner.nex
+#                   String Interning Pool (Feature #95)
+# ==============================================================================
+#
+# Functions:
+#   nx_intern_new()                -> returns new interner pool pointer
+#   nx_intern_str(pool, str)       -> returns integer symbol ID (assigns if new)
+#   nx_intern_find(pool, str)      -> returns symbol ID if found, else -1
+#   nx_intern_resolve(pool, sym_id)-> returns interned string pointer
+#   nx_intern_count(pool)          -> returns total interned symbol count
+#
+# CALLING CONVENTION:
+#   nx_i0, nx_i1 as input registers, nx_r0 as output register.
+# ==============================================================================
+
+fn nx_intern_new {
+    let _in_cap = 128
+    let _in_ht_cap = 256
+    let _in_pool = alloc 32
+    let _in_syms_sz = _in_cap * 8
+    let _in_syms = alloc _in_syms_sz
+    let _in_ht_sz = _in_ht_cap * 8
+    let _in_ht = alloc _in_ht_sz
+
+    # Initialize hash table with -1
+    let _in_i = 0
+    while _in_i < _in_ht_cap {
+        let _in_off = _in_i * 8
+        let _in_neg1 = 0 - 1
+        store64 [_in_ht + _in_off] _in_neg1
+        let _in_i = _in_i + 1
+    }
+
+    store64 [_in_pool + 0] 0           # count
+    store64 [_in_pool + 8] _in_cap      # cap
+    store64 [_in_pool + 16] _in_syms   # syms array
+    store64 [_in_pool + 24] _in_ht     # hash table
+
+    let nx_r0 = _in_pool
+}
+
+fn _intern_hash_str {
+    let _ih_s = nx_i0
+    let _ih_h = 2166136261
+    let _ih_i = 0
+    let _ih_c = load [_ih_s + 0]
+    while _ih_c != 0 {
+        let _ih_h = _ih_h + _ih_c
+        let _ih_h = _ih_h * 16777619
+        let _ih_i = _ih_i + 1
+        let _ih_c = load [_ih_s + _ih_i]
+    }
+    if _ih_h < 0 {
+        let _ih_h = 0 - _ih_h
+    }
+    let nx_r0 = _ih_h
+}
+
+fn nx_intern_find {
+    let _if_pool = nx_i0
+    let _if_str = nx_i1
+
+    let _if_cnt = load64 [_if_pool + 0]
+    if _if_cnt == 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+
+    let _if_syms = load64 [_if_pool + 16]
+    let _if_ht = load64 [_if_pool + 24]
+    let _if_ht_cap = 256
+
+    let nx_i0 = _if_str
+    call _intern_hash_str
+    let _if_h = nx_r0
+
+    let _if_slot = _if_h % _if_ht_cap
+    let _if_steps = 0
+    while _if_steps < _if_ht_cap {
+        let _if_off = _if_slot * 8
+        let _if_id = load64 [_if_ht + _if_off]
+        if _if_id < 0 {
+            let nx_r0 = 0 - 1
+            return
+        }
+        let _if_soff = _if_id * 8
+        let _if_exist = load64 [_if_syms + _if_soff]
+        let nx_i0 = _if_exist
+        let nx_i1 = _if_str
+        call nx_str_cmp
+        if nx_r0 == 0 {
+            let nx_r0 = _if_id
+            return
+        }
+        let _if_slot = _if_slot + 1
+        if _if_slot >= _if_ht_cap {
+            let _if_slot = 0
+        }
+        let _if_steps = _if_steps + 1
+    }
+    let nx_r0 = 0 - 1
+}
+
+fn nx_intern_str {
+    let _is_pool = nx_i0
+    let _is_str = nx_i1
+
+    # Check if already interned
+    let nx_i0 = _is_pool
+    let nx_i1 = _is_str
+    call nx_intern_find
+    if nx_r0 >= 0 {
+        return
+    }
+
+    # Not found, add new symbol
+    let _is_cnt = load64 [_is_pool + 0]
+    let _is_syms = load64 [_is_pool + 16]
+    let _is_ht = load64 [_is_pool + 24]
+    let _is_ht_cap = 256
+
+    # Copy string
+    let _is_len = 0
+    let _is_c = load [_is_str + 0]
+    while _is_c != 0 {
+        let _is_len = _is_len + 1
+        let _is_c = load [_is_str + _is_len]
+    }
+    let _is_alloc_sz = _is_len + 1
+    let _is_copy = alloc _is_alloc_sz
+    let _is_j = 0
+    while _is_j < _is_len {
+        let _is_ch = load [_is_str + _is_j]
+        store [_is_copy + _is_j] _is_ch
+        let _is_j = _is_j + 1
+    }
+    store [_is_copy + _is_len] 0
+
+    # Store in symbols array at _is_cnt
+    let _is_soff = _is_cnt * 8
+    store64 [_is_syms + _is_soff] _is_copy
+
+    # Insert into hash table
+    let nx_i0 = _is_str
+    call _intern_hash_str
+    let _is_h = nx_r0
+    let _is_slot = _is_h % _is_ht_cap
+    let _is_steps = 0
+    while _is_steps < _is_ht_cap {
+        let _is_off = _is_slot * 8
+        let _is_id = load64 [_is_ht + _is_off]
+        if _is_id < 0 {
+            store64 [_is_ht + _is_off] _is_cnt
+            let _is_steps = _is_ht_cap
+        } else {
+            let _is_slot = _is_slot + 1
+            if _is_slot >= _is_ht_cap {
+                let _is_slot = 0
+            }
+            let _is_steps = _is_steps + 1
+        }
+    }
+
+    let _is_new_cnt = _is_cnt + 1
+    store64 [_is_pool + 0] _is_new_cnt
+    let nx_r0 = _is_cnt
+}
+
+fn nx_intern_resolve {
+    let _ir_pool = nx_i0
+    let _ir_sym = nx_i1
+    let _ir_syms = load64 [_ir_pool + 16]
+    let _ir_off = _ir_sym * 8
+    let nx_r0 = load64 [_ir_syms + _ir_off]
+}
+
+fn nx_intern_count {
+    let _ic_pool = nx_i0
+    let nx_r0 = load64 [_ic_pool + 0]
+}

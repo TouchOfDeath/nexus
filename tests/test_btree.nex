@@ -1,0 +1,155 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/btree.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Ordered BTreeMap & BTreeSet (Features #72 & #73)
+# ==============================================================================
+
+print "--- TEST 1: BTreeMap Creation & Out-of-Order Puts ---"
+let map = 0
+call nx_btmap_new
+let map = nx_r0
+
+let nx_i0 = map
+call nx_btmap_len
+assert_eq nx_r0, 0
+
+# Insert 30, 10, 20
+let nx_i0 = map
+let nx_i1 = 30
+let nx_i2 = 300
+call nx_btmap_put
+
+let nx_i0 = map
+let nx_i1 = 10
+let nx_i2 = 100
+call nx_btmap_put
+
+let nx_i0 = map
+let nx_i1 = 20
+let nx_i2 = 200
+call nx_btmap_put
+
+let nx_i0 = map
+call nx_btmap_len
+assert_eq nx_r0, 3
+
+print "--- TEST 2: In-Order Traversal & Lookup ---"
+let nx_i0 = map
+let nx_i1 = 0
+call nx_btmap_key_at
+assert_eq nx_r0, 10
+
+let nx_i0 = map
+let nx_i1 = 0
+call nx_btmap_val_at
+assert_eq nx_r0, 100
+
+let nx_i0 = map
+let nx_i1 = 1
+call nx_btmap_key_at
+assert_eq nx_r0, 20
+
+let nx_i0 = map
+let nx_i1 = 1
+call nx_btmap_val_at
+assert_eq nx_r0, 200
+
+let nx_i0 = map
+let nx_i1 = 2
+call nx_btmap_key_at
+assert_eq nx_r0, 30
+
+let nx_i0 = map
+let nx_i1 = 2
+call nx_btmap_val_at
+assert_eq nx_r0, 300
+
+let nx_i0 = map
+let nx_i1 = 20
+call nx_btmap_get
+assert_eq nx_r0, 200
+
+let nx_i0 = map
+let nx_i1 = 99
+call nx_btmap_get
+assert_eq nx_r0, 0
+
+print "--- TEST 3: Min, Max & Lower Bound ---"
+let nx_i0 = map
+call nx_btmap_min_key
+assert_eq nx_r0, 10
+
+let nx_i0 = map
+call nx_btmap_max_key
+assert_eq nx_r0, 30
+
+let nx_i0 = map
+let nx_i1 = 15
+call nx_btmap_lower_bound
+assert_eq nx_r0, 20
+
+let nx_i0 = map
+let nx_i1 = 20
+call nx_btmap_lower_bound
+assert_eq nx_r0, 20
+
+let nx_i0 = map
+let nx_i1 = 35
+call nx_btmap_lower_bound
+assert_eq nx_r0, -1
+
+print "--- TEST 4: Removal ---"
+let nx_i0 = map
+let nx_i1 = 20
+call nx_btmap_remove
+assert_eq nx_r0, 1
+
+let nx_i0 = map
+call nx_btmap_len
+assert_eq nx_r0, 2
+
+let nx_i0 = map
+let nx_i1 = 20
+call nx_btmap_contains
+assert_eq nx_r0, 0
+
+print "--- TEST 5: BTreeSet ---"
+let set = 0
+call nx_btset_new
+let set = nx_r0
+
+let nx_i0 = set
+let nx_i1 = 50
+call nx_btset_add
+
+let nx_i0 = set
+let nx_i1 = 25
+call nx_btset_add
+
+let nx_i0 = set
+let nx_i1 = 75
+call nx_btset_add
+
+let nx_i0 = set
+let nx_i1 = 0
+call nx_btset_at
+assert_eq nx_r0, 25
+
+let nx_i0 = set
+let nx_i1 = 1
+call nx_btset_at
+assert_eq nx_r0, 50
+
+let nx_i0 = set
+let nx_i1 = 2
+call nx_btset_at
+assert_eq nx_r0, 75
+
+let nx_i0 = set
+let nx_i1 = 50
+call nx_btset_remove
+assert_eq nx_r0, 1
+
+print "BTREE_TEST_PASS"
+call nx_assert_summary

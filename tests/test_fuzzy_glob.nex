@@ -1,0 +1,97 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/fuzzy_glob.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Fuzzy, ANSI, URL Codec & Glob
+#               Features: #141, #142, #145, #151
+# ==============================================================================
+
+print "--- TEST 1: Fuzzy Match & Score (#141) ---"
+let nx_i0 = "fb"
+let nx_i1 = "foo_bar"
+call nx_fuzzy_match
+assert_eq nx_r0, 1
+
+let nx_i0 = "xyz"
+let nx_i1 = "foo_bar"
+call nx_fuzzy_match
+assert_eq nx_r0, 0
+
+let nx_i0 = "fb"
+let nx_i1 = "foo_bar"
+call nx_fuzzy_score
+let sc = nx_r0
+if sc > 0 {
+    let sc_ok = 1
+} else {
+    let sc_ok = 0
+}
+assert_eq sc_ok, 1
+
+let nx_i0 = "xyz"
+let nx_i1 = "foo_bar"
+call nx_fuzzy_score
+assert_eq nx_r0, 0
+
+print "--- TEST 2: ANSI Escape Stripper (#142) ---"
+# ESC is ASCII 27
+let ansi_raw = alloc 32
+store [ansi_raw + 0] 27
+store [ansi_raw + 1] 91   # '['
+store [ansi_raw + 2] 51   # '3'
+store [ansi_raw + 3] 49   # '1'
+store [ansi_raw + 4] 109  # 'm'
+store [ansi_raw + 5] 79   # 'O'
+store [ansi_raw + 6] 75   # 'K'
+store [ansi_raw + 7] 27
+store [ansi_raw + 8] 91
+store [ansi_raw + 9] 48   # '0'
+store [ansi_raw + 10] 109 # 'm'
+store [ansi_raw + 11] 0
+
+let nx_i0 = ansi_raw
+call nx_ansi_strip
+let clean_str = nx_r0
+let nx_i0 = clean_str
+let nx_i1 = "OK"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 3: URL Encode & Decode (#145) ---"
+let orig_url = "https://nexus.lang/search?q=hello world"
+let nx_i0 = orig_url
+call nx_url_encode
+let enc_url = nx_r0
+
+let nx_i0 = enc_url
+call nx_url_decode
+let dec_url = nx_r0
+
+let nx_i0 = dec_url
+let nx_i1 = orig_url
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 4: Wildcard Glob Matcher (#151) ---"
+let nx_i0 = "*.nex"
+let nx_i1 = "test_file.nex"
+call nx_glob_match
+assert_eq nx_r0, 1
+
+let nx_i0 = "*.nex"
+let nx_i1 = "test_file.c"
+call nx_glob_match
+assert_eq nx_r0, 0
+
+let nx_i0 = "app_??"
+let nx_i1 = "app_42"
+call nx_glob_match
+assert_eq nx_r0, 1
+
+let nx_i0 = "app_??"
+let nx_i1 = "app_420"
+call nx_glob_match
+assert_eq nx_r0, 0
+
+print "FUZZY_GLOB_TEST_PASS"
+call nx_assert_summary

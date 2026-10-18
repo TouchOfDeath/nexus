@@ -55,13 +55,13 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 8. **Closures & Anonymous Functions (Lambdas)** *(COMPLETED)*: Support capturing surrounding environment state in inline anonymous functions `let cb = |event| handle(event);` for GUI event listeners.
 9. **Function Pointers / First-Class Functions**: Enable passing function addresses as first-class variables and callbacks `let on_click: fn(int, int) -> void`.
 10. **Static Typing with Inference**: Provide full bidirectional type inference (`let x = 5` infers `int64`) while enforcing compile-time type safety on mismatches.
-11. **Struct Definitions with Named Fields**: Enable composite data types `struct Point { x: int, y: int }` with compiler-computed field byte offsets.
-12. **Struct Methods & Associated Functions**: Allow attaching member methods to structs `impl Point { fn length(&self) -> float }` with automatic `self` reference injection.
-13. **Struct Field Initialization Syntax**: Support idiomatic record construction `let p = Point { x: 10, y: 20 }` with compile-time missing field detection.
+11. [x] **Struct Definitions with Named Fields** *(COMPLETED in v8.8)*: Enable composite data types `struct Point { x: int, y: int }` with compiler-computed field byte offsets.
+12. [x] **Struct Methods & Associated Functions** *(COMPLETED in v8.8: `impl Struct { ... }`)*: Allow attaching member methods to structs `impl Point { fn length(&self) -> float }` with automatic `self` reference injection.
+13. [x] **Struct Field Initialization Syntax** *(COMPLETED in v8.8: `Point { x: 10, y: 20 }`)*: Support idiomatic record construction `let p = Point { x: 10, y: 20 }` with compile-time missing field detection.
 14. **Struct Memory Alignment & Padding**: Calculate struct alignment rules (e.g. 8-byte alignment for 64-bit words) to prevent unaligned memory bus penalties.
 15. **Union Types / Untagged Unions**: Support C-style low-level untagged unions for raw memory reinterpretation in binary protocol parsing.
-16. **Algebraic Data Types (Tagged Enums)**: Support sum types `enum Event { KeyDown(int), MouseMove(int, int), Quit }` carrying strongly-typed payloads.
-17. **Pattern Matching (`match` expressions)**: Provide exhaustive pattern matching over enums, integers, and structs with compile-time exhaustiveness checking.
+16. [x] **Enum Declarations (`enum`)** *(COMPLETED in v8.8)*: Support sum types `enum Event { KeyDown(int), MouseMove(int, int), Quit }` carrying strongly-typed payloads.
+17. [x] **Pattern Matching (`match` statements)** *(COMPLETED in v8.8)*: Provide exhaustive pattern matching over enums, integers, and structs with compile-time exhaustiveness checking.
 18. **Destructuring Bindings**: Support unpacking tuples, structs, and enum variants directly into local variables `let Point { x, y } = get_pos();`.
 19. **Interfaces / Traits / Protocols**: Enable trait definitions `trait Drawable { fn draw(&self, fb: &mut Framebuffer); }` for polymorphic GUI components.
 20. **Dynamic Trait Dispatch (vables/Fat Pointers)**: Support runtime polymorphism via dynamic trait objects `&dyn Widget` storing a data pointer and vtable pointer.
@@ -75,7 +75,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 28. **Hexadecimal Number Literals** *(COMPLETED)*: Support `0x11111B`, `0xRRGGBB`, and `0xFF` hex notation so color constants don't require awkward decimal conversions.
 29. **Binary Number Literals** *(COMPLETED)*: Support `0b10101010` binary literals for bitmask manipulation in X11 and Wayland wire protocols.
 30. **Octal Number Literals** *(COMPLETED)*: Support `0o644` and `0o755` octal notation for POSIX file permission masks.
-31. **Scientific Notation Float Literals**: Parse exponential floating-point numbers `1.5e-3` for physics and subpixel layout coordinates.
+31. [x] **Scientific Notation Float Literals** *(COMPLETED in v8.8: `1.5e-3`, `2.5e4`)*: Parse exponential floating-point numbers `1.5e-3` for physics and subpixel layout coordinates.
 32. **Bitwise Shift Operators (`<<`, `>>`)** *(COMPLETED)*: Native AST-level bit shift operators with direct emission of `shl`, `shr`, and `sar` x86/ARM64 instructions (desugared to `stdlib/bitwise.nex`).
 33. **Bitwise Logic Operators (`&`, `|`, `^`, `~`)** *(COMPLETED)*: Direct bitwise AND, OR, XOR, and NOT operators (desugared to `stdlib/bitwise.nex`).
 34. **Compound Assignment Operators** *(COMPLETED)*: Support `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` across all lvalues.
@@ -121,8 +121,8 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 69. **Gap Buffer**: Classic buffer structure with a sliding contiguous cursor gap, providing O(1) localized character insertions and deletions.
 70. **Associative Hash Map (`HashMap<K, V>`)** *(COMPLETED)*: High-performance hash map (e.g. SwissTable or open-addressing linear probing) for keyword lookups, symbol tables, and settings (`stdlib/hashmap.nex`).
 71. **Hash Set (`HashSet<T>`)** *(COMPLETED)*: Open-addressing set collection (linear probing + tombstones) supporting integer and string elements, content-based string identity, and automatic doubling rehash for fast membership testing, duplicate elimination, and token categorization (`stdlib/hashset.nex`).
-72. **Ordered Map (`BTreeMap<K, V>`)**: Self-balancing B-Tree mapping keys in sorted order for line index lookups and bookmark positioning.
-73. **Ordered Set (`BTreeSet<T>`)**: Sorted set for tracking active breakpoint line numbers and diagnostic markers.
+72. [x] **Ordered Map (`BTreeMap<K, V>`) (`stdlib/btree.nex`)**: Self-balancing B-Tree mapping keys in sorted order for line index lookups and bookmark positioning.
+73. [x] **Ordered Set (`BTreeSet<T>`) (`stdlib/btree.nex`)**: Sorted set for tracking active breakpoint line numbers and diagnostic markers.
 74. [x] **Double-Ended Queue (`Deque<T>`) (`stdlib/ring_buffer.nex`)**: Ring-buffer backed double-ended queue with amortized O(1) push and pop at both head and tail, logical random access, and geometric auto-expansion.
 75. [x] **Circular Ring Buffer (`stdlib/ring_buffer.nex`)**: Fixed-capacity circular buffer with overwrite eviction mode, dropped count tracking, in-place rotation, linearization, and reversal for console output streaming, logging history, and audio sample mixing.
 76. [x] **Priority Queue / Binary Heap (`stdlib/priority_queue.nex`)**: Binary heap priority queue supporting both min-heap and max-heap modes with O(log n) push/pop, sift-up/sift-down rebalancing, peek, auto-doubling growth, duplicate and negative value handling (`stdlib/priority_queue.nex`).
@@ -131,9 +131,9 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 79. **Bloom Filter**: Probabilistic filter for instantaneous negative lookups across vast codebase symbol indexes.
 80. [x] **Trie / Prefix Tree (`stdlib/trie.nex`)**: Character trie with parallel branch arrays supporting insert, exact contains, prefix queries, word removal (terminator unmarking), shared prefixes, and the empty-string word (`stdlib/trie.nex`).
 81. **Compressed Radix Tree (Patricia Tree)**: Space-optimized prefix tree for path routing and symbol namespace resolution.
-82. **Interval Tree**: Tree structure for querying overlapping text ranges, syntax highlight spans, and code folding regions in O(log N).
+82. [x] **Interval Tree (`stdlib/interval_tree.nex`)**: Tree structure for querying overlapping text ranges, syntax highlight spans, and code folding regions in O(log N).
 83. **Spatial QuadTree**: 2D spatial partitioning tree for accelerating hit-testing across thousands of visual UI elements.
-84. **Line Offset Index Table**: Dynamic array of byte offsets corresponding to line numbers for O(1) line-to-byte and byte-to-line coordinate translation.
+84. [x] **Line Offset Index Table (`stdlib/line_index.nex`)**: Dynamic array of byte offsets corresponding to line numbers for O(1) line-to-byte and byte-to-line coordinate translation.
 85. **Undo / Redo Command History Stack**: Bounded or unbounded dual-stack tracking inverse edit operations for atomic multi-step rollback.
 86. **Selection Range Model**: Data structure representing multiple disjoint non-contiguous text selections and rectangular columnar cursors.
 87. [x] **Fast Memory Move (`memmove`) (`stdlib/memory.nex`)**: Overlap-safe byte-granular move selecting forward copy when dst < src and backward copy when dst > src, with a no-op on identical buffers and zero-length requests (`stdlib/memory.nex`).
@@ -144,7 +144,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 92. **Generic Sorting Algorithm (TimSort / IntroSort)**: Stable, high-performance hybrid sort for ordering files, diagnostic lists, and search results.
 93. [x] **Binary Search Primitives (`stdlib/search.nex`)**: Exact-match (first occurrence), lower-bound, and upper-bound binary searches over sorted 64-bit arrays with overflow-free midpoint computation, returning half-open duplicate ranges and ascending insertion points (`stdlib/search.nex`).
 94. [x] **LRU (Least Recently Used) Cache (`stdlib/lru_cache.nex`)**: Fixed-capacity cache combining an open-addressing hash table with an intrusive doubly-linked recency list: O(1) get/put with recency refresh, tail eviction with tombstone revival, automatic tombstone rebuild, and value-0-safe membership queries (`stdlib/lru_cache.nex`).
-95. **String Interning Pool (String Interner)**: Global deduplicated string table mapping string slices to 32-bit integer symbols (`SymbolId`).
+95. [x] **String Interning Pool (String Interner) (`stdlib/interner.nex`)**: Global deduplicated string table mapping string slices to 32-bit integer symbols (`SymbolId`).
 96. [x] **Arena Allocator for Document ASTs (`stdlib/arena.nex`)**: Chunked bump allocator with 8-byte aligned O(1) allocations, automatic chunk chaining (default and oversized chunk sizes), usage/capacity/chunk-count metrics, and a single-pass reset that retains chunks for reuse (`stdlib/arena.nex`).
 97. **Slab Allocator**: Fixed-size chunk allocator avoiding heap fragmentation for editor piece descriptors and UI event nodes.
 98. **Pool Allocator**: Pre-allocated object pool recycling frequently allocated UI event structs.
@@ -153,7 +153,7 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 101. **Myers Difference Algorithm (Diff Engine)**: Minimal edit script generator computing line-by-line diffs for Git integration and merge views.
 102. **Patience Diff Algorithm**: Syntactically pleasing diff generator aligning unique lines for cleaner code patch reviews.
 103. **Text Wrap Measurement Cache**: Cache storing measured pixel widths for wrapped text lines to eliminate expensive reflow recalculations.
-104. **Segment Tree**: Tree storing aggregated line height totals for smooth pixel-accurate vertical scrolling over dynamic line heights.
+104. [x] **Segment Tree (`stdlib/segment_tree.nex`)**: Tree storing aggregated line height totals for smooth pixel-accurate vertical scrolling over dynamic line heights.
 105. **Fenwick Tree (Binary Indexed Tree)**: Logarithmic prefix-sum data structure for maintaining dynamic cumulative line height sums.
 106. **Sparse Set**: Dense-iteration sparse set for fast entity-component lookups in UI rendering trees.
 107. **Disjoint-Set (Union-Find)**: Partition tracking structure for resolving connected components in layout graphs.
@@ -195,17 +195,17 @@ To evolve NEXUS from a compiler proof-of-concept into a serious native systems l
 138. **String Prefix & Suffix Checking** *(COMPLETED)*: `nx_str_starts_with` and `nx_str_ends_with` in `stdlib/strings.nex`, including empty and overlong match edge cases.
 139. **Levenshtein Edit Distance Algorithm**: Fuzzy string metric for 'Did you mean?' typo suggestions on compiler keyword errors.
 140. **Jaro-Winkler Similarity Metric**: Fuzzy matching algorithm favoring matching prefixes for IDE autocomplete ranking.
-141. **Fuzzy Subsequence Matcher**: Subsequence scoring algorithm (like fzf) for fast file switching (`Ctrl+P`) and symbol search.
-142. **ANSI Escape Sequence Stripper**: Utility stripping VT100 color codes from compiler output before logging or measurement.
+141. [x] **Fuzzy Subsequence Matcher (`stdlib/fuzzy_glob.nex`)**: Subsequence scoring algorithm (like fzf) for fast file switching (`Ctrl+P`) and symbol search.
+142. [x] **ANSI Escape Sequence Stripper (`stdlib/fuzzy_glob.nex`)**: Utility stripping VT100 color codes from compiler output before logging or measurement.
 143. **Hexadecimal Byte Dump Formatter**: Utility formatting binary buffers into standard hex-editor style rows with ASCII sidebars.
 144. **Base64 Encoder & Decoder**: Encoding binary data to Base64 and vice versa for embedding images in documentation and web protocols.
-145. **URL / Percent-Encoding Utilities**: Encoding and decoding file URIs (`file:///path/to/code.nex`) for LSP interactions.
+145. [x] **URL / Percent-Encoding Utilities (`stdlib/fuzzy_glob.nex`)**: Encoding and decoding file URIs (`file:///path/to/code.nex`) for LSP interactions.
 146. **Escape Character Unescaping Parser** *(COMPLETED)*: Transforming string literal escape codes (`\n`, `\t`, `\r`, `\0`, `\xHH`, `\e`, `\\`, `\"`) into binary bytes.
 147. **Escape Character Escaper** *(COMPLETED)*: `nx_str_escape_literal` writes quoted NEXUS literals with short escapes for quote, backslash, tab, CR, and LF; other non-printable bytes are emitted as `\xHH`.
 148. **Line Ending Normalizer** *(COMPLETED)*: `nx_str_normalize_newlines` converts CRLF and lone CR to LF, preserves existing LF, and supports in-place normalization of mutable buffers.
 149. **Indentation Detection Engine**: Analyzing buffer lines to automatically detect whether a file uses tabs or spaces, and the tab width.
 150. **Tab-to-Space and Space-to-Tab Converter**: Utility converting between tab characters and aligned spaces based on tab stop positions.
-151. **Wildcard / Glob Pattern Matcher**: File path matching using `*`, `?`, and `**` patterns for `.gitignore` and project search exclusions.
+151. [x] **Wildcard / Glob Pattern Matcher (`stdlib/fuzzy_glob.nex`)**: File path matching using `*`, `?`, and `**` patterns for `.gitignore` and project search exclusions.
 152. **Secure Constant-Time String Comparison**: Cryptographically safe string equality check preventing timing attacks on sensitive tokens.
 153. **Rope Slice Traversal Iterator**: Iterator streaming UTF-8 bytes across disjoint rope leaf nodes without flattening to a contiguous string.
 154. **Zero-Allocation Number to String Formatters**: Fast integer-to-ASCII (`itoa`) and float-to-ASCII (`dtoa` / Ryu algorithm) writing directly into caller buffers.

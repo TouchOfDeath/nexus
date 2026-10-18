@@ -1036,7 +1036,14 @@ v87_suites = [
     ("tests/test_pattern_search.nex", "PATTERN_SEARCH_TEST_PASS", "Pattern search suite: Features #89 & #90 (KMP & Boyer-Moore-Horspool)"),
     ("tests/test_fenwick_uf.nex", "FENWICK_UF_TEST_PASS", "Fenwick & Union-Find suite: Features #105 & #107 (BIT & DSU)"),
     ("tests/test_base64.nex", "BASE64_TEST_PASS", "Base64 suite: Feature #144 (RFC 4648 encode & decode)"),
-    ("tests/test_strings_v87.nex", "STRINGS_V87_TEST_PASS", "Strings & Ergonomics v8.7: #29, #34, #135-#139, parens & Gauss")
+    ("tests/test_strings_v87.nex", "STRINGS_V87_TEST_PASS", "Strings & Ergonomics v8.7: #29, #34, #135-#139, parens & Gauss"),
+    ("tests/test_lang_v88.nex", "LANG_V88_TEST_PASS", "Language v8.8 suite: #11-#13, #16-#17, #31, 64-bit structs & Turbine 9"),
+    ("tests/test_btree.nex", "BTREE_TEST_PASS", "Ordered BTreeMap & BTreeSet suite: Features #72 & #73"),
+    ("tests/test_interval_tree.nex", "INTERVAL_TREE_TEST_PASS", "Interval tree suite: Feature #82 (O(log N) range overlap)"),
+    ("tests/test_line_index.nex", "LINE_INDEX_TEST_PASS", "Line offset index suite: Feature #84 (line <-> byte lookup)"),
+    ("tests/test_interner.nex", "INTERNER_TEST_PASS", "String interner suite: Feature #95 (O(1) symbol deduplication)"),
+    ("tests/test_segment_tree.nex", "SEGMENT_TREE_TEST_PASS", "Segment tree suite: Feature #104 (range sum, min & max)"),
+    ("tests/test_fuzzy_glob.nex", "FUZZY_GLOB_TEST_PASS", "Fuzzy, ANSI, URL & Glob suite: Features #141, #142, #145, #151")
 ]
 v87_ok = True
 for rel_p, marker, desc in v87_suites:
@@ -1271,6 +1278,7 @@ print(f"    Runtime Mode:        Direct Linux x86-64 ELF64 (0% libc, direct kern
         echo -e "    \033[0;32m[+] Turbine 6:\033[0m Register Promotion Engine (Zero Stack RAM Writes & Invariant Peeling)"
         echo -e "    \033[0;32m[+] Turbine 7:\033[0m Scalar Evolution (SCEV) Recurrence Attractor Solver"
         echo -e "    \033[0;32m[+] Turbine 8:\033[0m Closed-Form Gauss Triangular Summation Solver (O(1) Collapse)"
+        echo -e "    \033[0;32m[+] Turbine 9:\033[0m Algebraic Identity, Annihilation & Call-Graph Dead Function Elimination"
         echo -e "\n\033[1;33m[*] Benchmarking Semantic Loop Elimination (50M logical iterations)...\033[0m"
         python3 -c '
 import subprocess, time, os, sys

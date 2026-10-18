@@ -1,0 +1,93 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/line_index.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Line Offset Index Table (Feature #84)
+# ==============================================================================
+
+print "--- TEST 1: Build Line Index & Line Count ---"
+# "Line 0\nLine 1 is longer\nL2"
+# Line 0: "Line 0" (len 6, start 0, end 6)
+# Line 1: "Line 1 is longer" (len 16, start 7, end 23)
+# Line 2: "L2" (len 2, start 24, end 26)
+let sample_text = "Line 0\nLine 1 is longer\nL2"
+let nx_i0 = sample_text
+call nx_line_index_build
+let li = nx_r0
+
+let nx_i0 = li
+call nx_line_count
+assert_eq nx_r0, 3
+
+print "--- TEST 2: Start & End Offsets ---"
+let nx_i0 = li
+let nx_i1 = 0
+call nx_line_start_offset
+assert_eq nx_r0, 0
+
+let nx_i0 = li
+let nx_i1 = 0
+call nx_line_end_offset
+assert_eq nx_r0, 6
+
+let nx_i0 = li
+let nx_i1 = 1
+call nx_line_start_offset
+assert_eq nx_r0, 7
+
+let nx_i0 = li
+let nx_i1 = 1
+call nx_line_end_offset
+assert_eq nx_r0, 23
+
+let nx_i0 = li
+let nx_i1 = 2
+call nx_line_start_offset
+assert_eq nx_r0, 24
+
+let nx_i0 = li
+let nx_i1 = 2
+call nx_line_end_offset
+assert_eq nx_r0, 26
+
+print "--- TEST 3: Line Lengths ---"
+let nx_i0 = li
+let nx_i1 = 0
+call nx_line_length
+assert_eq nx_r0, 6
+
+let nx_i0 = li
+let nx_i1 = 1
+call nx_line_length
+assert_eq nx_r0, 16
+
+let nx_i0 = li
+let nx_i1 = 2
+call nx_line_length
+assert_eq nx_r0, 2
+
+print "--- TEST 4: Offset to Line Mapping ---"
+let nx_i0 = li
+let nx_i1 = 3
+call nx_offset_to_line
+assert_eq nx_r0, 0
+
+let nx_i0 = li
+let nx_i1 = 7
+call nx_offset_to_line
+assert_eq nx_r0, 1
+
+let nx_i0 = li
+let nx_i1 = 25
+call nx_offset_to_line
+assert_eq nx_r0, 2
+
+print "--- TEST 5: Line + Column to Offset ---"
+let nx_i0 = li
+let nx_i1 = 1
+let nx_i2 = 5
+call nx_line_col_to_offset
+assert_eq nx_r0, 12
+
+print "LINE_INDEX_TEST_PASS"
+call nx_assert_summary

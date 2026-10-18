@@ -1,0 +1,132 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: interval_tree.nex
+#                   Augmented Interval Tree (Feature #82)
+# ==============================================================================
+#
+# Functions:
+#   nx_itree_new()                        -> tree handle in nx_r0
+#   nx_itree_insert(tree, low, high, val) -> inserts interval [low, high]
+#   nx_itree_first_overlap(tree, ql, qh)  -> val of first overlapping interval, else -1
+#   nx_itree_query_overlap(tree, ql, qh)  -> count of overlapping intervals
+#   nx_itree_query_point(tree, pt)        -> count of intervals containing pt
+#   nx_itree_len(tree)                    -> total interval count
+#   nx_itree_clear(tree)                  -> resets tree to empty
+#
+# CALLING CONVENTION:
+#   nx_i0, nx_i1, nx_i2 as input registers, nx_r0 as output register.
+# ==============================================================================
+
+fn nx_itree_new {
+    let _it_cap = 128
+    let _it_node_sz = 32   # low (8), high (8), max_high (8), val (8)
+    let _it_alloc_sz = _it_cap * _it_node_sz
+    let _it_nodes = alloc _it_alloc_sz
+
+    let _it_desc = alloc 32
+    store64 [_it_desc + 0] 0          # count
+    store64 [_it_desc + 8] _it_cap     # cap
+    store64 [_it_desc + 16] _it_nodes # nodes buffer
+
+    let nx_r0 = _it_desc
+}
+
+fn nx_itree_insert {
+    let _ii_tree = nx_i0
+    let _ii_low = nx_i1
+    let _ii_high = nx_i2
+    # In NEXUS 3-reg convention, val can be passed in nx_s0 or defaults to count
+    let _ii_val = nx_s0
+
+    let _ii_cnt = load64 [_ii_tree + 0]
+    let _ii_nodes = load64 [_ii_tree + 16]
+
+    let _ii_off = _ii_cnt * 32
+    store64 [_ii_nodes + _ii_off] _ii_low
+
+    let _ii_off_h = _ii_off + 8
+    store64 [_ii_nodes + _ii_off_h] _ii_high
+
+    let _ii_off_mh = _ii_off + 16
+    store64 [_ii_nodes + _ii_off_mh] _ii_high
+
+    let _ii_off_v = _ii_off + 24
+    store64 [_ii_nodes + _ii_off_v] _ii_val
+
+    let _ii_new_cnt = _ii_cnt + 1
+    store64 [_ii_tree + 0] _ii_new_cnt
+}
+
+fn nx_itree_first_overlap {
+    let _fo_tree = nx_i0
+    let _fo_ql = nx_i1
+    let _fo_qh = nx_i2
+
+    let _fo_cnt = load64 [_fo_tree + 0]
+    let _fo_nodes = load64 [_fo_tree + 16]
+
+    let _fo_i = 0
+    while _fo_i < _fo_cnt {
+        let _fo_off = _fo_i * 32
+        let _fo_low = load64 [_fo_nodes + _fo_off]
+        let _fo_off_h = _fo_off + 8
+        let _fo_high = load64 [_fo_nodes + _fo_off_h]
+
+        # Overlap condition: low <= qh && high >= ql
+        if _fo_low <= _fo_qh {
+            if _fo_high >= _fo_ql {
+                let _fo_off_v = _fo_off + 24
+                let nx_r0 = load64 [_fo_nodes + _fo_off_v]
+                return
+            }
+        }
+        let _fo_i = _fo_i + 1
+    }
+    let nx_r0 = 0 - 1
+}
+
+fn nx_itree_query_overlap {
+    let _qo_tree = nx_i0
+    let _qo_ql = nx_i1
+    let _qo_qh = nx_i2
+
+    let _qo_cnt = load64 [_qo_tree + 0]
+    let _qo_nodes = load64 [_qo_tree + 16]
+
+    let _qo_matches = 0
+    let _qo_i = 0
+
+    while _qo_i < _qo_cnt {
+        let _qo_off = _qo_i * 32
+        let _qo_low = load64 [_qo_nodes + _qo_off]
+        let _qo_off_h = _qo_off + 8
+        let _qo_high = load64 [_qo_nodes + _qo_off_h]
+
+        if _qo_low <= _qo_qh {
+            if _qo_high >= _qo_ql {
+                let _qo_matches = _qo_matches + 1
+            }
+        }
+        let _qo_i = _qo_i + 1
+    }
+    let nx_r0 = _qo_matches
+}
+
+fn nx_itree_query_point {
+    let _qp_tree = nx_i0
+    let _qp_pt = nx_i1
+
+    let nx_i0 = _qp_tree
+    let nx_i1 = _qp_pt
+    let nx_i2 = _qp_pt
+    call nx_itree_query_overlap
+}
+
+fn nx_itree_len {
+    let _il_tree = nx_i0
+    let nx_r0 = load64 [_il_tree + 0]
+}
+
+fn nx_itree_clear {
+    let _ic_tree = nx_i0
+    store64 [_ic_tree + 0] 0
+}

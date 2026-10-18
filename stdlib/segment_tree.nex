@@ -1,0 +1,253 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: segment_tree.nex
+#                   Segment Tree: Sum, Min & Max (Feature #104)
+# ==============================================================================
+#
+# Functions:
+#   nx_segtree_new(n)                     -> tree handle in nx_r0
+#   nx_segtree_build(tree, arr, n)        -> populates tree with arr elements
+#   nx_segtree_update(tree, idx, val)     -> sets element at idx to val
+#   nx_segtree_add(tree, idx, delta)      -> adds delta to element at idx
+#   nx_segtree_query_sum(tree, ql, qr)    -> range sum [ql, qr] in nx_r0
+#   nx_segtree_query_min(tree, ql, qr)    -> range min [ql, qr] in nx_r0
+#   nx_segtree_query_max(tree, ql, qr)    -> range max [ql, qr] in nx_r0
+#
+# CALLING CONVENTION:
+#   nx_i0, nx_i1, nx_i2 as input registers, nx_r0 as output register.
+# ==============================================================================
+
+fn nx_segtree_new {
+    let _st_n = nx_i0
+
+    # Find smallest power of 2 >= n
+    let _st_k = 1
+    while _st_k < _st_n {
+        let _st_k = _st_k * 2
+    }
+
+    let _st_total_nodes = _st_k * 2
+    let _st_bytes = _st_total_nodes * 8
+
+    let _st_tsum = alloc _st_bytes
+    let _st_tmin = alloc _st_bytes
+    let _st_tmax = alloc _st_bytes
+
+    # Initialize all nodes to 0
+    let _st_i = 0
+    while _st_i < _st_total_nodes {
+        let _st_off = _st_i * 8
+        store64 [_st_tsum + _st_off] 0
+        store64 [_st_tmin + _st_off] 0
+        store64 [_st_tmax + _st_off] 0
+        let _st_i = _st_i + 1
+    }
+
+    # Descriptor (32 bytes):
+    # [0] = n
+    # [8] = k (leaf base)
+    # [16] = tree_sum
+    # [24] = tree_min
+    # [32] = tree_max
+    let _st_desc = alloc 40
+    store64 [_st_desc + 0] _st_n
+    store64 [_st_desc + 8] _st_k
+    store64 [_st_desc + 16] _st_tsum
+    store64 [_st_desc + 24] _st_tmin
+    store64 [_st_desc + 32] _st_tmax
+
+    let nx_r0 = _st_desc
+}
+
+fn nx_segtree_update {
+    let _su_tree = nx_i0
+    let _su_idx = nx_i1
+    let _su_val = nx_i2
+
+    let _su_k = load64 [_su_tree + 8]
+    let _su_tsum = load64 [_su_tree + 16]
+    let _su_tmin = load64 [_su_tree + 24]
+    let _su_tmax = load64 [_su_tree + 32]
+
+    let _su_node = _su_k + _su_idx
+    let _su_off = _su_node * 8
+    store64 [_su_tsum + _su_off] _su_val
+    store64 [_su_tmin + _su_off] _su_val
+    store64 [_su_tmax + _su_off] _su_val
+
+    let _su_node = _su_node / 2
+    while _su_node > 0 {
+        let _su_noff = _su_node * 8
+        let _su_left = _su_node * 2
+        let _su_right = _su_left + 1
+        let _su_loff = _su_left * 8
+        let _su_roff = _su_right * 8
+
+        # Sum
+        let _su_ls = load64 [_su_tsum + _su_loff]
+        let _su_rs = load64 [_su_tsum + _su_roff]
+        let _su_sum = _su_ls + _su_rs
+        store64 [_su_tsum + _su_noff] _su_sum
+
+        # Min
+        let _su_lm = load64 [_su_tmin + _su_loff]
+        let _su_rm = load64 [_su_tmin + _su_roff]
+        if _su_lm < _su_rm {
+            store64 [_su_tmin + _su_noff] _su_lm
+        } else {
+            store64 [_su_tmin + _su_noff] _su_rm
+        }
+
+        # Max
+        let _su_lx = load64 [_su_tmax + _su_loff]
+        let _su_rx = load64 [_su_tmax + _su_roff]
+        if _su_lx > _su_rx {
+            store64 [_su_tmax + _su_noff] _su_lx
+        } else {
+            store64 [_su_tmax + _su_noff] _su_rx
+        }
+
+        let _su_node = _su_node / 2
+    }
+}
+
+fn nx_segtree_add {
+    let _sa_tree = nx_i0
+    let _sa_idx = nx_i1
+    let _sa_delta = nx_i2
+
+    let _sa_k = load64 [_sa_tree + 8]
+    let _sa_tsum = load64 [_sa_tree + 16]
+    let _sa_node = _sa_k + _sa_idx
+    let _sa_off = _sa_node * 8
+    let _sa_cur = load64 [_sa_tsum + _sa_off]
+    let _sa_new = _sa_cur + _sa_delta
+
+    let nx_i0 = _sa_tree
+    let nx_i1 = _sa_idx
+    let nx_i2 = _sa_new
+    call nx_segtree_update
+}
+
+fn nx_segtree_build {
+    let _sb_tree = nx_i0
+    let _sb_arr = nx_i1
+    let _sb_n = nx_i2
+
+    let _sb_i = 0
+    while _sb_i < _sb_n {
+        let _sb_off = _sb_i * 8
+        let _sb_val = load64 [_sb_arr + _sb_off]
+        let nx_i0 = _sb_tree
+        let nx_i1 = _sb_i
+        let nx_i2 = _sb_val
+        call nx_segtree_update
+        let _sb_i = _sb_i + 1
+    }
+}
+
+fn nx_segtree_query_sum {
+    let _qs_tree = nx_i0
+    let _qs_ql = nx_i1
+    let _qs_qr = nx_i2
+
+    let _qs_k = load64 [_qs_tree + 8]
+    let _qs_tsum = load64 [_qs_tree + 16]
+
+    let _qs_l = _qs_k + _qs_ql
+    let _qs_r = _qs_k + _qs_qr
+    let _qs_acc = 0
+
+    while _qs_l <= _qs_r {
+        let _qs_lrem = _qs_l % 2
+        if _qs_lrem == 1 {
+            let _qs_loff = _qs_l * 8
+            let _qs_val = load64 [_qs_tsum + _qs_loff]
+            let _qs_acc = _qs_acc + _qs_val
+            let _qs_l = _qs_l + 1
+        }
+        let _qs_rrem = _qs_r % 2
+        if _qs_rrem == 0 {
+            let _qs_roff = _qs_r * 8
+            let _qs_val = load64 [_qs_tsum + _qs_roff]
+            let _qs_acc = _qs_acc + _qs_val
+            let _qs_r = _qs_r - 1
+        }
+        let _qs_l = _qs_l / 2
+        let _qs_r = _qs_r / 2
+    }
+    let nx_r0 = _qs_acc
+}
+
+fn nx_segtree_query_min {
+    let _qm_tree = nx_i0
+    let _qm_ql = nx_i1
+    let _qm_qr = nx_i2
+
+    let _qm_k = load64 [_qm_tree + 8]
+    let _qm_tmin = load64 [_qm_tree + 24]
+
+    let _qm_l = _qm_k + _qm_ql
+    let _qm_r = _qm_k + _qm_qr
+    let _qm_ans = 2000000000
+
+    while _qm_l <= _qm_r {
+        let _qm_lrem = _qm_l % 2
+        if _qm_lrem == 1 {
+            let _qm_loff = _qm_l * 8
+            let _qm_val = load64 [_qm_tmin + _qm_loff]
+            if _qm_val < _qm_ans {
+                let _qm_ans = _qm_val
+            }
+            let _qm_l = _qm_l + 1
+        }
+        let _qm_rrem = _qm_r % 2
+        if _qm_rrem == 0 {
+            let _qm_roff = _qm_r * 8
+            let _qm_val = load64 [_qm_tmin + _qm_roff]
+            if _qm_val < _qm_ans {
+                let _qm_ans = _qm_val
+            }
+            let _qm_r = _qm_r - 1
+        }
+        let _qm_l = _qm_l / 2
+        let _qm_r = _qm_r / 2
+    }
+    let nx_r0 = _qm_ans
+}
+
+fn nx_segtree_query_max {
+    let _qx_tree = nx_i0
+    let _qx_ql = nx_i1
+    let _qx_qr = nx_i2
+
+    let _qx_k = load64 [_qx_tree + 8]
+    let _qx_tmax = load64 [_qx_tree + 32]
+
+    let _qx_l = _qx_k + _qx_ql
+    let _qx_r = _qx_k + _qx_qr
+    let _qx_ans = 0 - 2000000000
+
+    while _qx_l <= _qx_r {
+        let _qx_lrem = _qx_l % 2
+        if _qx_lrem == 1 {
+            let _qx_loff = _qx_l * 8
+            let _qx_val = load64 [_qx_tmax + _qx_loff]
+            if _qx_val > _qx_ans {
+                let _qx_ans = _qx_val
+            }
+            let _qx_l = _qx_l + 1
+        }
+        let _qx_rrem = _qx_r % 2
+        if _qx_rrem == 0 {
+            let _qx_roff = _qx_r * 8
+            let _qx_val = load64 [_qx_tmax + _qx_roff]
+            if _qx_val > _qx_ans {
+                let _qx_ans = _qx_val
+            }
+            let _qx_r = _qx_r - 1
+        }
+        let _qx_l = _qx_l / 2
+        let _qx_r = _qx_r / 2
+    }
+    let nx_r0 = _qx_ans
+}

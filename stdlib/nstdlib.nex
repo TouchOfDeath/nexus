@@ -51,6 +51,12 @@
 #   stdlib/arena.nex          Feature #96   (nx_arena_* bump allocator)
 #   stdlib/unicode.nex        Features #113-115 (nx_utf8_*)
 #   stdlib/search.nex         Feature #93   (nx_bsearch_*)
+#   stdlib/btree.nex          Features #72-73 (nx_btmap_* / nx_btset_*)
+#   stdlib/interval_tree.nex  Feature #82   (nx_itree_* overlap range tree)
+#   stdlib/line_index.nex     Feature #84   (nx_line_index_* coordinate table)
+#   stdlib/interner.nex       Feature #95   (nx_intern_* symbol interner)
+#   stdlib/segment_tree.nex   Feature #104  (nx_segtree_* sum/min/max tree)
+#   stdlib/fuzzy_glob.nex     Features #141, #142, #145, #151 (fuzzy/url/glob)
 #
 # CALLING CONVENTION (all functions):
 #   1. Set inputs in nx_i0, nx_i1, nx_i2 (per-function signature)

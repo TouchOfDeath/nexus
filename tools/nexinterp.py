@@ -169,6 +169,28 @@ class NexusInterpreter:
         if expr.startswith('"') and expr.endswith('"'):
             return self.store_str_literal(expr[1:-1])
 
+        # Built-in float ops: fadd, fsub, fmul, fdiv, fsqrt, fneg, ftoi, itof
+        if expr.startswith(("fadd ", "fsub ", "fmul ", "fdiv ")):
+            parts = expr.split()
+            if len(parts) >= 3:
+                op = parts[0]
+                a = float(self.eval_atom(parts[1]))
+                b = float(self.eval_atom(parts[2]))
+                if op == "fadd": return a + b
+                if op == "fsub": return a - b
+                if op == "fmul": return a * b
+                if op == "fdiv": return (a / b) if b != 0.0 else 0.0
+        if expr.startswith("fsqrt "):
+            import math
+            v = float(self.eval_expr(expr[6:]))
+            return math.sqrt(v) if v >= 0.0 else 0.0
+        if expr.startswith("fneg "):
+            return -float(self.eval_expr(expr[5:]))
+        if expr.startswith("ftoi "):
+            return to_int64(int(float(self.eval_expr(expr[5:]))))
+        if expr.startswith("itof "):
+            return float(self.eval_expr(expr[5:]))
+
         # Built-in abs
         if expr.startswith("abs "):
             return abs(self.eval_expr(expr[4:]))
@@ -381,18 +403,27 @@ class NexusInterpreter:
                 stmts.append(('while', cond, self.parse_blocks(body)))
                 continue
 
-            if line.startswith('if ') and line.endswith('{'):
-                cond = line[3:-1].strip()
+            if (line.startswith('if ') or line.startswith('if_f ')) and line.endswith('{'):
+                cond = line.split(' ', 1)[1][:-1].strip()
                 then_body = []
                 else_body = []
                 depth = 1
                 in_else = False
+                nested_elif = 0
                 while i < len(lines) and depth > 0:
                     l = lines[i]
                     i += 1
                     trimmed = l.strip()
-                    if trimmed == '} else {' and depth == 1:
+                    if depth == 1 and not in_else and (trimmed.startswith('} else if ') or trimmed.startswith('} else if_f ')) and trimmed.endswith('{'):
                         in_else = True
+                        nested_elif += 1
+                        else_body.append(trimmed[7:])
+                        continue
+                    if depth == 1 and trimmed == '} else {':
+                        if not in_else:
+                            in_else = True
+                        else:
+                            else_body.append(l)
                         continue
                     for ch in l:
                         if ch == '{': depth += 1
@@ -402,6 +433,8 @@ class NexusInterpreter:
                             else_body.append(l)
                         else:
                             then_body.append(l)
+                for _ in range(nested_elif):
+                    else_body.append('}')
                 stmts.append(('if', cond, self.parse_blocks(then_body), self.parse_blocks(else_body)))
                 continue
 

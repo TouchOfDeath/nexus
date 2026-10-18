@@ -1,0 +1,65 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/interner.nex"
+
+# ==============================================================================
+#                 TEST SUITE: String Interning Pool (Feature #95)
+# ==============================================================================
+
+print "--- TEST 1: Pool Creation ---"
+let pool = 0
+call nx_intern_new
+let pool = nx_r0
+
+let nx_i0 = pool
+call nx_intern_count
+assert_eq nx_r0, 0
+
+print "--- TEST 2: Intern Strings & Deduplication ---"
+let nx_i0 = pool
+let nx_i1 = "foo"
+call nx_intern_str
+let id_foo = nx_r0
+assert_eq id_foo, 0
+
+let nx_i0 = pool
+let nx_i1 = "bar"
+call nx_intern_str
+let id_bar = nx_r0
+assert_eq id_bar, 1
+
+let nx_i0 = pool
+call nx_intern_count
+assert_eq nx_r0, 2
+
+# Re-intern "foo" should return same id 0 without increasing count
+let nx_i0 = pool
+let nx_i1 = "foo"
+call nx_intern_str
+assert_eq nx_r0, 0
+
+let nx_i0 = pool
+call nx_intern_count
+assert_eq nx_r0, 2
+
+print "--- TEST 3: Find & Resolve ---"
+let nx_i0 = pool
+let nx_i1 = "bar"
+call nx_intern_find
+assert_eq nx_r0, 1
+
+let nx_i0 = pool
+let nx_i1 = "not_found"
+call nx_intern_find
+assert_eq nx_r0, -1
+
+let nx_i0 = pool
+let nx_i1 = 0
+call nx_intern_resolve
+let res_str = nx_r0
+let nx_i0 = res_str
+let nx_i1 = "foo"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "INTERNER_TEST_PASS"
+call nx_assert_summary

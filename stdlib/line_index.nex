@@ -1,0 +1,161 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: line_index.nex
+#               Line Offset Index Table for Text / IDE (Feature #84)
+# ==============================================================================
+#
+# Functions:
+#   nx_line_index_build(str)              -> table pointer in nx_r0
+#   nx_line_count(table)                  -> total line count in nx_r0
+#   nx_line_start_offset(table, line_idx) -> byte offset where line begins
+#   nx_line_end_offset(table, line_idx)   -> byte offset where line text ends (before newline)
+#   nx_line_length(table, line_idx)       -> length of line in bytes
+#   nx_offset_to_line(table, byte_offset) -> 0-based line index containing offset
+#   nx_line_col_to_offset(table, line, col) -> byte offset from line and column
+#
+# CALLING CONVENTION:
+#   nx_i0, nx_i1, nx_i2 as input registers, nx_r0 as output register.
+# ==============================================================================
+
+fn nx_line_index_build {
+    let _li_str = nx_i0
+
+    # Pass 1: compute string length and line count
+    let _li_len = 0
+    let _li_lines = 1
+    let _li_c = load [_li_str + 0]
+    while _li_c != 0 {
+        if _li_c == 10 {
+            let _li_lines = _li_lines + 1
+        }
+        let _li_len = _li_len + 1
+        let _li_c = load [_li_str + _li_len]
+    }
+
+    # Descriptor layout (40 bytes):
+    # [0]  = count
+    # [8]  = str_ptr
+    # [16] = str_len
+    # [24] = starts_array
+    # [32] = ends_array
+    let _li_desc = alloc 40
+    let _li_arr_sz = _li_lines * 8
+    let _li_starts = alloc _li_arr_sz
+    let _li_ends = alloc _li_arr_sz
+
+    store64 [_li_desc + 0] _li_lines
+    store64 [_li_desc + 8] _li_str
+    store64 [_li_desc + 16] _li_len
+    store64 [_li_desc + 24] _li_starts
+    store64 [_li_desc + 32] _li_ends
+
+    # Pass 2: populate line start and end offsets
+    let _li_cur_line = 0
+    let _li_cur_start = 0
+    let _li_cur_pos = 0
+
+    while _li_cur_pos < _li_len {
+        let _li_ch = load [_li_str + _li_cur_pos]
+        if _li_ch == 10 {
+            # End of line
+            let _li_end_pos = _li_cur_pos
+            if _li_end_pos > _li_cur_start {
+                let _li_prev_pos = _li_end_pos - 1
+                let _li_prev_ch = load [_li_str + _li_prev_pos]
+                if _li_prev_ch == 13 {
+                    let _li_end_pos = _li_prev_pos
+                }
+            }
+            let _li_soff = _li_cur_line * 8
+            store64 [_li_starts + _li_soff] _li_cur_start
+            store64 [_li_ends + _li_soff] _li_end_pos
+
+            let _li_cur_line = _li_cur_line + 1
+            let _li_cur_start = _li_cur_pos + 1
+        }
+        let _li_cur_pos = _li_cur_pos + 1
+    }
+
+    # Final line
+    let _li_soff = _li_cur_line * 8
+    store64 [_li_starts + _li_soff] _li_cur_start
+    let _li_last_end = _li_len
+    if _li_last_end > _li_cur_start {
+        let _li_prev_pos = _li_last_end - 1
+        let _li_prev_ch = load [_li_str + _li_prev_pos]
+        if _li_prev_ch == 13 {
+            let _li_last_end = _li_prev_pos
+        }
+    }
+    store64 [_li_ends + _li_soff] _li_last_end
+
+    let nx_r0 = _li_desc
+}
+
+fn nx_line_count {
+    let _li_tbl = nx_i0
+    let nx_r0 = load64 [_li_tbl + 0]
+}
+
+fn nx_line_start_offset {
+    let _li_tbl = nx_i0
+    let _li_lidx = nx_i1
+    let _li_starts = load64 [_li_tbl + 24]
+    let _li_off = _li_lidx * 8
+    let nx_r0 = load64 [_li_starts + _li_off]
+}
+
+fn nx_line_end_offset {
+    let _li_tbl = nx_i0
+    let _li_lidx = nx_i1
+    let _li_ends = load64 [_li_tbl + 32]
+    let _li_off = _li_lidx * 8
+    let nx_r0 = load64 [_li_ends + _li_off]
+}
+
+fn nx_line_length {
+    let _li_tbl = nx_i0
+    let _li_lidx = nx_i1
+    let _li_starts = load64 [_li_tbl + 24]
+    let _li_ends = load64 [_li_tbl + 32]
+    let _li_off = _li_lidx * 8
+    let _li_s = load64 [_li_starts + _li_off]
+    let _li_e = load64 [_li_ends + _li_off]
+    let nx_r0 = _li_e - _li_s
+}
+
+fn nx_offset_to_line {
+    let _li_tbl = nx_i0
+    let _li_target = nx_i1
+    let _li_cnt = load64 [_li_tbl + 0]
+    let _li_starts = load64 [_li_tbl + 24]
+
+    # Binary search over line starts
+    let _li_lo = 0
+    let _li_hi = _li_cnt - 1
+    let _li_res = 0
+
+    while _li_lo <= _li_hi {
+        let _li_mid = _li_lo + _li_hi
+        let _li_mid = _li_mid / 2
+        let _li_moff = _li_mid * 8
+        let _li_mstart = load64 [_li_starts + _li_moff]
+
+        if _li_mstart <= _li_target {
+            let _li_res = _li_mid
+            let _li_lo = _li_mid + 1
+        } else {
+            let _li_hi = _li_mid - 1
+        }
+    }
+    let nx_r0 = _li_res
+}
+
+fn nx_line_col_to_offset {
+    let _li_tbl = nx_i0
+    let _li_lidx = nx_i1
+    let _li_cidx = nx_i2
+    let _li_starts = load64 [_li_tbl + 24]
+    let _li_off = _li_lidx * 8
+    let _li_s = load64 [_li_starts + _li_off]
+    let nx_r0 = _li_s + _li_cidx
+}

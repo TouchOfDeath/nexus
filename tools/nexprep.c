@@ -210,8 +210,21 @@ static int find_struct(const char *nm) {
     for (int i = 0; i < ns; i++) if (!strcmp(S[i].name, nm)) return i;
     return -1;
 }
+static int cur_impl_st = -1;
+
 static int find_obj(const char *nm) {
     for (int i = 0; i < nob; i++) if (!strcmp(OB[i].obj, nm)) return OB[i].st;
+    if (!strncmp(nm, "_ls_", 4)) {
+        const char *p = nm + 4;
+        while (*p >= '0' && *p <= '9') p++;
+        if (*p == '_') {
+            p++;
+            for (int i = 0; i < nob; i++)
+                if (!strcmp(OB[i].obj, p)) return OB[i].st;
+            if (!strcmp(p, "self") && cur_impl_st >= 0) return cur_impl_st;
+        }
+    }
+    if (!strcmp(nm, "self") && cur_impl_st >= 0) return cur_impl_st;
     return -1;
 }
 static void track_obj(const char *nm, int st) {
@@ -255,7 +268,7 @@ static void add_hoist(const char *name, const char *obj, int off) {
     if (nhoist >= MAXHOIST) die("too many hoisted loads on one line", NULL);
     for (int q = 0; q < nhoist; q++)
         if (strstr(hoist[q], name) == hoist[q] + 4) return; /* already hoisted */
-    snprintf(hoist[nhoist++], MAXLINE, "let %s = load [%s + %d]", name, obj, off);
+    snprintf(hoist[nhoist++], MAXLINE, "let %s = load64 [%s + %d]", name, obj, off);
 }
 
 static void add_hoist_line(const char *name, const char *line) {
@@ -323,7 +336,7 @@ static int transform_seg(char *out, const char *in, int mode) {
                 int off = member_off(tok, fld, &resolved);
                 if (resolved) {
                     if (mode == M_INLINE)
-                        o += sprintf(out + o, "load [%s + %d]", tok, off);
+                        o += sprintf(out + o, "load64 [%s + %d]", tok, off);
                     else {
                         char hn[160];
                         snprintf(hn, 160, "_s_%s_%s", tok, fld);
@@ -486,6 +499,51 @@ static int assert_line(const char *raw, FILE *out) {
  * struct declaration collection; returns 1 when the line was consumed
  * (declarations are commented out in the output)
  * -------------------------------------------------------------------------- */
+static void add_struct_fields_from_segment(int st_idx, const char *seg) {
+    char buf[MAXLINE];
+    snprintf(buf, sizeof buf, "%s", seg);
+    /* Strip comments */
+    char *cm = strchr(buf, '#'); if (cm) *cm = '\0';
+    char *sc = strchr(buf, ';'); if (sc) *sc = '\0';
+
+    /* Replace ': <type>' with spaces so 'x: int, y: float' parses field names cleanly */
+    char cleaned[MAXLINE];
+    int ci = 0;
+    for (int i = 0; buf[i] && ci < MAXLINE - 1; ) {
+        if (buf[i] == ':') {
+            i++;
+            while (buf[i] == ' ' || buf[i] == '\t') i++;
+            while (buf[i] && (is_ident1((unsigned char)buf[i]) || buf[i] == '*' || buf[i] == '&')) i++;
+            cleaned[ci++] = ' ';
+        } else if (buf[i] == ',') {
+            cleaned[ci++] = ' ';
+            i++;
+        } else {
+            cleaned[ci++] = buf[i++];
+        }
+    }
+    cleaned[ci] = '\0';
+
+    char *save = NULL;
+    char *fld = strtok_r(cleaned, " \t\r\n", &save);
+    while (fld) {
+        if (is_ident0((unsigned char)fld[0]) && S[st_idx].nfields < MAXFIELDS) {
+            int nf = S[st_idx].nfields;
+            snprintf(S[st_idx].fields[nf], 128, "%s", fld);
+            S[st_idx].offs[nf] = nf * 8;
+            S[st_idx].nfields++;
+            int found = 0;
+            global_field_off(fld, &found);
+            if (!found && ngf < MAXGLOBALS) {
+                snprintf(GF[ngf].field, 128, "%s", fld);
+                GF[ngf].off = nf * 8;
+                ngf++;
+            }
+        }
+        fld = strtok_r(NULL, " \t\r\n", &save);
+    }
+}
+
 static int struct_line(const char *raw) {
     char t[MAXLINE];
     snprintf(t, MAXLINE, "%s", raw);
@@ -499,36 +557,37 @@ static int struct_line(const char *raw) {
             nm[n] = '\0';
             while (p[k] == ' ' || p[k] == '\t') k++;
             if (nm[0] && p[k] == '{') {
-                if (ns >= MAXSTRUCTS) die("too many structs", nm);
-                snprintf(S[ns].name, 128, "%s", nm);
-                S[ns].nfields = 0;
-                cur_st = ns;
-                ns++;
+                int st_idx = find_struct(nm);
+                if (st_idx < 0) {
+                    if (ns >= MAXSTRUCTS) die("too many structs", nm);
+                    st_idx = ns++;
+                    snprintf(S[st_idx].name, 128, "%s", nm);
+                }
+                S[st_idx].nfields = 0;
+                char *body = p + k + 1;
+                char *close_br = strchr(body, '}');
+                if (close_br) {
+                    *close_br = '\0';
+                    add_struct_fields_from_segment(st_idx, body);
+                    cur_st = -1;
+                } else {
+                    add_struct_fields_from_segment(st_idx, body);
+                    cur_st = st_idx;
+                }
                 return 1;
             }
         }
         return 0;
     }
-    if (*p == '}') { cur_st = -1; return 1; }
-    if (*p == '#' || *p == '\0' || *p == '\n') return 1;
-    char *save = NULL;
-    char *fld = strtok_r(p, " \t\r\n", &save);
-    while (fld) {
-        if (is_ident0((unsigned char)fld[0]) && S[cur_st].nfields < MAXFIELDS) {
-            int nf = S[cur_st].nfields;
-            snprintf(S[cur_st].fields[nf], 128, "%s", fld);
-            S[cur_st].offs[nf] = nf * 8;
-            S[cur_st].nfields++;
-            int found = 0;
-            global_field_off(fld, &found);
-            if (!found && ngf < MAXGLOBALS) {
-                snprintf(GF[ngf].field, 128, "%s", fld);
-                GF[ngf].off = nf * 8;
-                ngf++;
-            }
-        }
-        fld = strtok_r(NULL, " \t\r\n", &save);
+    char *close_br = strchr(p, '}');
+    if (close_br) {
+        *close_br = '\0';
+        add_struct_fields_from_segment(cur_st, p);
+        cur_st = -1;
+        return 1;
     }
+    if (*p == '#' || *p == ';' || *p == '\0' || *p == '\n') return 1;
+    add_struct_fields_from_segment(cur_st, p);
     return 1;
 }
 
@@ -713,9 +772,17 @@ static void fn_registry_add_full(const char *name, char raw_params[][512], int n
         char *colon = strchr(pname, ':');
         if (colon) *colon = '\0';
 
-        /* Trim pname */
+        /* Trim pname and optional '&' / '&mut ' reference prefix */
         char *ps = pname;
         while (*ps == ' ' || *ps == '\t') ps++;
+        if (*ps == '&') {
+            ps++;
+            while (*ps == ' ' || *ps == '\t') ps++;
+            if (!strncmp(ps, "mut ", 4) || !strncmp(ps, "mut\t", 4)) {
+                ps += 4;
+                while (*ps == ' ' || *ps == '\t') ps++;
+            }
+        }
         int plen = (int)strlen(ps);
         while (plen > 0 && (ps[plen-1] == ' ' || ps[plen-1] == '\t')) plen--;
         ps[plen] = '\0';
@@ -763,11 +830,44 @@ static void scan_signatures_in_file(const char *path) {
     char *d = find_last_path_separator(curdir);
     if (d) *d = '\0'; else snprintf(curdir, sizeof curdir, ".");
 
+    char scan_impl[128] = "";
+    int scan_impl_depth = 0;
     char *line = NULL;
     size_t cap = 0;
     while (getline(&line, &cap, f) != -1) {
+        if (struct_line(line)) continue;
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
+        if (!scan_impl[0] && (!strncmp(p, "impl ", 5) || !strncmp(p, "impl\t", 5))) {
+            char *q = p + 5;
+            while (*q == ' ' || *q == '\t') q++;
+            int n = 0;
+            while (*q && is_ident1((unsigned char)*q) && n < 127) scan_impl[n++] = *q++;
+            scan_impl[n] = '\0';
+            while (*q == ' ' || *q == '\t') q++;
+            if (scan_impl[0] && *q == '{') {
+                scan_impl_depth = 1;
+                continue;
+            } else {
+                scan_impl[0] = '\0';
+            }
+        }
+        if (scan_impl[0]) {
+            int in_s = 0;
+            for (const char *q = p; *q; q++) {
+                if (in_s && *q == '\\' && q[1]) { q++; continue; }
+                if (*q == '"') in_s = !in_s;
+                if (in_s) continue;
+                if (*q == '#' || *q == ';') break;
+                if (*q == '{') scan_impl_depth++;
+                else if (*q == '}') scan_impl_depth--;
+            }
+            if (scan_impl_depth <= 0) {
+                scan_impl[0] = '\0';
+                scan_impl_depth = 0;
+                continue;
+            }
+        }
         if (!strncmp(p, "include ", 8) || !strncmp(p, "include\t", 8) ||
             !strncmp(p, "import ", 7) || !strncmp(p, "import\t", 7)) {
             char *quote1 = strchr(p, '"');
@@ -796,6 +896,12 @@ static void scan_signatures_in_file(const char *path) {
                 p++;
             }
             fn_name[fn_len] = '\0';
+            if (scan_impl[0] && fn_len > 0) {
+                char mangled[256];
+                snprintf(mangled, sizeof mangled, "%s__%s", scan_impl, fn_name);
+                snprintf(fn_name, sizeof fn_name, "%s", mangled);
+                fn_len = (int)strlen(fn_name);
+            }
             while (*p == ' ' || *p == '\t') p++;
             if (*p == '(') {
                 char *paren_close = strrchr(p, ')');
@@ -2493,8 +2599,26 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     fn_block_depth = 0;
                     cur_fn_is_scoped = 1;
                     cur_fn_nlocals = 0;
+                    cur_impl_st = -1;
+                    char *dunder = strstr(fn_name, "__");
+                    if (dunder) {
+                        char st_nm[128];
+                        size_t sl = (size_t)(dunder - fn_name);
+                        if (sl > 0 && sl < sizeof st_nm) {
+                            memcpy(st_nm, fn_name, sl);
+                            st_nm[sl] = '\0';
+                            int st_i = find_struct(st_nm);
+                            if (st_i >= 0) {
+                                cur_impl_st = st_i;
+                                track_obj("self", st_i);
+                            }
+                        }
+                    }
                     for (int i = 0; i < nparams; i++) {
                         fn_add_local(fn_registry[reg_idx].params[i]);
+                        if (cur_impl_st >= 0 && i == 0) {
+                            track_obj(fn_registry[reg_idx].params[i], cur_impl_st);
+                        }
                     }
 
                     out[0] = '\0';
@@ -5659,8 +5783,35 @@ static void substitute_user_consts(char *line) {
             }
             tok[tlen] = '\0';
 
-            int preceded_by_dot = (start_idx > 0 && line[start_idx - 1] == '.');
+            int preceded_by_dot = (start_idx > 0 && (line[start_idx - 1] == '.' || line[start_idx - 1] == ':'));
             int followed_by_dot = (i < len && line[i] == '.');
+
+            /* Check qualified EnumName.Variant or EnumName::Variant first */
+            if (!preceded_by_dot && i < len &&
+                ((line[i] == '.' && i + 1 < len && is_ident0((unsigned char)line[i + 1])) ||
+                 (line[i] == ':' && i + 2 < len && line[i + 1] == ':' && is_ident0((unsigned char)line[i + 2])))) {
+                int sep_len = (line[i] == ':') ? 2 : 1;
+                int k = i + sep_len;
+                char vtok[128];
+                int vlen = 0;
+                while (k < len && is_ident1((unsigned char)line[k])) {
+                    if (vlen < 127) vtok[vlen++] = line[k];
+                    k++;
+                }
+                vtok[vlen] = '\0';
+                char qual[260];
+                snprintf(qual, sizeof qual, "%s.%s", tok, vtok);
+                int q_idx = find_user_const(qual);
+                if (q_idx >= 0) {
+                    const char *val = user_consts[q_idx].val;
+                    int val_len = (int)strlen(val);
+                    for (int v = 0; v < val_len && ti < (int)sizeof(tmp) - 1; v++) {
+                        tmp[ti++] = val[v];
+                    }
+                    i = k;
+                    continue;
+                }
+            }
 
             int c_idx = -1;
             if (!preceded_by_dot && !followed_by_dot) {
@@ -6223,10 +6374,768 @@ static int desugar_int_parens(const char *in, char *out, size_t cap) {
     return 1;
 }
 
+
+/* --------------------------------------------------------------------------
+ * Feature #16: Enum Declarations (enum Name { VariantA, VariantB = 10, ... })
+ * -------------------------------------------------------------------------- */
+static char cur_enum_name[128] = "";
+static int64_t cur_enum_val = 0;
+
+static void add_user_const_kv(const char *name, const char *val) {
+    int idx = find_user_const(name);
+    if (idx >= 0) {
+        snprintf(user_consts[idx].val, sizeof(user_consts[idx].val), "%s", val);
+    } else if (n_user_consts < MAX_USER_CONSTS) {
+        snprintf(user_consts[n_user_consts].name, sizeof(user_consts[n_user_consts].name), "%s", name);
+        snprintf(user_consts[n_user_consts].val, sizeof(user_consts[n_user_consts].val), "%s", val);
+        n_user_consts++;
+    }
+}
+
+static void parse_enum_variants_segment(const char *seg) {
+    char buf[MAXLINE];
+    snprintf(buf, sizeof buf, "%s", seg);
+    char *cm = strchr(buf, '#'); if (cm) *cm = '\0';
+    char *sc = strchr(buf, ';'); if (sc) *sc = '\0';
+
+    char *p = buf;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',' || *p == '\r' || *p == '\n') p++;
+        if (!*p) break;
+        if (!is_ident0((unsigned char)*p)) { p++; continue; }
+        char vname[128];
+        int vn = 0;
+        while (*p && is_ident1((unsigned char)*p)) {
+            if (vn < 127) vname[vn++] = *p;
+            p++;
+        }
+        vname[vn] = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '=') {
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+            char vexpr[256];
+            int ve = 0;
+            while (*p && *p != ',' && *p != '}' && *p != '\r' && *p != '\n') {
+                if (ve < 255) vexpr[ve++] = *p;
+                p++;
+            }
+            vexpr[ve] = '\0';
+            trim_ws(vexpr);
+            substitute_user_consts(vexpr);
+            normalize_hex_literals(vexpr);
+            normalize_octal_literals(vexpr);
+            normalize_char_literals(vexpr);
+            int64_t ev = 0;
+            const char *endp = NULL;
+            if (eval_int_chain(vexpr, &endp, &ev)) {
+                cur_enum_val = ev;
+            } else {
+                cur_enum_val = strtoll(vexpr, NULL, 0);
+            }
+        }
+        char val_str[64];
+        snprintf(val_str, sizeof val_str, "%" PRId64, cur_enum_val);
+        add_user_const_kv(vname, val_str);
+        if (cur_enum_name[0]) {
+            char qdot[256], qunder[256];
+            snprintf(qdot, sizeof qdot, "%s.%s", cur_enum_name, vname);
+            snprintf(qunder, sizeof qunder, "%s_%s", cur_enum_name, vname);
+            add_user_const_kv(qdot, val_str);
+            add_user_const_kv(qunder, val_str);
+        }
+        cur_enum_val++;
+    }
+}
+
+static int enum_line(const char *raw) {
+    char t[MAXLINE];
+    snprintf(t, sizeof t, "%s", raw);
+    char *p = t;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!cur_enum_name[0]) {
+        if (!strncmp(p, "enum", 4) && (p[4] == ' ' || p[4] == '\t')) {
+            char nm[128]; int n = 0, k = 5;
+            while (p[k] == ' ' || p[k] == '\t') k++;
+            while (p[k] && is_ident1((unsigned char)p[k])) {
+                if (n < 127) nm[n++] = p[k];
+                k++;
+            }
+            nm[n] = '\0';
+            while (p[k] == ' ' || p[k] == '\t') k++;
+            if (nm[0] && p[k] == '{') {
+                snprintf(cur_enum_name, sizeof cur_enum_name, "%s", nm);
+                cur_enum_val = 0;
+                char *body = p + k + 1;
+                char *close_br = strchr(body, '}');
+                if (close_br) {
+                    *close_br = '\0';
+                    parse_enum_variants_segment(body);
+                    cur_enum_name[0] = '\0';
+                } else {
+                    parse_enum_variants_segment(body);
+                }
+                return 1;
+            }
+        }
+        return 0;
+    }
+    char *close_br = strchr(p, '}');
+    if (close_br) {
+        *close_br = '\0';
+        parse_enum_variants_segment(p);
+        cur_enum_name[0] = '\0';
+        return 1;
+    }
+    if (*p == '#' || *p == ';' || *p == '\0' || *p == '\n') return 1;
+    parse_enum_variants_segment(p);
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
+ * Feature #31: Scientific Notation Float Literals (1.5e-3, 2.5e4)
+ * -------------------------------------------------------------------------- */
+static void normalize_scientific_floats(char *line) {
+    char tmp[MAXLINE * 2];
+    int ti = 0, len = (int)strlen(line);
+    int in_str = 0;
+
+    for (int i = 0; i < len; ) {
+        if (in_str) {
+            if (line[i] == '\\' && i + 1 < len) {
+                if (ti < (int)sizeof(tmp) - 2) { tmp[ti++] = line[i++]; tmp[ti++] = line[i++]; }
+                else i += 2;
+                continue;
+            }
+            if (line[i] == '"') in_str = 0;
+            if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '"') {
+            in_str = 1;
+            if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '#' || line[i] == ';') {
+            while (i < len && ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+            break;
+        }
+        /* Skip hex/octal/binary prefixes 0x, 0o, 0b */
+        if (line[i] == '0' && i + 1 < len &&
+            (line[i+1] == 'x' || line[i+1] == 'X' ||
+             line[i+1] == 'o' || line[i+1] == 'O' ||
+             line[i+1] == 'b' || line[i+1] == 'B')) {
+            while (i < len && (isalnum((unsigned char)line[i]) || line[i] == '_')) {
+                if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+                else i++;
+            }
+            continue;
+        }
+        if (isdigit((unsigned char)line[i]) && (i == 0 || !is_ident1((unsigned char)line[i - 1]))) {
+            int j = i;
+            int has_dot = 0;
+            while (j < len && isdigit((unsigned char)line[j])) j++;
+            if (j + 1 < len && line[j] == '.' && isdigit((unsigned char)line[j + 1])) {
+                has_dot = 1;
+                j++;
+                while (j < len && isdigit((unsigned char)line[j])) j++;
+            }
+            if (j < len && (line[j] == 'e' || line[j] == 'E')) {
+                int k = j + 1;
+                int has_sign = 0;
+                if (k < len && (line[k] == '+' || line[k] == '-')) {
+                    has_sign = 1;
+                    k++;
+                }
+                int exp_start = k;
+                while (k < len && isdigit((unsigned char)line[k])) k++;
+                if (k > exp_start && (has_dot || has_sign) &&
+                    (k >= len || !is_ident1((unsigned char)line[k]))) {
+                    char num_tok[128];
+                    int nlen = k - i;
+                    if (nlen < (int)sizeof(num_tok)) {
+                        memcpy(num_tok, line + i, nlen);
+                        num_tok[nlen] = '\0';
+                        double dval = strtod(num_tok, NULL);
+                        char fmt[128];
+                        snprintf(fmt, sizeof fmt, "%.12f", dval);
+                        /* Trim redundant trailing zeros while keeping at least one digit after '.' */
+                        int fl = (int)strlen(fmt);
+                        while (fl > 2 && fmt[fl - 1] == '0' && fmt[fl - 2] != '.') {
+                            fmt[--fl] = '\0';
+                        }
+                        for (int m = 0; m < fl && ti < (int)sizeof(tmp) - 1; m++) {
+                            tmp[ti++] = fmt[m];
+                        }
+                        i = k;
+                        continue;
+                    }
+                }
+            }
+        }
+        if (ti < (int)sizeof(tmp) - 1) tmp[ti++] = line[i++];
+        else i++;
+    }
+    tmp[ti] = '\0';
+    snprintf(line, MAXLINE, "%s", tmp);
+}
+
+/* --------------------------------------------------------------------------
+ * Feature #13: Struct Literal Initialization (let p = Point { x: 10, y: 20 })
+ * -------------------------------------------------------------------------- */
+static int is_unclosed_struct_init(const char *line) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';') return 0;
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        p += 4;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+    if (!is_ident0((unsigned char)*p)) return 0;
+    while (*p && is_ident1((unsigned char)*p)) p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=' || p[1] == '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    char sname[128]; int sn = 0;
+    while (*p && is_ident1((unsigned char)*p) && sn < 127) sname[sn++] = *p++;
+    sname[sn] = '\0';
+    if (!sn || find_struct(sname) < 0) return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '{') return 0;
+    int depth = 0, in_str = 0;
+    for (const char *q = p; *q; q++) {
+        if (in_str && *q == '\\' && q[1]) { q++; continue; }
+        if (*q == '"') in_str = !in_str;
+        if (in_str) continue;
+        if (*q == '#' || *q == ';') break;
+        if (*q == '{') depth++;
+        else if (*q == '}') depth--;
+    }
+    return depth > 0;
+}
+
+static int desugar_struct_literal(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE * 4];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || !*p) return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0 && indent_len < (int)sizeof(indent)) {
+        snprintf(indent, sizeof indent, "%.*s", indent_len, clean);
+    }
+
+    int is_let = 0;
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        is_let = 1;
+        p += 4;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+    if (!is_ident0((unsigned char)*p)) return 0;
+    char dest[128]; int dn = 0;
+    while (*p && is_ident1((unsigned char)*p) && dn < 127) dest[dn++] = *p++;
+    dest[dn] = '\0';
+    if (!dn || is_nexus_keyword(dest)) return 0;
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '=' || p[1] == '=') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+
+    char sname[128]; int sn = 0;
+    while (*p && is_ident1((unsigned char)*p) && sn < 127) sname[sn++] = *p++;
+    sname[sn] = '\0';
+    int st = find_struct(sname);
+    if (st < 0) return 0;
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '{') return 0;
+
+    char *open_br = p;
+    char *close_br = strrchr(open_br + 1, '}');
+    if (!close_br) return 0;
+
+    char body[MAXLINE * 4];
+    int blen = (int)(close_br - (open_br + 1));
+    snprintf(body, sizeof body, "%.*s", blen, open_br + 1);
+
+    track_obj(dest, st);
+
+    out[0] = '\0';
+    char lbuf[MAXLINE];
+    snprintf(lbuf, sizeof lbuf, "%s%s%s = alloc %s.size\n",
+             indent, is_let ? "let " : "", dest, sname);
+    strncat(out, lbuf, cap - strlen(out) - 1);
+
+    int field_set[MAXFIELDS];
+    memset(field_set, 0, sizeof field_set);
+
+    /* Split body on top-level commas or newlines */
+    int i = 0, n = (int)strlen(body);
+    while (i < n) {
+        while (i < n && (body[i] == ' ' || body[i] == '\t' || body[i] == ',' || body[i] == '\r' || body[i] == '\n')) i++;
+        if (i >= n) break;
+        if (body[i] == '#' || body[i] == ';') {
+            while (i < n && body[i] != '\n') i++;
+            continue;
+        }
+        char fname[128]; int fn = 0;
+        while (i < n && is_ident1((unsigned char)body[i]) && fn < 127) fname[fn++] = body[i++];
+        fname[fn] = '\0';
+        while (i < n && (body[i] == ' ' || body[i] == '\t')) i++;
+        if (!fn || i >= n || (body[i] != ':' && body[i] != '=')) break;
+        i++; /* skip ':' or '=' */
+        while (i < n && (body[i] == ' ' || body[i] == '\t')) i++;
+
+        char fval[MAXLINE]; int fv = 0;
+        int pdepth = 0, in_s = 0;
+        while (i < n) {
+            char c = body[i];
+            if (in_s) {
+                if (c == '\\' && i + 1 < n) {
+                    if (fv < MAXLINE - 2) { fval[fv++] = body[i++]; fval[fv++] = body[i++]; }
+                    else i += 2;
+                    continue;
+                }
+                if (c == '"') in_s = 0;
+                if (fv < MAXLINE - 1) fval[fv++] = body[i++];
+                else i++;
+                continue;
+            }
+            if (c == '"') { in_s = 1; if (fv < MAXLINE - 1) fval[fv++] = body[i++]; else i++; continue; }
+            if (c == '(' || c == '[') pdepth++;
+            else if (c == ')' || c == ']') pdepth--;
+            if (pdepth == 0 && (c == ',' || c == '\n' || c == '\r' || c == '#' || c == ';')) {
+                if (c == '#' || c == ';') {
+                    while (i < n && body[i] != '\n') i++;
+                }
+                break;
+            }
+            if (fv < MAXLINE - 1) fval[fv++] = body[i++];
+            else i++;
+        }
+        fval[fv] = '\0';
+        trim_ws(fval);
+
+        int f_idx = -1;
+        for (int q = 0; q < S[st].nfields; q++) {
+            if (!strcmp(S[st].fields[q], fname)) { f_idx = q; break; }
+        }
+        if (f_idx < 0) die("Unknown struct field in struct literal initializer", fname);
+        field_set[f_idx] = 1;
+
+        snprintf(lbuf, sizeof lbuf, "%s%s.%s = %s\n", indent, dest, fname, fval);
+        strncat(out, lbuf, cap - strlen(out) - 1);
+    }
+
+    /* Default any omitted fields to 0 */
+    for (int q = 0; q < S[st].nfields; q++) {
+        if (!field_set[q]) {
+            snprintf(lbuf, sizeof lbuf, "%s%s.%s = 0\n", indent, dest, S[st].fields[q]);
+            strncat(out, lbuf, cap - strlen(out) - 1);
+        }
+    }
+    return 1;
+}
+
+/* --------------------------------------------------------------------------
+ * Feature #12: Struct Methods & Associated Functions (obj.method(...) / Type.fn(...))
+ * -------------------------------------------------------------------------- */
+static int desugar_method_calls(const char *in, char *out, size_t cap) {
+    char buf[MAXLINE * 2];
+    snprintf(buf, sizeof buf, "%s", in);
+    int changed = 0;
+
+    for (int pass = 0; pass < 8; pass++) {
+        int len = (int)strlen(buf);
+        int in_str = 0;
+        int pass_changed = 0;
+        for (int i = 0; i < len; i++) {
+            if (in_str && buf[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (buf[i] == '"') { in_str = !in_str; continue; }
+            if (in_str) continue;
+            if (buf[i] == '#' || buf[i] == ';') break;
+
+            if (is_ident0((unsigned char)buf[i]) &&
+                (i == 0 || (!is_ident1((unsigned char)buf[i - 1]) && buf[i - 1] != '.' && buf[i - 1] != ':'))) {
+                int s1 = i;
+                while (i < len && is_ident1((unsigned char)buf[i])) i++;
+                int l1 = i - s1;
+                if (l1 <= 0 || l1 >= 128) continue;
+                char id1[128];
+                memcpy(id1, buf + s1, l1);
+                id1[l1] = '\0';
+
+                int sep_len = 0;
+                if (i < len && buf[i] == '.' && i + 1 < len && is_ident0((unsigned char)buf[i + 1])) sep_len = 1;
+                else if (i + 2 < len && buf[i] == ':' && buf[i + 1] == ':' && is_ident0((unsigned char)buf[i + 2])) sep_len = 2;
+                if (!sep_len) continue;
+
+                int s2 = i + sep_len;
+                int k = s2;
+                while (k < len && is_ident1((unsigned char)buf[k])) k++;
+                int l2 = k - s2;
+                if (l2 <= 0 || l2 >= 128) { i = k - 1; continue; }
+                char id2[128];
+                memcpy(id2, buf + s2, l2);
+                id2[l2] = '\0';
+
+                int p = k;
+                while (p < len && (buf[p] == ' ' || buf[p] == '\t')) p++;
+                if (p >= len || buf[p] != '(') { i = k - 1; continue; }
+
+                int close_p = find_matching_paren(buf, p);
+                if (close_p < 0) { i = k - 1; continue; }
+
+                int st_static = find_struct(id1);
+                int st_obj = (st_static < 0) ? find_obj(id1) : -1;
+
+                /* Also check if any struct has a registered method Struct__id2 if id1's type wasn't tracked yet */
+                if (st_static < 0 && st_obj < 0) {
+                    for (int si = 0; si < ns; si++) {
+                        char cand[260];
+                        snprintf(cand, sizeof cand, "%s__%s", S[si].name, id2);
+                        if (fn_registry_find(cand) >= 0) {
+                            st_obj = si;
+                            break;
+                        }
+                    }
+                }
+
+                if (st_static >= 0) {
+                    char next_buf[MAXLINE * 2];
+                    snprintf(next_buf, sizeof next_buf, "%.*s%s__%s%s",
+                             s1, buf, id1, id2, buf + p);
+                    snprintf(buf, sizeof buf, "%s", next_buf);
+                    changed = 1;
+                    pass_changed = 1;
+                    break;
+                } else if (st_obj >= 0) {
+                    char args_inside[MAXLINE];
+                    int alen = close_p - (p + 1);
+                    snprintf(args_inside, sizeof args_inside, "%.*s", alen, buf + p + 1);
+                    trim_ws(args_inside);
+                    char next_buf[MAXLINE * 2];
+                    if (args_inside[0]) {
+                        snprintf(next_buf, sizeof next_buf, "%.*s%s__%s(%s, %s)%s",
+                                 s1, buf, S[st_obj].name, id2, id1, args_inside, buf + close_p + 1);
+                    } else {
+                        snprintf(next_buf, sizeof next_buf, "%.*s%s__%s(%s)%s",
+                                 s1, buf, S[st_obj].name, id2, id1, buf + close_p + 1);
+                    }
+                    snprintf(buf, sizeof buf, "%s", next_buf);
+                    changed = 1;
+                    pass_changed = 1;
+                    break;
+                }
+            }
+        }
+        if (!pass_changed) break;
+    }
+
+    if (changed) {
+        snprintf(out, cap, "%s", buf);
+        return 1;
+    }
+    return 0;
+}
+
+/* --------------------------------------------------------------------------
+ * Feature #17: Pattern Matching (match <expr> { pat => { ... }, _ => { ... } })
+ * -------------------------------------------------------------------------- */
+static int is_unclosed_match(const char *line) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "match ", 6) != 0 && strncmp(p, "match\t", 6) != 0) return 0;
+    const char *br = strchr(p, '{');
+    if (!br) return 0;
+    int depth = 0, in_s = 0;
+    for (const char *q = br; *q; q++) {
+        if (in_s && *q == '\\' && q[1]) { q++; continue; }
+        if (*q == '"') in_s = !in_s;
+        if (in_s) continue;
+        if (*q == '#' || *q == ';') break;
+        if (*q == '{') depth++;
+        else if (*q == '}') depth--;
+    }
+    return depth > 0;
+}
+
+static int match_tmp_counter = 0;
+
+static int desugar_match_block(const char *in, FILE *out) {
+    const char *p = in;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "match ", 6) != 0 && strncmp(p, "match\t", 6) != 0) return 0;
+
+    int indent_len = (int)(p - in);
+    char indent[128] = "";
+    if (indent_len > 0 && indent_len < (int)sizeof(indent)) {
+        snprintf(indent, sizeof indent, "%.*s", indent_len, in);
+    }
+
+    p += 6;
+    while (*p == ' ' || *p == '\t') p++;
+    const char *open_br = strchr(p, '{');
+    if (!open_br) return 0;
+
+    char scrutinee[MAXLINE];
+    int slen = (int)(open_br - p);
+    snprintf(scrutinee, sizeof scrutinee, "%.*s", slen, p);
+    trim_ws(scrutinee);
+
+    const char *close_br = strrchr(open_br + 1, '}');
+    if (!close_br) return 0;
+
+    int mid = ++match_tmp_counter;
+    char mvar[64];
+    snprintf(mvar, sizeof mvar, "_match_%d", mid);
+
+    char head_line[MAXLINE * 2];
+    snprintf(head_line, sizeof head_line, "%slet %s = %s", indent, mvar, scrutinee);
+    emit_line(head_line, out);
+
+    /* Parse arms inside open_br + 1 .. close_br */
+    char body[MAXLINE * 8];
+    int blen = (int)(close_br - (open_br + 1));
+    if (blen >= (int)sizeof(body)) blen = (int)sizeof(body) - 1;
+    memcpy(body, open_br + 1, blen);
+    body[blen] = '\0';
+
+    int pos = 0;
+    int first_branch = 1;
+    while (pos < blen) {
+        while (pos < blen && (body[pos] == ' ' || body[pos] == '\t' || body[pos] == ',' || body[pos] == '\r' || body[pos] == '\n')) pos++;
+        if (pos >= blen) break;
+        if (body[pos] == '#' || body[pos] == ';') {
+            while (pos < blen && body[pos] != '\n') pos++;
+            continue;
+        }
+        /* Find '=>' */
+        int arrow = -1;
+        int in_s = 0;
+        for (int k = pos; k + 1 < blen; k++) {
+            if (in_s && body[k] == '\\' && k + 1 < blen) { k++; continue; }
+            if (body[k] == '"') { in_s = !in_s; continue; }
+            if (in_s) continue;
+            if (body[k] == '=' && body[k + 1] == '>') { arrow = k; break; }
+        }
+        if (arrow < 0) break;
+
+        char pat_raw[512];
+        int plen = arrow - pos;
+        if (plen >= (int)sizeof(pat_raw)) plen = (int)sizeof(pat_raw) - 1;
+        memcpy(pat_raw, body + pos, plen);
+        pat_raw[plen] = '\0';
+        trim_ws(pat_raw);
+
+        pos = arrow + 2;
+        while (pos < blen && (body[pos] == ' ' || body[pos] == '\t')) pos++;
+
+        char arm_body[MAXLINE * 4];
+        arm_body[0] = '\0';
+        if (pos < blen && body[pos] == '{') {
+            int b_start = pos + 1;
+            int depth = 1;
+            pos++;
+            in_s = 0;
+            while (pos < blen && depth > 0) {
+                if (in_s && body[pos] == '\\' && pos + 1 < blen) { pos += 2; continue; }
+                if (body[pos] == '"') { in_s = !in_s; pos++; continue; }
+                if (!in_s) {
+                    if (body[pos] == '#' || body[pos] == ';') {
+                        while (pos < blen && body[pos] != '\n') pos++;
+                        continue;
+                    }
+                    if (body[pos] == '{') depth++;
+                    else if (body[pos] == '}') depth--;
+                }
+                pos++;
+            }
+            int ab_len = (pos - 1) - b_start;
+            if (ab_len > 0) {
+                if (ab_len >= (int)sizeof(arm_body)) ab_len = (int)sizeof(arm_body) - 1;
+                memcpy(arm_body, body + b_start, ab_len);
+                arm_body[ab_len] = '\0';
+            }
+        } else {
+            int s_start = pos;
+            in_s = 0;
+            while (pos < blen) {
+                if (in_s && body[pos] == '\\' && pos + 1 < blen) { pos += 2; continue; }
+                if (body[pos] == '"') { in_s = !in_s; pos++; continue; }
+                if (!in_s && (body[pos] == '\n' || body[pos] == '\r' || body[pos] == ',')) break;
+                pos++;
+            }
+            int ab_len = pos - s_start;
+            if (ab_len > 0) {
+                if (ab_len >= (int)sizeof(arm_body)) ab_len = (int)sizeof(arm_body) - 1;
+                memcpy(arm_body, body + s_start, ab_len);
+                arm_body[ab_len] = '\0';
+            }
+        }
+
+        int is_wildcard = (!strcmp(pat_raw, "_") || !strcmp(pat_raw, "else") || !strcmp(pat_raw, "default"));
+        if (is_wildcard) {
+            char hdr[256];
+            if (first_branch) {
+                snprintf(hdr, sizeof hdr, "%sif 1 == 1 {", indent);
+            } else {
+                snprintf(hdr, sizeof hdr, "%s} else {", indent);
+            }
+            emit_line(hdr, out);
+            first_branch = 0;
+
+            char *ab = arm_body;
+            while (*ab) {
+                char *nx = strchr(ab, '\n');
+                if (nx) *nx = '\0';
+                char tr[MAXLINE];
+                snprintf(tr, sizeof tr, "%s", ab);
+                trim_ws(tr);
+                if (tr[0]) emit_line(ab, out);
+                if (!nx) break;
+                ab = nx + 1;
+            }
+        } else {
+            /* Split pat_raw on '|' for multi-pattern arms */
+            char *p_cursor = pat_raw;
+            while (*p_cursor) {
+                char *bar = strchr(p_cursor, '|');
+                char single_pat[256];
+                if (bar) {
+                    int sl = (int)(bar - p_cursor);
+                    snprintf(single_pat, sizeof single_pat, "%.*s", sl, p_cursor);
+                    p_cursor = bar + 1;
+                } else {
+                    snprintf(single_pat, sizeof single_pat, "%s", p_cursor);
+                    p_cursor += strlen(p_cursor);
+                }
+                trim_ws(single_pat);
+                if (!single_pat[0]) continue;
+
+                char hdr[512];
+                if (first_branch) {
+                    snprintf(hdr, sizeof hdr, "%sif %s == %s {", indent, mvar, single_pat);
+                    first_branch = 0;
+                } else {
+                    snprintf(hdr, sizeof hdr, "%s} else if %s == %s {", indent, mvar, single_pat);
+                }
+                emit_line(hdr, out);
+
+                char arm_copy[MAXLINE * 4];
+                snprintf(arm_copy, sizeof arm_copy, "%s", arm_body);
+                char *ab = arm_copy;
+                while (*ab) {
+                    char *nx = strchr(ab, '\n');
+                    if (nx) *nx = '\0';
+                    char tr[MAXLINE];
+                    snprintf(tr, sizeof tr, "%s", ab);
+                    trim_ws(tr);
+                    if (tr[0]) emit_line(ab, out);
+                    if (!nx) break;
+                    ab = nx + 1;
+                }
+            }
+        }
+    }
+    if (!first_branch) {
+        char close_line[256];
+        snprintf(close_line, sizeof close_line, "%s}", indent);
+        emit_line(close_line, out);
+    }
+    return 1;
+}
+
 /* --------------------------------------------------------------------------
  * per-line transform
  * -------------------------------------------------------------------------- */
+
+static int desugar_single_line_block(const char *in, char *out, size_t cap) {
+    const char *p = in;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "if ", 3) != 0 && strncmp(p, "if\t", 3) != 0 &&
+        strncmp(p, "while ", 6) != 0 && strncmp(p, "while\t", 6) != 0 &&
+        strncmp(p, "} else", 6) != 0 && strncmp(p, "else ", 5) != 0 &&
+        strncmp(p, "else{", 5) != 0) {
+        return 0;
+    }
+    int indent_len = (int)(p - in);
+    char indent[128] = "";
+    if (indent_len > 0 && indent_len < (int)sizeof(indent)) {
+        snprintf(indent, sizeof indent, "%.*s", indent_len, in);
+    }
+
+    int len = (int)strlen(p);
+    int in_s = 0;
+    int open_b = -1, close_b = -1;
+    for (int i = 0; i < len; i++) {
+        if (in_s && p[i] == '\\' && i + 1 < len) { i++; continue; }
+        if (p[i] == '"') { in_s = !in_s; continue; }
+        if (in_s) continue;
+        if (p[i] == '#' || p[i] == ';') break;
+        if (p[i] == '{' && (i > 0 || p[0] != '}')) {
+            open_b = i;
+            break;
+        }
+    }
+    if (open_b < 0) return 0;
+
+    int depth = 1;
+    in_s = 0;
+    for (int i = open_b + 1; i < len; i++) {
+        if (in_s && p[i] == '\\' && i + 1 < len) { i++; continue; }
+        if (p[i] == '"') { in_s = !in_s; continue; }
+        if (in_s) continue;
+        if (p[i] == '#' || p[i] == ';') break;
+        if (p[i] == '{') depth++;
+        else if (p[i] == '}') {
+            depth--;
+            if (depth == 0) {
+                close_b = i;
+                break;
+            }
+        }
+    }
+    if (close_b <= open_b) return 0;
+
+    char inner[MAXLINE];
+    snprintf(inner, sizeof inner, "%.*s", close_b - (open_b + 1), p + open_b + 1);
+    trim_ws(inner);
+    if (!inner[0]) return 0;
+
+    char after[MAXLINE];
+    snprintf(after, sizeof after, "%s", p + close_b + 1);
+    trim_ws(after);
+
+    if (after[0] && strncmp(after, "else", 4) == 0) {
+        snprintf(out, cap, "%s%.*s\n%s    %s\n%s} %s\n",
+                 indent, open_b + 1, p, indent, inner, indent, after);
+    } else {
+        snprintf(out, cap, "%s%.*s\n%s    %s\n%s}\n",
+                 indent, open_b + 1, p, indent, inner, indent);
+    }
+    return 1;
+}
+
 static void emit_line(const char *raw, FILE *out) {
+    char slb_buf[MAXLINE * 3];
+    if (desugar_single_line_block(raw, slb_buf, sizeof slb_buf)) {
+        char *sp = slb_buf;
+        while (*sp) {
+            char *nx = strchr(sp, '\n');
+            if (nx) *nx = '\0';
+            if (*sp) emit_line(sp, out);
+            if (!nx) break;
+            sp = nx + 1;
+        }
+        return;
+    }
     char const_reg[MAXLINE];
     if (register_user_const(raw, const_reg, sizeof const_reg)) {
         fprintf(out, "%s", const_reg);
@@ -6278,10 +7187,16 @@ static void emit_line(const char *raw, FILE *out) {
 
     char oct_buf[MAXLINE * 2];
     snprintf(oct_buf, sizeof oct_buf, "%s", raw);
+    normalize_scientific_floats(oct_buf);
     normalize_octal_literals(oct_buf);
     normalize_char_literals(oct_buf);
     normalize_bool_literals(oct_buf);
     raw = oct_buf;
+
+    char mcall_desugared[MAXLINE * 2];
+    if (desugar_method_calls(raw, mcall_desugared, sizeof mcall_desugared)) {
+        raw = mcall_desugared;
+    }
 
     char nc_desugared[MAXLINE * 4];
     if (desugar_null_coalescing(raw, nc_desugared, sizeof nc_desugared)) {
@@ -6372,6 +7287,19 @@ static void emit_line(const char *raw, FILE *out) {
     char fn_desugared[MAXLINE * 4];
     if (desugar_fn(raw, fn_desugared, sizeof fn_desugared)) {
         char *p = fn_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char stlit_desugared[MAXLINE * 4];
+    if (desugar_struct_literal(raw, stlit_desugared, sizeof stlit_desugared)) {
+        char *p = stlit_desugared;
         while (*p) {
             char *next = strchr(p, '\n');
             if (next) *next = '\0';
@@ -6636,34 +7564,36 @@ static void emit_line(const char *raw, FILE *out) {
                 if (*s == '.') dots++;
                 if (*s == ' ' || *s == '\t') spaces++;
             }
-            if (spaces == 0 && dots == 0 &&
-                (isdigit((unsigned char)*p) || *p == '-'))
-                cls = 'n';
-            else if (spaces == 0 && dots == 0 && is_ident0((unsigned char)*p))
+            if (spaces == 0 && dots == 0 && isdigit((unsigned char)*p)) {
+                char *endp = NULL;
+                long long v = strtoll(p, &endp, 10);
+                if (endp && *endp == '\0' && v >= 0 && v <= 2147483647LL)
+                    cls = 'n';
+            } else if (spaces == 0 && dots == 0 && is_ident0((unsigned char)*p))
                 cls = 'v';
             else if (spaces == 0 && dots == 1 && is_ident0((unsigned char)*p))
                 cls = 'm';
         }
 
         if (cls == 'n' || cls == 'v') {
-            fprintf(out, "store [%s + %d] %s\n", obj, off, p);
+            fprintf(out, "store64 [%s + %d] %s\n", obj, off, p);
         } else if (cls == 'm') {
             char t1[128] = "", t2[128] = "";
             sscanf(p, "%127[^.].%127s", t1, t2);
             int r2 = 0, off2 = member_off(t1, t2, &r2);
             if (r2) {
-                fprintf(out, "let _s_%s_%s = load [%s + %d]\n", t1, t2, t1, off2);
-                fprintf(out, "store [%s + %d] _s_%s_%s\n", obj, off, t1, t2);
+                fprintf(out, "let _s_%s_%s = load64 [%s + %d]\n", t1, t2, t1, off2);
+                fprintf(out, "store64 [%s + %d] _s_%s_%s\n", obj, off, t1, t2);
             } else {
-                fprintf(out, "store [%s + %d] %s\n", obj, off, p);
+                fprintf(out, "store64 [%s + %d] %s\n", obj, off, p);
             }
         } else {
-            /* general expression: hoist members, rewrite, compute, store */
-            char rewritten[MAXLINE];
-            transform_seg(rewritten, p, M_NONE);
-            for (int q = 0; q < nhoist; q++) fprintf(out, "%s\n", hoist[q]);
-            fprintf(out, "let _s_rhs_%d = %s\n", rhs_counter++, rewritten);
-            fprintf(out, "store [%s + %d] _s_rhs_%d\n", obj, off, rhs_counter - 1);
+            /* general expression: emit through emit_line so negative/64-bit/string/call RHS works */
+            int rid = rhs_counter++;
+            char let_line[MAXLINE * 2];
+            snprintf(let_line, sizeof let_line, "let _s_rhs_%d = %s", rid, p);
+            emit_line(let_line, out);
+            fprintf(out, "store64 [%s + %d] _s_rhs_%d\n", obj, off, rid);
         }
         return;
     }
@@ -6699,7 +7629,7 @@ static void emit_line(const char *raw, FILE *out) {
                         char head[MAXLINE];
                         int hlen = (int)(eq - tp);
                         snprintf(head, MAXLINE, "%.*s= ", hlen, tp);
-                        fprintf(out, "%sload [%s + %d]\n", head, t1, off2);
+                        fprintf(out, "%sload64 [%s + %d]\n", head, t1, off2);
                         return;
                     }
                 }
@@ -7320,6 +8250,67 @@ static void p2_scan_calls_in_text(const char *text, P2FnSpan *fns, int nfns, int
         }
         p++;
     }
+}
+
+
+static void p2_algebraic_pass(void) {
+    char **alg_out = NULL; int alg_n = 0, alg_cap = 0;
+    for (int li = 0; li < P2n; li++) {
+        char d[128];
+        const char *rhs = NULL;
+        if (p2_parse_let(P2[li], d, sizeof d, &rhs)) {
+            char rbuf[MAXLINE];
+            p2_trim(rhs, rbuf, sizeof rbuf);
+            if (rbuf[0] == '"') { p2_push(&alg_out, &alg_n, &alg_cap, P2[li]); continue; }
+            /* Strip trailing comment */
+            char *cm = strchr(rbuf, '#'); if (cm) *cm = '\0';
+            char *sc = strchr(rbuf, ';'); if (sc) *sc = '\0';
+            p2_trim(rbuf, rbuf, sizeof rbuf);
+
+            /* Eliminate self-assignment let x = x */
+            if (!strcmp(d, rbuf)) {
+                continue;
+            }
+
+            /* Check binary algebraic identities: A + 0, 0 + A, A - 0, A - A, A * 1, 1 * A, A / 1, A * 0, 0 * A, A % 1 */
+            prec_tok tk[8];
+            int nt = prec_tokenize(rbuf, tk, 8);
+            if (nt == 3) {
+                const char *a = tk[0].tok;
+                char op = tk[1].tok[0];
+                const char *b = tk[2].tok;
+                char indent[128] = "";
+                const char *q = P2[li];
+                int ind = 0;
+                while ((*q == ' ' || *q == '\t') && ind < 127) indent[ind++] = *q++;
+                indent[ind] = '\0';
+
+                char simplified[256] = "";
+                if (op == '+' && !strcmp(b, "0")) snprintf(simplified, sizeof simplified, "%s", a);
+                else if (op == '+' && !strcmp(a, "0")) snprintf(simplified, sizeof simplified, "%s", b);
+                else if (op == '-' && !strcmp(b, "0")) snprintf(simplified, sizeof simplified, "%s", a);
+                else if (op == '-' && !strcmp(a, b) && prec_is_ident0((unsigned char)a[0])) snprintf(simplified, sizeof simplified, "0");
+                else if (op == '*' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "%s", a);
+                else if (op == '*' && !strcmp(a, "1")) snprintf(simplified, sizeof simplified, "%s", b);
+                else if (op == '/' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "%s", a);
+                else if (op == '*' && (!strcmp(a, "0") || !strcmp(b, "0"))) snprintf(simplified, sizeof simplified, "0");
+                else if (op == '%' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "0");
+
+                if (simplified[0]) {
+                    if (!strcmp(d, simplified)) continue; /* becomes self-assignment */
+                    char nline[MAXLINE];
+                    snprintf(nline, sizeof nline, "%slet %s = %s\n", indent, d, simplified);
+                    p2_push(&alg_out, &alg_n, &alg_cap, nline);
+                    continue;
+                }
+            }
+        }
+        p2_push(&alg_out, &alg_n, &alg_cap, P2[li]);
+    }
+    p2_free_all(P2, P2n);
+    P2 = alg_out;
+    P2n = alg_n;
+    P2cap = alg_cap;
 }
 
 static void p2_dce_unused_functions(void) {
@@ -8282,6 +9273,8 @@ static void process_file(const char *path, FILE *out) {
     char *d = find_last_path_separator(curdir);
     if (d) *d = '\0'; else snprintf(curdir, MAXLINE, ".");
 
+    char file_impl_struct[128] = "";
+    int file_impl_depth = 0;
     char *line = NULL;
     size_t cap = 0;
     while (getline(&line, &cap, in) != -1) {
@@ -8291,12 +9284,68 @@ static void process_file(const char *path, FILE *out) {
             fprintf(out, "# %s", line);     /* comment out declaration */
             continue;
         }
+        if (enum_line(line)) {
+            fprintf(out, "# %s", line);     /* comment out enum declaration */
+            continue;
+        }
 
-        /* NOTE: loop optimization moved to the Phase 2 pass (see
-         * p2_fusion_pass / p2_loop_pass), which runs on fully normalized
-         * text so lexical-scoping renames are always respected. */
+        /* Handle impl <StructName> { ... } blocks */
+        {
+            char *ip = line;
+            while (*ip == ' ' || *ip == '\t') ip++;
+            if (!file_impl_struct[0] && (!strncmp(ip, "impl ", 5) || !strncmp(ip, "impl\t", 5))) {
+                char *iq = ip + 5;
+                while (*iq == ' ' || *iq == '\t') iq++;
+                int in_len = 0;
+                while (*iq && is_ident1((unsigned char)*iq) && in_len < 127) {
+                    file_impl_struct[in_len++] = *iq++;
+                }
+                file_impl_struct[in_len] = '\0';
+                while (*iq == ' ' || *iq == '\t') iq++;
+                if (file_impl_struct[0] && *iq == '{') {
+                    file_impl_depth = 1;
+                    fprintf(out, "# %s", line);
+                    continue;
+                } else {
+                    file_impl_struct[0] = '\0';
+                }
+            }
+            if (file_impl_struct[0]) {
+                int prev_depth = file_impl_depth;
+                int in_s = 0;
+                for (const char *q = ip; *q; q++) {
+                    if (in_s && *q == '\\' && q[1]) { q++; continue; }
+                    if (*q == '"') in_s = !in_s;
+                    if (in_s) continue;
+                    if (*q == '#' || *q == ';') break;
+                    if (*q == '{') file_impl_depth++;
+                    else if (*q == '}') file_impl_depth--;
+                }
+                if (file_impl_depth <= 0) {
+                    file_impl_struct[0] = '\0';
+                    file_impl_depth = 0;
+                    cur_impl_st = -1;
+                    fprintf(out, "# %s", line);
+                    continue;
+                }
+                if (prev_depth == 1 && (!strncmp(ip, "fn ", 3) || !strncmp(ip, "fn\t", 3))) {
+                    int ind_len = (int)(ip - line);
+                    char *fq = ip + 3;
+                    while (*fq == ' ' || *fq == '\t') fq++;
+                    char mname[128]; int mn = 0;
+                    while (*fq && is_ident1((unsigned char)*fq) && mn < 127) mname[mn++] = *fq++;
+                    mname[mn] = '\0';
+                    char rewritten_fn[MAXLINE * 2];
+                    snprintf(rewritten_fn, sizeof rewritten_fn, "%.*sfn %s__%s%s",
+                             ind_len, line, file_impl_struct, mname, fq);
+                    emit_line(rewritten_fn, out);
+                    continue;
+                }
+            }
+        }
 
-        if (is_unclosed_array(line) || is_unclosed_lambda(line)) {
+        if (is_unclosed_array(line) || is_unclosed_lambda(line) ||
+            is_unclosed_struct_init(line) || is_unclosed_match(line)) {
             char *extra = NULL;
             size_t extra_cap = 0;
             while (getline(&extra, &extra_cap, in) != -1) {
@@ -8309,10 +9358,12 @@ static void process_file(const char *path, FILE *out) {
                 cap = new_cap;
                 strcat(line, "\n");
                 strcat(line, extra);
-                if (!is_unclosed_array(line) && !is_unclosed_lambda(line)) break;
+                if (!is_unclosed_array(line) && !is_unclosed_lambda(line) &&
+                    !is_unclosed_struct_init(line) && !is_unclosed_match(line)) break;
             }
             if (extra) free(extra);
         }
+        if (desugar_match_block(line, out)) continue;
         emit_line(line, out);
     }
     free(line);
@@ -8393,6 +9444,7 @@ int main(int argc, char **argv) {
     }
     p2_dce_unused_functions();
     p2_sanitize_identifiers();
+    if (hydron_opt_enabled) p2_algebraic_pass();
     if (p2_fuse_enabled) p2_fusion_pass();
     if (hydron_opt_enabled) p2_loop_pass();
 

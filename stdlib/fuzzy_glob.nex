@@ -1,0 +1,391 @@
+# ==============================================================================
+#                 NEXUS STANDARD LIBRARY - MODULE: fuzzy_glob.nex
+#     Features: #141 (Fuzzy), #142 (ANSI), #145 (URL Codec), #151 (Glob Match)
+# ==============================================================================
+#
+# Functions:
+#   nx_fuzzy_match(pat, str)  -> 1 if pat is subsequence of str, else 0
+#   nx_fuzzy_score(pat, str)  -> integer score > 0 if matched, else 0
+#   nx_ansi_strip(str)        -> freshly allocated string with ANSI escapes stripped
+#   nx_url_encode(str)        -> freshly allocated percent-encoded URL string
+#   nx_url_decode(str)        -> freshly allocated decoded string
+#   nx_glob_match(pat, str)   -> 1 if wildcard glob matches str, else 0
+#
+# CALLING CONVENTION:
+#   nx_i0, nx_i1 as input registers, nx_r0 as output register.
+# ==============================================================================
+
+# Helper: ASCII lowercase
+fn _fg_tolower {
+    let _tl_c = nx_i0
+    if _tl_c >= 65 {
+        if _tl_c <= 90 {
+            let nx_r0 = _tl_c + 32
+            return
+        }
+    }
+    let nx_r0 = _tl_c
+}
+
+# ------------------------------------------------------------------------------
+# Feature #141: Fuzzy Subsequence Matching & Scoring
+# ------------------------------------------------------------------------------
+fn nx_fuzzy_match {
+    let _fm_pat = nx_i0
+    let _fm_str = nx_i1
+
+    let _fm_pi = 0
+    let _fm_pc = load [_fm_pat + 0]
+    if _fm_pc == 0 {
+        let nx_r0 = 1
+        return
+    }
+
+    let _fm_si = 0
+    let _fm_sc = load [_fm_str + 0]
+
+    while _fm_sc != 0 {
+        let nx_i0 = _fm_pc
+        call _fg_tolower
+        let _fm_pl = nx_r0
+
+        let nx_i0 = _fm_sc
+        call _fg_tolower
+        let _fm_sl = nx_r0
+
+        if _fm_pl == _fm_sl {
+            let _fm_pi = _fm_pi + 1
+            let _fm_pc = load [_fm_pat + _fm_pi]
+            if _fm_pc == 0 {
+                let nx_r0 = 1
+                return
+            }
+        }
+        let _fm_si = _fm_si + 1
+        let _fm_sc = load [_fm_str + _fm_si]
+    }
+    let nx_r0 = 0
+}
+
+fn nx_fuzzy_score {
+    let _fs_pat = nx_i0
+    let _fs_str = nx_i1
+
+    let nx_i0 = _fs_pat
+    let nx_i1 = _fs_str
+    call nx_fuzzy_match
+    if nx_r0 == 0 {
+        let nx_r0 = 0
+        return
+    }
+
+    # Score: 100 base + 10 points per matched char - span length
+    let _fs_pi = 0
+    let _fs_pc = load [_fs_pat + 0]
+    let _fs_si = 0
+    let _fs_sc = load [_fs_str + 0]
+    let _fs_first = 0 - 1
+    let _fs_last = 0
+    let _fs_matched_count = 0
+
+    while _fs_sc != 0 {
+        if _fs_pc != 0 {
+            let nx_i0 = _fs_pc
+            call _fg_tolower
+            let _fs_pl = nx_r0
+
+            let nx_i0 = _fs_sc
+            call _fg_tolower
+            let _fs_sl = nx_r0
+
+            if _fs_pl == _fs_sl {
+                if _fs_first < 0 {
+                    let _fs_first = _fs_si
+                }
+                let _fs_last = _fs_si
+                let _fs_matched_count = _fs_matched_count + 1
+                let _fs_pi = _fs_pi + 1
+                let _fs_pc = load [_fs_pat + _fs_pi]
+            }
+        }
+        let _fs_si = _fs_si + 1
+        let _fs_sc = load [_fs_str + _fs_si]
+    }
+
+    let _fs_span = _fs_last - _fs_first
+    let _fs_score = 100 + _fs_matched_count * 10
+    let _fs_score = _fs_score - _fs_span
+    if _fs_score <= 0 {
+        let _fs_score = 1
+    }
+    let nx_r0 = _fs_score
+}
+
+# ------------------------------------------------------------------------------
+# Feature #142: ANSI Escape Sequence Stripper
+# ------------------------------------------------------------------------------
+fn nx_ansi_strip {
+    let _as_src = nx_i0
+    let _as_len = 0
+    let _as_c = load [_as_src + 0]
+    while _as_c != 0 {
+        let _as_len = _as_len + 1
+        let _as_c = load [_as_src + _as_len]
+    }
+
+    let _as_alloc_sz = _as_len + 1
+    let _as_dst = alloc _as_alloc_sz
+
+    let _as_si = 0
+    let _as_di = 0
+
+    while _as_si < _as_len {
+        let _as_ch = load [_as_src + _as_si]
+        if _as_ch == 27 {
+            # ESC
+            let _as_si = _as_si + 1
+            if _as_si < _as_len {
+                let _as_next = load [_as_src + _as_si]
+                if _as_next == 91 {
+                    # '[' CSI sequence: skip until byte in 64..126 (@..~)
+                    let _as_si = _as_si + 1
+                    let _as_in_csi = 1
+                    while _as_in_csi == 1 {
+                        if _as_si < _as_len {
+                            let _as_cur = load [_as_src + _as_si]
+                            if _as_cur >= 64 {
+                                if _as_cur <= 126 {
+                                    let _as_in_csi = 0
+                                }
+                            }
+                            let _as_si = _as_si + 1
+                        } else {
+                            let _as_in_csi = 0
+                        }
+                    }
+                }
+            }
+        } else {
+            store [_as_dst + _as_di] _as_ch
+            let _as_di = _as_di + 1
+            let _as_si = _as_si + 1
+        }
+    }
+    store [_as_dst + _as_di] 0
+    let nx_r0 = _as_dst
+}
+
+# ------------------------------------------------------------------------------
+# Feature #145: URL Percent-Encoder & Decoder
+# ------------------------------------------------------------------------------
+fn _fg_hex_digit {
+    let _hd_v = nx_i0
+    if _hd_v < 10 {
+        let nx_r0 = 48 + _hd_v
+    } else {
+        let nx_r0 = 65 + _hd_v - 10
+    }
+}
+
+fn _fg_unhex_digit {
+    let _uh_c = nx_i0
+    if _uh_c >= 48 {
+        if _uh_c <= 57 {
+            let nx_r0 = _uh_c - 48
+            return
+        }
+    }
+    if _uh_c >= 65 {
+        if _uh_c <= 70 {
+            let nx_r0 = _uh_c - 65 + 10
+            return
+        }
+    }
+    if _uh_c >= 97 {
+        if _uh_c <= 102 {
+            let nx_r0 = _uh_c - 97 + 10
+            return
+        }
+    }
+    let nx_r0 = 0
+}
+
+fn nx_url_encode {
+    let _ue_src = nx_i0
+    let _ue_len = 0
+    let _ue_c = load [_ue_src + 0]
+    while _ue_c != 0 {
+        let _ue_len = _ue_len + 1
+        let _ue_c = load [_ue_src + _ue_len]
+    }
+
+    # Max length: 3x original + 1
+    let _ue_max_sz = _ue_len * 3
+    let _ue_max_sz = _ue_max_sz + 1
+    let _ue_dst = alloc _ue_max_sz
+
+    let _ue_si = 0
+    let _ue_di = 0
+
+    while _ue_si < _ue_len {
+        let _ue_ch = load [_ue_src + _ue_si]
+        let _ue_unres = 0
+
+        # Unreserved: A-Z (65-90), a-z (97-122), 0-9 (48-57), '-' (45), '_' (95), '.' (46), '~' (126)
+        if _ue_ch >= 65 {
+            if _ue_ch <= 90 { let _ue_unres = 1 }
+        }
+        if _ue_ch >= 97 {
+            if _ue_ch <= 122 { let _ue_unres = 1 }
+        }
+        if _ue_ch >= 48 {
+            if _ue_ch <= 57 { let _ue_unres = 1 }
+        }
+        if _ue_ch == 45 { let _ue_unres = 1 }
+        if _ue_ch == 95 { let _ue_unres = 1 }
+        if _ue_ch == 46 { let _ue_unres = 1 }
+        if _ue_ch == 126 { let _ue_unres = 1 }
+
+        if _ue_unres == 1 {
+            store [_ue_dst + _ue_di] _ue_ch
+            let _ue_di = _ue_di + 1
+        } else {
+            store [_ue_dst + _ue_di] 37   # '%'
+            let _ue_di = _ue_di + 1
+
+            let _ue_hi = _ue_ch / 16
+            let nx_i0 = _ue_hi
+            call _fg_hex_digit
+            store [_ue_dst + _ue_di] nx_r0
+            let _ue_di = _ue_di + 1
+
+            let _ue_lo = _ue_ch % 16
+            let nx_i0 = _ue_lo
+            call _fg_hex_digit
+            store [_ue_dst + _ue_di] nx_r0
+            let _ue_di = _ue_di + 1
+        }
+        let _ue_si = _ue_si + 1
+    }
+    store [_ue_dst + _ue_di] 0
+    let nx_r0 = _ue_dst
+}
+
+fn nx_url_decode {
+    let _ud_src = nx_i0
+    let _ud_len = 0
+    let _ud_c = load [_ud_src + 0]
+    while _ud_c != 0 {
+        let _ud_len = _ud_len + 1
+        let _ud_c = load [_ud_src + _ud_len]
+    }
+
+    let _ud_alloc_sz = _ud_len + 1
+    let _ud_dst = alloc _ud_alloc_sz
+
+    let _ud_si = 0
+    let _ud_di = 0
+
+    while _ud_si < _ud_len {
+        let _ud_ch = load [_ud_src + _ud_si]
+        if _ud_ch == 43 {
+            # '+' -> ' '
+            store [_ud_dst + _ud_di] 32
+            let _ud_di = _ud_di + 1
+            let _ud_si = _ud_si + 1
+        } else if _ud_ch == 37 {
+            # '%' -> decode 2 hex digits
+            let _ud_h1_idx = _ud_si + 1
+            let _ud_h2_idx = _ud_si + 2
+            if _ud_h2_idx < _ud_len {
+                let _ud_c1 = load [_ud_src + _ud_h1_idx]
+                let _ud_c2 = load [_ud_src + _ud_h2_idx]
+                let nx_i0 = _ud_c1
+                call _fg_unhex_digit
+                let _ud_v1 = nx_r0
+                let nx_i0 = _ud_c2
+                call _fg_unhex_digit
+                let _ud_v2 = nx_r0
+                let _ud_byte = _ud_v1 * 16
+                let _ud_byte = _ud_byte + _ud_v2
+                store [_ud_dst + _ud_di] _ud_byte
+                let _ud_di = _ud_di + 1
+                let _ud_si = _ud_si + 3
+            } else {
+                store [_ud_dst + _ud_di] _ud_ch
+                let _ud_di = _ud_di + 1
+                let _ud_si = _ud_si + 1
+            }
+        } else {
+            store [_ud_dst + _ud_di] _ud_ch
+            let _ud_di = _ud_di + 1
+            let _ud_si = _ud_si + 1
+        }
+    }
+    store [_ud_dst + _ud_di] 0
+    let nx_r0 = _ud_dst
+}
+
+# ------------------------------------------------------------------------------
+# Feature #151: Wildcard Glob Matcher ('*' and '?')
+# ------------------------------------------------------------------------------
+fn nx_glob_match {
+    let _gm_pat = nx_i0
+    let _gm_str = nx_i1
+
+    let _gm_pi = 0
+    let _gm_si = 0
+    let _gm_star_pi = 0 - 1
+    let _gm_star_si = 0 - 1
+
+    let _gm_in_loop = 1
+    while _gm_in_loop == 1 {
+        let _gm_pc = load [_gm_pat + _gm_pi]
+        let _gm_sc = load [_gm_str + _gm_si]
+
+        if _gm_sc != 0 {
+            if _gm_pc == 63 {
+                # '?' matches single char
+                let _gm_pi = _gm_pi + 1
+                let _gm_si = _gm_si + 1
+            } else if _gm_pc == _gm_sc {
+                # exact char match
+                let _gm_pi = _gm_pi + 1
+                let _gm_si = _gm_si + 1
+            } else if _gm_pc == 42 {
+                # '*' star wildcard
+                let _gm_star_pi = _gm_pi
+                let _gm_star_si = _gm_si
+                let _gm_pi = _gm_pi + 1
+            } else if _gm_star_pi >= 0 {
+                # Backtrack to star
+                let _gm_star_si = _gm_star_si + 1
+                let _gm_si = _gm_star_si
+                let _gm_pi = _gm_star_pi + 1
+            } else {
+                let nx_r0 = 0
+                return
+            }
+        } else {
+            # End of string reached
+            if _gm_pc == 42 {
+                let _gm_pi = _gm_pi + 1
+            } else {
+                let _gm_in_loop = 0
+            }
+        }
+    }
+
+    # Consume any trailing '*' in pattern
+    let _gm_rem_pc = load [_gm_pat + _gm_pi]
+    while _gm_rem_pc == 42 {
+        let _gm_pi = _gm_pi + 1
+        let _gm_rem_pc = load [_gm_pat + _gm_pi]
+    }
+
+    if _gm_rem_pc == 0 {
+        let nx_r0 = 1
+    } else {
+        let nx_r0 = 0
+    }
+}

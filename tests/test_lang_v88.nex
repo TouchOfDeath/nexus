@@ -1,0 +1,134 @@
+include "stdlib/nstdlib.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Language v8.8 Features
+#    Features: #11-#13, #16-#17, #31, 64-Bit Struct Fix & Turbine 9
+# ==============================================================================
+
+print "--- TEST 1: 64-Bit Struct Fields (>255, negatives, pointers) ---"
+struct BigData {
+    big_val,
+    neg_val,
+    str_val
+}
+let bd = alloc BigData.size
+bd.big_val = 1000000
+bd.neg_val = -500
+bd.str_val = "Nexus 8.8 Structs"
+assert_eq bd.big_val, 1000000
+assert_eq bd.neg_val, -500
+
+let nx_i0 = bd.str_val
+let nx_i1 = "Nexus 8.8 Structs"
+call nx_str_cmp
+assert_eq nx_r0, 0
+
+print "--- TEST 2: Typed Structs & Struct Literals (#11, #13) ---"
+struct Vector3 {
+    x: int,
+    y: int,
+    z: int
+}
+let v = Vector3 { x: 100, y: 200, z: 300 }
+assert_eq v.x, 100
+assert_eq v.y, 200
+assert_eq v.z, 300
+
+print "--- TEST 3: Struct Methods (impl) (#12) ---"
+impl Vector3 {
+    fn sum_all(&mut self) {
+        let total = self.x + self.y + self.z
+        return total
+    }
+    fn set_x_coord(&mut self, val: int) {
+        self.x = val
+    }
+}
+
+let s_sum = v.sum_all()
+assert_eq s_sum, 600
+
+v.set_x_coord(400)
+assert_eq v.x, 400
+
+let s_sum2 = v.sum_all()
+assert_eq s_sum2, 900
+
+print "--- TEST 4: Enum Declarations (#16) ---"
+enum JobState {
+    StateIdle,
+    StateRunning = 10,
+    StateDone,
+    StateFailed = 20
+}
+assert_eq StateIdle, 0
+assert_eq StateRunning, 10
+assert_eq StateDone, 11
+assert_eq StateFailed, 20
+
+assert_eq JobState.StateIdle, 0
+assert_eq JobState.StateRunning, 10
+assert_eq JobState.StateDone, 11
+assert_eq JobState.StateFailed, 20
+
+print "--- TEST 5: Pattern Matching (match) (#17) ---"
+let match_res = 0
+let state = 10
+match state {
+    StateIdle => { let match_res = 1 }
+    StateRunning | StateDone => { let match_res = 2 }
+    _ => { let match_res = 3 }
+}
+assert_eq match_res, 2
+
+let state_other = 99
+let other_res = 0
+match state_other {
+    StateIdle => { let other_res = 1 }
+    _ => { let other_res = 777 }
+}
+assert_eq other_res, 777
+
+print "--- TEST 6: Scientific Float Literals (#31) ---"
+let sf1 = 2.5e3
+let sf1_int = ftoi sf1
+assert_eq sf1_int, 2500
+
+let sf2 = 1.25e2
+let sf2_int = ftoi sf2
+assert_eq sf2_int, 125
+
+print "--- TEST 7: Single-Line Blocks ---"
+let sl_val = 0
+if 10 > 5 { let sl_val = 42 }
+assert_eq sl_val, 42
+
+let sl_val2 = 0
+if 5 > 10 { let sl_val2 = 1 } else { let sl_val2 = 99 }
+assert_eq sl_val2, 99
+
+print "--- TEST 8: HYDRON Turbine 9 Algebraic Reductions ---"
+let a_var = 4321
+let a_add0 = a_var + 0
+let a_0add = 0 + a_var
+let a_sub0 = a_var - 0
+let a_mul1 = a_var * 1
+let a_1mul = 1 * a_var
+let a_div1 = a_var / 1
+let a_mul0 = a_var * 0
+let a_0mul = 0 * a_var
+let a_subself = a_var - a_var
+let a_mod1 = a_var % 1
+assert_eq a_add0, 4321
+assert_eq a_0add, 4321
+assert_eq a_sub0, 4321
+assert_eq a_mul1, 4321
+assert_eq a_1mul, 4321
+assert_eq a_div1, 4321
+assert_eq a_mul0, 0
+assert_eq a_0mul, 0
+assert_eq a_subself, 0
+assert_eq a_mod1, 0
+
+print "LANG_V88_TEST_PASS"
+call nx_assert_summary

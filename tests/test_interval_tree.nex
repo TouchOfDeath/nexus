@@ -1,0 +1,87 @@
+include "stdlib/nstdlib.nex"
+include "stdlib/interval_tree.nex"
+
+# ==============================================================================
+#                 TEST SUITE: Augmented Interval Tree (Feature #82)
+# ==============================================================================
+
+print "--- TEST 1: Creation & Empty State ---"
+let itree = 0
+call nx_itree_new
+let itree = nx_r0
+
+let nx_i0 = itree
+call nx_itree_len
+assert_eq nx_r0, 0
+
+print "--- TEST 2: Insert Intervals ---"
+# Insert [15, 20] val=101
+let nx_i0 = itree
+let nx_i1 = 15
+let nx_i2 = 20
+let nx_s0 = 101
+call nx_itree_insert
+
+# Insert [10, 30] val=102
+let nx_i0 = itree
+let nx_i1 = 10
+let nx_i2 = 30
+let nx_s0 = 102
+call nx_itree_insert
+
+# Insert [17, 19] val=103
+let nx_i0 = itree
+let nx_i1 = 17
+let nx_i2 = 19
+let nx_s0 = 103
+call nx_itree_insert
+
+# Insert [5, 20] val=104
+let nx_i0 = itree
+let nx_i1 = 5
+let nx_i2 = 20
+let nx_s0 = 104
+call nx_itree_insert
+
+let nx_i0 = itree
+call nx_itree_len
+assert_eq nx_r0, 4
+
+print "--- TEST 3: Overlap Queries ---"
+# [12, 14] overlaps [10, 30] and [5, 20], first match should be 102
+let nx_i0 = itree
+let nx_i1 = 12
+let nx_i2 = 14
+call nx_itree_first_overlap
+assert_eq nx_r0, 102
+
+# [40, 50] has no overlap
+let nx_i0 = itree
+let nx_i1 = 40
+let nx_i2 = 50
+call nx_itree_first_overlap
+assert_eq nx_r0, -1
+
+# [16, 18] overlaps all 4 intervals
+let nx_i0 = itree
+let nx_i1 = 16
+let nx_i2 = 18
+call nx_itree_query_overlap
+assert_eq nx_r0, 4
+
+# Point 17 is contained in all 4 intervals
+let nx_i0 = itree
+let nx_i1 = 17
+call nx_itree_query_point
+assert_eq nx_r0, 4
+
+print "--- TEST 4: Clear Tree ---"
+let nx_i0 = itree
+call nx_itree_clear
+
+let nx_i0 = itree
+call nx_itree_len
+assert_eq nx_r0, 0
+
+print "INTERVAL_TREE_TEST_PASS"
+call nx_assert_summary
