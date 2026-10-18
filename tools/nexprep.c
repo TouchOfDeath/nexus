@@ -164,6 +164,7 @@ static int rhs_counter = 0;
 static int assert_counter = 0;
 static int cur_st = -1;
 static int list_deps_mode = 0;
+static int hydron_opt_enabled = 1;
 static FILE *deps_out = NULL;
 
 static void die(const char *msg, const char *arg) {
@@ -822,7 +823,16 @@ static void init_closure_dispatch_sigs(void) {
     fn_registry_add("_nx_dispatch_closure_4", p4, 5);
 }
 
+static char sig_seen[MAXSEEN][MAXLINE * 2];
+static int nsig_seen = 0;
+
 static void scan_signatures_in_file(const char *path) {
+    for (int i = 0; i < nsig_seen; i++) {
+        if (!strcmp(sig_seen[i], path)) return;
+    }
+    if (nsig_seen < MAXSEEN) {
+        snprintf(sig_seen[nsig_seen++], sizeof sig_seen[0], "%s", path);
+    }
     FILE *f = fopen(path, "r");
     if (!f) return;
     char curdir[MAXLINE];
@@ -2253,16 +2263,7 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
     snprintf(line_buf, sizeof line_buf, "%scall %s\n", indent, fn_name);
     strncat(out, line_buf, cap - strlen(out) - 1);
 
-    /* 5. Capture return value if caller expects a destination */
-    int res_id = -1;
-    if (dest && dest[0]) {
-        res_id = call_tmp_counter++;
-        snprintf(line_buf, sizeof line_buf, "%slet _c_res_%d = _ret_%s\n",
-                 indent, res_id, fn_name);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-    }
-
-    /* 6. Restore caller frame and caller locals from _nx_fp */
+    /* 5. Restore caller frame and caller locals from _nx_fp */
     if (cur_fn_is_scoped) {
         snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
         strncat(out, line_buf, cap - strlen(out) - 1);
@@ -2280,10 +2281,10 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    /* 7. Assign destination variable */
+    /* 6. Assign destination variable directly from _ret_<fn> */
     if (dest && dest[0]) {
-        snprintf(line_buf, sizeof line_buf, "%slet %s = _c_res_%d\n",
-                 indent, dest, res_id);
+        snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s\n",
+                 indent, dest, fn_name);
         strncat(out, line_buf, cap - strlen(out) - 1);
         if (cur_fn_is_scoped) {
             fn_add_local(dest);
@@ -3873,8 +3874,80 @@ static int desugar_bitwise_binop(const char *in, char *out, size_t cap) {
     char remainder[MAXLINE];
     snprintf(remainder, sizeof remainder, "%s", rhs_end);
 
-    /* Reconstruct: prefix + = nx_fn(lhs, rhs) + remainder */
     int prefix_len = (int)(rhs - clean);
+
+    /* HYDRON Turbine: Compile-time constant folding & shift strength reduction */
+    if (hydron_opt_enabled) {
+        char *le = NULL, *re = NULL;
+        int lhs_is_lit = 0, rhs_is_lit = 0;
+        int64_t lv = 0, rv = 0;
+        const char *lp = lhs_expr;
+        while (*lp == ' ' || *lp == '\t') lp++;
+        if (isdigit((unsigned char)*lp) || (*lp == '-' && isdigit((unsigned char)lp[1]))) {
+            lv = strtoll(lp, &le, 10);
+            while (le && (*le == ' ' || *le == '\t')) le++;
+            if (le && *le == '\0') lhs_is_lit = 1;
+        }
+        const char *rp = bit_rhs;
+        while (*rp == ' ' || *rp == '\t') rp++;
+        if (isdigit((unsigned char)*rp) || (*rp == '-' && isdigit((unsigned char)rp[1]))) {
+            rv = strtoll(rp, &re, 10);
+            while (re && (*re == ' ' || *re == '\t')) re++;
+            if (re && *re == '\0') rhs_is_lit = 1;
+        }
+        if (lhs_is_lit && rhs_is_lit) {
+            int64_t res = 0;
+            int valid_fold = 1;
+            if (op_type == 1) res = lv & rv;
+            else if (op_type == 2) res = lv | rv;
+            else if (op_type == 3) res = lv ^ rv;
+            else if (op_type == 4) {
+                if (rv >= 0 && rv <= 62) res = (int64_t)((uint64_t)lv << rv);
+                else valid_fold = 0;
+            } else if (op_type == 5) {
+                if (rv >= 0 && rv <= 62) res = lv >> rv;
+                else valid_fold = 0;
+            }
+            if (valid_fold && res >= 0 && res <= 2147483647LL) {
+                snprintf(out, cap, "%.*s= %lld%s\n", prefix_len, clean, (long long)res, remainder);
+                return 1;
+            }
+        }
+        /* Check if lhs_expr is a single identifier or literal token */
+        int lhs_single = 1;
+        for (const char *q2 = lp; *q2; q2++) {
+            if (*q2 == ' ' || *q2 == '\t') { lhs_single = 0; break; }
+        }
+        int rem_empty = 1;
+        for (const char *q2 = remainder; *q2; q2++) {
+            if (*q2 == '#' || *q2 == ';') break;
+            if (*q2 != ' ' && *q2 != '\t' && *q2 != '\r' && *q2 != '\n') { rem_empty = 0; break; }
+        }
+        if (lhs_single && rhs_is_lit) {
+            if ((op_type == 4 || op_type == 5) && rv == 0) {
+                snprintf(out, cap, "%.*s= %s%s\n", prefix_len, clean, lp, remainder);
+                return 1;
+            }
+            if (op_type == 4 && rv >= 1 && rv <= 30 && rem_empty) {
+                snprintf(out, cap, "%.*s= %s * %lld%s\n", prefix_len, clean, lp, 1LL << rv, remainder);
+                return 1;
+            }
+            if (op_type == 1 && rv == 0) {
+                snprintf(out, cap, "%.*s= 0%s\n", prefix_len, clean, remainder);
+                return 1;
+            }
+            if ((op_type == 2 || op_type == 3) && rv == 0) {
+                snprintf(out, cap, "%.*s= %s%s\n", prefix_len, clean, lp, remainder);
+                return 1;
+            }
+        }
+        if (lhs_single && op_type == 3 && !strcmp(lp, rp)) {
+            snprintf(out, cap, "%.*s= 0%s\n", prefix_len, clean, remainder);
+            return 1;
+        }
+    }
+
+    /* Reconstruct: prefix + = nx_fn(lhs, rhs) + remainder */
     snprintf(out, cap, "%.*s= %s(%s, %s)%s\n",
              prefix_len, clean, fn_name, lhs_expr, bit_rhs, remainder);
     return 1;
@@ -5083,13 +5156,25 @@ static int prec_rewrite(const char *indent, const char *dest, int is_let,
                 if (k > t_start) strcat(term_sub, " ");
                 strcat(term_sub, tk[k].tok);
             }
-            prec_tmp_counter++;
-            int id = prec_tmp_counter;
-            char line[768];
-            snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, term_sub);
-            if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
-            strcat(buf, line);
-            snprintf(term_repr, sizeof term_repr, "_prec_%d", id);
+            int64_t tres = 0;
+            const char *tend = NULL;
+            int folded_term = 0;
+            if (eval_int_chain(term_sub, &tend, &tres)) {
+                while (*tend == ' ' || *tend == '\t') tend++;
+                if (*tend == '\0' && tres >= 0 && tres <= 2147483647LL) {
+                    snprintf(term_repr, sizeof term_repr, "%lld", (long long)tres);
+                    folded_term = 1;
+                }
+            }
+            if (!folded_term) {
+                prec_tmp_counter++;
+                int id = prec_tmp_counter;
+                char line[768];
+                snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, term_sub);
+                if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
+                strcat(buf, line);
+                snprintf(term_repr, sizeof term_repr, "_prec_%d", id);
+            }
         }
 
         /* Append term_repr to add_expr */
@@ -5229,10 +5314,9 @@ static int desugar_constant_folding(const char *in, char *out, size_t cap) {
     }
     trim_ws(rhs_copy);
 
-    /* A chain that mixes + / - with * / / / % must be rewritten with correct
-     * precedence rather than folded left-to-right; leave it for the
-     * desugar_precedence pass that runs immediately afterwards.          */
-    if (prec_mixed_chain(rhs_copy)) return 0;
+    /* Note: eval_int_chain uses recursive-descent with full operator precedence
+     * (eval_int_expr -> eval_int_term -> eval_int_factor), so pure constant
+     * chains that mix + / - with * / / / % fold in one step! */
 
     int64_t res = 0;
     const char *end = NULL;
@@ -7793,7 +7877,16 @@ static void scan_line_for_types(const char *line, const char *cur_fn, int *scan_
     }
 }
 
+static char type_seen[MAXSEEN][MAXLINE * 2];
+static int ntype_seen = 0;
+
 static void scan_file_for_types(const char *path) {
+    for (int i = 0; i < ntype_seen; i++) {
+        if (!strcmp(type_seen[i], path)) return;
+    }
+    if (ntype_seen < MAXSEEN) {
+        snprintf(type_seen[ntype_seen++], sizeof type_seen[0], "%s", path);
+    }
     FILE *in = fopen(path, "r");
     if (!in) return;
 
@@ -7928,7 +8021,6 @@ static void run_type_inference_pass(const char *canon_path) {
 #define HYD_INT32_MAX 2147483647LL
 
 static int p2_fuse_enabled = 1;
-static int hydron_opt_enabled = 1;
 static int p2_eliminate_enabled = 1;   /* attractor + induction scaling */
 static int p2_unroll_enabled = 0;      /* opt-in: measured neutral on the
                                           forwarding codegen; --unroll to force */
@@ -8286,15 +8378,33 @@ static void p2_algebraic_pass(void) {
                 indent[ind] = '\0';
 
                 char simplified[256] = "";
-                if (op == '+' && !strcmp(b, "0")) snprintf(simplified, sizeof simplified, "%s", a);
-                else if (op == '+' && !strcmp(a, "0")) snprintf(simplified, sizeof simplified, "%s", b);
-                else if (op == '-' && !strcmp(b, "0")) snprintf(simplified, sizeof simplified, "%s", a);
-                else if (op == '-' && !strcmp(a, b) && prec_is_ident0((unsigned char)a[0])) snprintf(simplified, sizeof simplified, "0");
-                else if (op == '*' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "%s", a);
-                else if (op == '*' && !strcmp(a, "1")) snprintf(simplified, sizeof simplified, "%s", b);
-                else if (op == '/' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "%s", a);
-                else if (op == '*' && (!strcmp(a, "0") || !strcmp(b, "0"))) snprintf(simplified, sizeof simplified, "0");
-                else if (op == '%' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "0");
+                if (isdigit((unsigned char)a[0]) && isdigit((unsigned char)b[0])) {
+                    char *ea = NULL, *eb = NULL;
+                    int64_t va = strtoll(a, &ea, 10);
+                    int64_t vb = strtoll(b, &eb, 10);
+                    if (ea && !*ea && eb && !*eb) {
+                        int64_t vr = -1;
+                        if (op == '+') vr = va + vb;
+                        else if (op == '-') vr = va - vb;
+                        else if (op == '*') vr = va * vb;
+                        else if (op == '/' && vb != 0) vr = va / vb;
+                        else if (op == '%' && vb != 0) vr = va % vb;
+                        if (vr >= 0 && vr <= 2147483647LL) {
+                            snprintf(simplified, sizeof simplified, "%lld", (long long)vr);
+                        }
+                    }
+                }
+                if (!simplified[0]) {
+                    if (op == '+' && !strcmp(b, "0")) snprintf(simplified, sizeof simplified, "%s", a);
+                    else if (op == '+' && !strcmp(a, "0")) snprintf(simplified, sizeof simplified, "%s", b);
+                    else if (op == '-' && !strcmp(b, "0")) snprintf(simplified, sizeof simplified, "%s", a);
+                    else if (op == '-' && !strcmp(a, b) && prec_is_ident0((unsigned char)a[0])) snprintf(simplified, sizeof simplified, "0");
+                    else if (op == '*' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "%s", a);
+                    else if (op == '*' && !strcmp(a, "1")) snprintf(simplified, sizeof simplified, "%s", b);
+                    else if (op == '/' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "%s", a);
+                    else if (op == '*' && (!strcmp(a, "0") || !strcmp(b, "0"))) snprintf(simplified, sizeof simplified, "0");
+                    else if (op == '%' && !strcmp(b, "1")) snprintf(simplified, sizeof simplified, "0");
+                }
 
                 if (simplified[0]) {
                     if (!strcmp(d, simplified)) continue; /* becomes self-assignment */
@@ -8723,150 +8833,314 @@ static int p2_try_transform(int i, int j) {
 
     int handled = 0;
 
-    /* ---------------- attractor: SCEV recurrence (literal lim >= 64) ------ */
-    /* fused 2-line form:   let D = D + V * 2 / 4   |   let D = D + V / 2
-     * unfused 4-line form: let D = D + V ; let D = D * 2 ; let D = D / 4
-     * plus exactly one  let V = V + 1                                      */
-    if (!handled && p2_eliminate_enabled && h.has_lim && h.lim >= 64) {
-        /* minimal whitespace tokenizer for the matcher below */
+    /* ---------------- Turbine 7: SCEV recurrence attractor solver --------- */
+    /* Family 1: D_{n+1} = (D_n + V) / 2  -> converges to D_V = V - 2
+     * Family 2: D_{n+1} = (2*D_n + V) / 4 -> converges to D_V = (V - 3) / 2
+     * Supports both literal limits (lim >= 64) and variable limits (guarded by if lim >= 64). */
+    if (!handled && p2_eliminate_enabled &&
+        ((h.has_lim && h.lim >= 64) || (!h.has_lim && is_ident0((unsigned char)h.limexpr[0])))) {
+        int lim_is_simple_var = 1;
+        if (!h.has_lim) {
+            for (const char *q = h.limexpr; *q; q++) {
+                if (!is_ident1((unsigned char)*q)) { lim_is_simple_var = 0; break; }
+            }
+        }
+        if (h.has_lim || lim_is_simple_var) {
 #define P2_MAXTOK 12
-        char toks[P2_MAXTOK][64];
-        int ntoks = 0;
-        {
-            const char *p = b.valid[0];
-            while (*p && ntoks < P2_MAXTOK) {
-                while (*p == ' ' || *p == '\t') p++;
-                if (!*p) break;
-                size_t o = 0;
-                while (*p && *p != ' ' && *p != '\t') {
-                    if (o + 1 < (size_t)sizeof toks[0]) toks[ntoks][o++] = *p;
-                    p++;
+            char toks[P2_MAXTOK][64];
+            int ntoks = 0;
+            {
+                const char *p = b.valid[0];
+                while (*p && ntoks < P2_MAXTOK) {
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (!*p) break;
+                    size_t o = 0;
+                    while (*p && *p != ' ' && *p != '\t') {
+                        if (o + 1 < (size_t)sizeof toks[0]) toks[ntoks][o++] = *p;
+                        p++;
+                    }
+                    toks[ntoks][o] = '\0';
+                    ntoks++;
                 }
-                toks[ntoks][o] = '\0';
-                ntoks++;
             }
-        }
-        int is_rec = 0;
-        char D[128];
-        D[0] = '\0';
-        /* token layout: let D = RHS...  -> '=' sits at index 2 */
-        int eq = -1;
-        for (int t = 0; t < ntoks; t++) if (!strcmp(toks[t], "=")) { eq = t; break; }
-        if (eq == 2 && !strcmp(toks[0], "let")) {
-            const char *rhs = b.valid[0];
-            /* re-tokenize RHS only so D/V tokens keep their identity */
-            char rt[P2_MAXTOK][64];
-            int nr = 0;
-            const char *p = rhs;
-            while (*p && *p != '=' ) p++;
-            p++;
-            while (*p && nr < P2_MAXTOK) {
-                while (*p == ' ' || *p == '\t') p++;
-                if (!*p) break;
-                size_t o = 0;
-                while (*p && *p != ' ' && *p != '\t') {
-                    if (o + 1 < (size_t)sizeof rt[0]) rt[nr][o++] = *p;
-                    p++;
+            int is_rec = 0; /* 1 = V - 2 attractor, 2 = (V - 3) / 2 attractor */
+            char D[128];
+            D[0] = '\0';
+            int eq = -1;
+            for (int t = 0; t < ntoks; t++) if (!strcmp(toks[t], "=")) { eq = t; break; }
+            if (eq == 2 && !strcmp(toks[0], "let")) {
+                const char *rhs = b.valid[0];
+                char rt[P2_MAXTOK][64];
+                int nr = 0;
+                const char *p = rhs;
+                while (*p && *p != '=') p++;
+                p++;
+                while (*p && nr < P2_MAXTOK) {
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (!*p) break;
+                    size_t o = 0;
+                    while (*p && *p != ' ' && *p != '\t') {
+                        if (o + 1 < (size_t)sizeof rt[0]) rt[nr][o++] = *p;
+                        p++;
+                    }
+                    rt[nr][o] = '\0';
+                    nr++;
                 }
-                rt[nr][o] = '\0';
-                nr++;
+                snprintf(D, sizeof D, "%s", toks[1]);
+                int64_t inc_step = 0;
+                int has_unit_inc = (b.nvalid == 2 && p2_match_incr(b.valid[1], h.var, &inc_step) && inc_step == 1);
+                if (has_unit_inc && nr == 5 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
+                    !strcmp(rt[2], h.var) && !strcmp(rt[3], "/") &&
+                    !strcmp(rt[4], "2") && strcmp(D, h.var) != 0) {
+                    is_rec = 1;
+                } else if (has_unit_inc && nr == 7 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
+                           !strcmp(rt[2], h.var) && !strcmp(rt[3], "*") &&
+                           !strcmp(rt[4], "2") && !strcmp(rt[5], "/") &&
+                           !strcmp(rt[6], "4") && strcmp(D, h.var) != 0) {
+                    is_rec = 1;
+                } else if (has_unit_inc && nr == 7 && !strcmp(rt[0], D) && !strcmp(rt[1], "*") &&
+                           !strcmp(rt[2], "2") && !strcmp(rt[3], "+") &&
+                           !strcmp(rt[4], h.var) && !strcmp(rt[5], "/") &&
+                           !strcmp(rt[6], "4") && strcmp(D, h.var) != 0) {
+                    is_rec = 2;
+                }
             }
-            snprintf(D, sizeof D, "%s", toks[1]);
-            int64_t inc_step = 0;
-            int has_unit_inc = (b.nvalid == 2 && p2_match_incr(b.valid[1], h.var, &inc_step) && inc_step == 1);
-            if (has_unit_inc && nr == 5 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
-                !strcmp(rt[2], h.var) && !strcmp(rt[3], "/") &&
-                !strcmp(rt[4], "2") && strcmp(D, h.var) != 0) {
-                is_rec = 1;                            /* D = (D + V) / 2    */
-            } else if (has_unit_inc && nr == 7 && !strcmp(rt[0], D) && !strcmp(rt[1], "+") &&
-                       !strcmp(rt[2], h.var) && !strcmp(rt[3], "*") &&
-                       !strcmp(rt[4], "2") && !strcmp(rt[5], "/") &&
-                       !strcmp(rt[6], "4") && strcmp(D, h.var) != 0) {
-                is_rec = 1;                            /* D = (D + V) * 2 / 4*/
+            if (!is_rec && b.nvalid == 3) {
+                char ptmp[64], da[64], va[64];
+                int64_t inc_step = 0;
+                int m1 = sscanf(b.valid[0], "let %63s = %63s + %63s", ptmp, da, va);
+                int m3 = p2_match_incr(b.valid[2], h.var, &inc_step);
+                if (m1 == 3 && m3 && inc_step == 1 && !strncmp(ptmp, "_paren_", 7) &&
+                    !strcmp(va, h.var) && strcmp(da, h.var) != 0) {
+                    char tail1[128], tail2[128];
+                    snprintf(tail1, sizeof tail1, "let %s = %s * 2 / 4", da, ptmp);
+                    snprintf(tail2, sizeof tail2, "let %s = %s / 2", da, ptmp);
+                    if (!strcmp(b.valid[1], tail1) || !strcmp(b.valid[1], tail2)) {
+                        is_rec = 1;
+                        snprintf(D, sizeof D, "%s", da);
+                    }
+                }
+                /* Family 2 from prec_rewrite + fusion:
+                 * let _prec_K = D * 2; let D = _prec_K + V / 4; let V = V + 1 */
+                if (!is_rec && m3 && inc_step == 1) {
+                    char p2tmp[64], d2[64];
+                    if (sscanf(b.valid[0], "let %63s = %63s * 2", p2tmp, d2) == 2 &&
+                        !strncmp(p2tmp, "_prec_", 6) && strcmp(d2, h.var) != 0) {
+                        char exp_l2[256];
+                        snprintf(exp_l2, sizeof exp_l2, "let %s = %s + %s / 4", d2, p2tmp, h.var);
+                        if (!strcmp(b.valid[1], exp_l2)) {
+                            is_rec = 2;
+                            snprintf(D, sizeof D, "%s", d2);
+                        }
+                    }
+                }
             }
-        }
-        if (!is_rec && b.nvalid == 3) {
-            /* Parenthesized recurrence: let _paren_K = D + V; let D = _paren_K (* 2 / 4 | / 2); let V = V + 1 */
-            char ptmp[64], da[64], va[64], db[64], ptmp2[64];
-            int64_t inc_step = 0;
-            int m1 = sscanf(b.valid[0], "let %63s = %63s + %63s", ptmp, da, va);
-            int m3 = p2_match_incr(b.valid[2], h.var, &inc_step);
-            if (m1 == 3 && m3 && inc_step == 1 && !strncmp(ptmp, "_paren_", 7) &&
-                !strcmp(va, h.var) && strcmp(da, h.var) != 0) {
-                char tail1[128], tail2[128];
-                snprintf(tail1, sizeof tail1, "let %s = %s * 2 / 4", da, ptmp);
-                snprintf(tail2, sizeof tail2, "let %s = %s / 2", da, ptmp);
-                if (!strcmp(b.valid[1], tail1) || !strcmp(b.valid[1], tail2)) {
+            if (!is_rec && b.nvalid == 4) {
+                char da[64], ta[64], db[64], dc[64];
+                int m1 = sscanf(b.valid[0], "let %63s = %*s + %63s", da, ta);
+                int m2 = sscanf(b.valid[1], "let %63s = %*s * 2", db);
+                int m3 = sscanf(b.valid[2], "let %63s = %*s / 4", dc);
+                int m4 = p2_match_incr(b.valid[3], h.var, NULL);
+                if (m1 == 2 && m2 == 1 && m3 == 1 && m4 &&
+                    !strcmp(da, db) && !strcmp(db, dc) &&
+                    !strcmp(ta, h.var) && strcmp(da, h.var) != 0) {
                     is_rec = 1;
                     snprintf(D, sizeof D, "%s", da);
                 }
+                if (!is_rec && m4) {
+                    char p2tmp[64], d2[64];
+                    if (sscanf(b.valid[0], "let %63s = %63s * 2", p2tmp, d2) == 2 &&
+                        !strncmp(p2tmp, "_prec_", 6) && strcmp(d2, h.var) != 0) {
+                        char exp_l2[256], exp_l3[256];
+                        snprintf(exp_l2, sizeof exp_l2, "let %s = %s + %s", d2, p2tmp, h.var);
+                        snprintf(exp_l3, sizeof exp_l3, "let %s = %s / 4", d2, d2);
+                        if (!strcmp(b.valid[1], exp_l2) && !strcmp(b.valid[2], exp_l3)) {
+                            is_rec = 2;
+                            snprintf(D, sizeof D, "%s", d2);
+                        }
+                    }
+                }
             }
-            (void)db; (void)ptmp2;
-        }
-        if (!is_rec && b.nvalid == 4) {
-            char da[64], ta[64], db[64], dc[64];
-            int m1 = sscanf(b.valid[0], "let %63s = %*s + %63s", da, ta);
-            int m2 = sscanf(b.valid[1], "let %63s = %*s * 2", db);
-            int m3 = sscanf(b.valid[2], "let %63s = %*s / 4", dc);
-            int m4 = p2_match_incr(b.valid[3], h.var, NULL);
-            if (m1 == 2 && m2 == 1 && m3 == 1 && m4 &&
-                !strcmp(da, db) && !strcmp(db, dc) &&
-                !strcmp(ta, h.var) && strcmp(da, h.var) != 0) {
-                is_rec = 1;
-                snprintf(D, sizeof D, "%s", da);
+            if (!h.has_lim && is_rec && (!strcmp(D, h.limexpr) || !strcmp(h.var, h.limexpr))) {
+                is_rec = 0;
             }
-        }
-        if (is_rec && p2_budget_ok(13 - (b.nlines + 2))) {
-            EMIT("while %s < 64 {\n", h.var);
-            EMIT("    let %s = %s + %s / 2\n", D, D, h.var);
-            EMIT("    let %s = %s + 1\n", h.var, h.var);
-            EMIT("}\n");
-            EMIT("let _hyd_diff%d = %s - 2\n", hyd_tmp_counter, h.var);
-            EMIT("if %s == _hyd_diff%d {\n", D, hyd_tmp_counter);
-            EMIT("    let %s = %lld\n", D, (long long)(h.lim - 2));
-            EMIT("    let %s = %lld\n", h.var, (long long)h.lim);
-            EMIT("}\n");
-            hyd_tmp_counter++;
-            EMIT("%s\n", trimmed);
-            EMIT("    let %s = %s + %s / 2\n", D, D, h.var);
-            EMIT("    let %s = %s + 1\n", h.var, h.var);
-            EMIT("}\n");
-            if (p2_dbg()) fprintf(stderr, "[opt] attractor solved: while %s < %lld\n",
-                                  h.var, (long long)h.lim);
-            handled = 1;
+            if (is_rec == 1 && p2_budget_ok(14 - (b.nlines + 2))) {
+                if (!h.has_lim) EMIT("if %s >= 64 {\n", h.limexpr);
+                EMIT("while %s < 64 {\n", h.var);
+                EMIT("    let %s = %s + %s / 2\n", D, D, h.var);
+                EMIT("    let %s = %s + 1\n", h.var, h.var);
+                EMIT("}\n");
+                EMIT("let _hyd_diff%d = %s - 2\n", hyd_tmp_counter, h.var);
+                EMIT("if %s == _hyd_diff%d {\n", D, hyd_tmp_counter);
+                if (h.has_lim) {
+                    EMIT("    let %s = %lld\n", D, (long long)(h.lim - 2));
+                    EMIT("    let %s = %lld\n", h.var, (long long)h.lim);
+                } else {
+                    EMIT("    let %s = %s - 2\n", D, h.limexpr);
+                    EMIT("    let %s = %s\n", h.var, h.limexpr);
+                }
+                EMIT("}\n");
+                if (!h.has_lim) EMIT("}\n");
+                hyd_tmp_counter++;
+                EMIT("%s\n", trimmed);
+                EMIT("    let %s = %s + %s / 2\n", D, D, h.var);
+                EMIT("    let %s = %s + 1\n", h.var, h.var);
+                EMIT("}\n");
+                if (p2_dbg()) fprintf(stderr, "[opt] attractor (family 1) solved: while %s < %s\n",
+                                      h.var, h.has_lim ? "(lit)" : h.limexpr);
+                handled = 1;
+            } else if (is_rec == 2 && p2_budget_ok(16 - (b.nlines + 2))) {
+                if (!h.has_lim) EMIT("if %s >= 64 {\n", h.limexpr);
+                EMIT("while %s < 64 {\n", h.var);
+                for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+                EMIT("}\n");
+                EMIT("let _hyd_diff%d = %s - 3 / 2\n", hyd_tmp_counter, h.var);
+                EMIT("if %s == _hyd_diff%d {\n", D, hyd_tmp_counter);
+                if (h.has_lim) {
+                    EMIT("    let %s = %lld\n", D, (long long)((h.lim - 3) / 2));
+                    EMIT("    let %s = %lld\n", h.var, (long long)h.lim);
+                } else {
+                    EMIT("    let %s = %s - 3 / 2\n", D, h.limexpr);
+                    EMIT("    let %s = %s\n", h.var, h.limexpr);
+                }
+                EMIT("}\n");
+                if (!h.has_lim) EMIT("}\n");
+                hyd_tmp_counter++;
+                EMIT("%s\n", trimmed);
+                for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+                EMIT("}\n");
+                if (p2_dbg()) fprintf(stderr, "[opt] attractor (family 2) solved: while %s < %s\n",
+                                      h.var, h.has_lim ? "(lit)" : h.limexpr);
+                handled = 1;
+            }
         }
     }
 
-    /* ---------------- Turbine 8: Gauss triangular sum (let D = D + V; let V = V + 1) ------ */
-    if (!handled && p2_eliminate_enabled && h.has_lim && h.lim >= 64 &&
-        h.lim <= 1000000000LL && b.nvalid == 2) {
-        char da[64], db[64], va[64];
+    /* ---------------- Turbine 8: Gauss triangular sum (let D = D (+|-) V; let V = V + 1) -- */
+    if (!handled && p2_eliminate_enabled && b.nvalid == 2 &&
+        ((h.has_lim && h.lim >= 1 && h.lim <= 1000000000LL) ||
+         (!h.has_lim && is_ident0((unsigned char)h.limexpr[0])))) {
+        int lim_ok_g = h.has_lim;
+        if (!h.has_lim) {
+            lim_ok_g = 1;
+            for (const char *q = h.limexpr; *q; q++) {
+                if (!is_ident1((unsigned char)*q)) { lim_ok_g = 0; break; }
+            }
+        }
+        char da[64], db[64], op_s[8], va[64], g_extra[64];
         int64_t inc_step = 0;
-        if (sscanf(b.valid[0], "let %63s = %63s + %63s", da, db, va) == 3 &&
+        if (lim_ok_g &&
+            sscanf(b.valid[0], "let %63s = %63s %7s %63s %63s", da, db, op_s, va, g_extra) == 4 &&
+            (!strcmp(op_s, "+") || !strcmp(op_s, "-")) &&
             !strcmp(da, db) && !strcmp(va, h.var) && strcmp(da, h.var) != 0 &&
+            (h.has_lim || (strcmp(da, h.limexpr) != 0 && strcmp(h.var, h.limexpr) != 0)) &&
             p2_match_incr(b.valid[1], h.var, &inc_step) && inc_step == 1 &&
-            p2_budget_ok(10)) {
+            p2_budget_ok(12)) {
+            char g_op = op_s[0];
             EMIT("if %s >= 0 {\n", h.var);
-            EMIT("    if %s < %lld {\n", h.var, (long long)h.lim);
-            EMIT("        let _hyd_cnt%d = %lld - %s\n", hyd_tmp_counter, (long long)h.lim, h.var);
-            EMIT("        let _hyd_end%d = %s + %lld\n", hyd_tmp_counter, h.var, (long long)(h.lim - 1));
-            EMIT("        let _hyd_add%d = _hyd_cnt%d * _hyd_end%d / 2\n",
-                 hyd_tmp_counter, hyd_tmp_counter, hyd_tmp_counter);
-            EMIT("        let %s = %s + _hyd_add%d\n", da, da, hyd_tmp_counter);
-            EMIT("        let %s = %lld\n", h.var, (long long)h.lim);
-            EMIT("    }\n");
+            if (h.has_lim) {
+                EMIT("    if %s < %lld {\n", h.var, (long long)h.lim);
+                EMIT("        let _hyd_cnt%d = %lld - %s\n", hyd_tmp_counter, (long long)h.lim, h.var);
+                EMIT("        let _hyd_end%d = %s + %lld\n", hyd_tmp_counter, h.var, (long long)(h.lim - 1));
+                EMIT("        let _hyd_add%d = _hyd_cnt%d * _hyd_end%d / 2\n",
+                     hyd_tmp_counter, hyd_tmp_counter, hyd_tmp_counter);
+                EMIT("        let %s = %s %c _hyd_add%d\n", da, da, g_op, hyd_tmp_counter);
+                EMIT("        let %s = %lld\n", h.var, (long long)h.lim);
+                EMIT("    }\n");
+            } else {
+                EMIT("    if %s <= 1000000000 {\n", h.limexpr);
+                EMIT("        if %s < %s {\n", h.var, h.limexpr);
+                EMIT("            let _hyd_cnt%d = %s - %s\n", hyd_tmp_counter, h.limexpr, h.var);
+                EMIT("            let _hyd_end%d = %s + %s - 1\n", hyd_tmp_counter, h.var, h.limexpr);
+                EMIT("            let _hyd_add%d = _hyd_cnt%d * _hyd_end%d / 2\n",
+                     hyd_tmp_counter, hyd_tmp_counter, hyd_tmp_counter);
+                EMIT("            let %s = %s %c _hyd_add%d\n", da, da, g_op, hyd_tmp_counter);
+                EMIT("            let %s = %s\n", h.var, h.limexpr);
+                EMIT("        }\n");
+                EMIT("    }\n");
+            }
             EMIT("}\n");
             hyd_tmp_counter++;
             EMIT("%s\n", trimmed);
             for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
             EMIT("}\n");
-            if (p2_dbg()) fprintf(stderr, "[opt] gauss triangular sum solved: while %s < %lld\n",
+            if (p2_dbg()) fprintf(stderr, "[opt] gauss triangular sum solved: while %s < %s\n",
+                                  h.var, h.has_lim ? "(lit)" : h.limexpr);
+            handled = 1;
+        }
+    }
+
+    /* ---------------- Turbine 10: Geometric doubling & affine-geometric solver -- */
+    /* Solves:
+     *   while V < L { let D = D * 2; let V = V + 1 }           (1 <= L <= 62)
+     *   while V < L { let D = D * 2 + C; let V = V + 1 }       (1 <= L <= 30)
+     *   while V < L { let _prec_K = D * 2; let D = _prec_K + C; let V = V + 1 } */
+    if (!handled && p2_eliminate_enabled && h.has_lim && h.lim >= 1 && h.lim <= 62 &&
+        (b.nvalid == 2 || b.nvalid == 3)) {
+        char da[64] = "", db[64] = "";
+        int64_t add_c = 0;
+        int is_geom = 0;
+        int64_t inc_step = 0;
+        if (b.nvalid == 2 && p2_match_incr(b.valid[1], h.var, &inc_step) && inc_step == 1) {
+            char op1[16] = "", op2[16] = "", extra[64] = "";
+            long long mval = 0, cv = 0;
+            int nf = sscanf(b.valid[0], "let %63s = %63s %15s %lld %15s %lld %63s",
+                            da, db, op1, &mval, op2, &cv, extra);
+            if (nf == 4 && !strcmp(da, db) && !strcmp(op1, "*") && mval == 2 && strcmp(da, h.var) != 0) {
+                is_geom = 1;
+                add_c = 0;
+            } else if (nf == 6 && !strcmp(da, db) && !strcmp(op1, "*") && mval == 2 &&
+                       !strcmp(op2, "+") && strcmp(da, h.var) != 0 && cv >= 0 && cv <= 1000000) {
+                is_geom = 1;
+                add_c = (int64_t)cv;
+            }
+        } else if (b.nvalid == 3 && p2_match_incr(b.valid[2], h.var, &inc_step) && inc_step == 1) {
+            char ptmp[64] = "", op1[16] = "", op2[16] = "", extra[64] = "";
+            long long mval = 0, cv = 0;
+            if (sscanf(b.valid[0], "let %63s = %63s %15s %lld %63s", ptmp, da, op1, &mval, extra) == 4 &&
+                !strncmp(ptmp, "_prec_", 6) && !strcmp(op1, "*") && mval == 2 && strcmp(da, h.var) != 0) {
+                char d2[64] = "", ptmp2[64] = "";
+                if (sscanf(b.valid[1], "let %63s = %63s %15s %lld %63s", d2, ptmp2, op2, &cv, extra) == 4 &&
+                    !strcmp(d2, da) && !strcmp(ptmp2, ptmp) && !strcmp(op2, "+") && cv >= 0 && cv <= 1000000) {
+                    is_geom = 1;
+                    add_c = (int64_t)cv;
+                }
+            }
+        }
+        if (is_geom && add_c == 0 && p2_budget_ok(10)) {
+            EMIT("if %s == 0 {\n", h.var);
+            int64_t rem_shift = h.lim;
+            while (rem_shift > 0) {
+                int64_t step_s = rem_shift > 30 ? 30 : rem_shift;
+                EMIT("    let %s = %s * %lld\n", da, da, 1LL << step_s);
+                rem_shift -= step_s;
+            }
+            EMIT("    let %s = %lld\n", h.var, (long long)h.lim);
+            EMIT("}\n");
+            EMIT("%s\n", trimmed);
+            for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+            EMIT("}\n");
+            if (p2_dbg()) fprintf(stderr, "[opt] geometric doubling solved: while %s < %lld\n",
+                                  h.var, (long long)h.lim);
+            handled = 1;
+        } else if (is_geom && add_c > 0 && h.lim <= 30 &&
+                   add_c * ((1LL << h.lim) - 1) <= HYD_INT32_MAX && p2_budget_ok(10)) {
+            int64_t mul_pow = 1LL << h.lim;
+            int64_t add_term = add_c * (mul_pow - 1);
+            EMIT("if %s == 0 {\n", h.var);
+            EMIT("    let %s = %s * %lld + %lld\n", da, da, (long long)mul_pow, (long long)add_term);
+            EMIT("    let %s = %lld\n", h.var, (long long)h.lim);
+            EMIT("}\n");
+            EMIT("%s\n", trimmed);
+            for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+            EMIT("}\n");
+            if (p2_dbg()) fprintf(stderr, "[opt] affine-geometric recurrence solved: while %s < %lld\n",
                                   h.var, (long long)h.lim);
             handled = 1;
         }
     }
 
-    /* ---------------- scaling: pure accumulator + increment (x128) -------- */
+    /* ---------------- Turbine 5: O(1) closed-form linear induction + x128 fallback -------- */
     if (!handled && p2_eliminate_enabled && b.nvalid >= 1) {
         int64_t incr = 0;
         int nincr = 0;
@@ -8877,13 +9151,32 @@ static int p2_try_transform(int i, int j) {
             if (p2_match_incr(b.valid[k], V, &cv)) { nincr++; incr = cv; }
         }
         /* every statement must be an acc or the single incr */
-        int all_acc = (nincr == 1);
+        int all_acc = (nincr == 1 && incr >= 1);
+        char acc_dst[32][128];
+        int64_t acc_tot[32];
+        int nacc = 0;
         for (int k = 0; all_acc && k < b.nvalid; k++) {
             int64_t cv = 0;
             if (p2_match_incr(b.valid[k], V, &cv)) continue;
             char dd[128];
             int64_t tot = 0;
-            if (p2_match_acc(b.valid[k], V, dd, sizeof dd, &tot)) continue;
+            if (p2_match_acc(b.valid[k], V, dd, sizeof dd, &tot)) {
+                /* Coalesce duplicate accumulators targeting the same variable */
+                int found = -1;
+                for (int m = 0; m < nacc; m++) {
+                    if (!strcmp(acc_dst[m], dd)) { found = m; break; }
+                }
+                if (found >= 0) {
+                    acc_tot[found] += tot;
+                } else if (nacc < 32) {
+                    snprintf(acc_dst[nacc], sizeof acc_dst[0], "%s", dd);
+                    acc_tot[nacc] = tot;
+                    nacc++;
+                } else {
+                    all_acc = 0;
+                }
+                continue;
+            }
             all_acc = 0;
         }
         if (all_acc) {
@@ -8891,8 +9184,6 @@ static int p2_try_transform(int i, int j) {
             int64_t main_lim = 0;
             char hoist[MAXLINE];
             hoist[0] = '\0';
-            /* variable limit must be assigned nowhere in the body (the scaled
-             * guard freezes it before the loop) */
             if (!h.has_lim) {
                 for (int k = 0; k < b.nvalid; k++) {
                     char dd[128];
@@ -8904,7 +9195,76 @@ static int p2_try_transform(int i, int j) {
                     }
                 }
             }
-            if (all_acc && h.has_lim) {
+            /* Check if O(1) closed-form induction is safe */
+            int closed_ok = all_acc && (incr <= HYD_INT32_MAX);
+            if (closed_ok && h.has_lim && (h.lim < 1 || h.lim > HYD_INT32_MAX)) closed_ok = 0;
+            if (closed_ok && !h.has_lim) {
+                for (const char *q = h.limexpr; *q; q++) {
+                    if (!is_ident1((unsigned char)*q)) { closed_ok = 0; break; }
+                }
+            }
+            for (int m = 0; closed_ok && m < nacc; m++) {
+                int64_t mag = acc_tot[m] < 0 ? -acc_tot[m] : acc_tot[m];
+                if (mag > 1000000000LL) closed_ok = 0;
+            }
+            if (closed_ok && p2_budget_ok(nacc + 10)) {
+                EMIT("if %s >= 0 {\n", V);
+                if (h.has_lim) {
+                    EMIT("    if %s < %lld {\n", V, (long long)h.lim);
+                    if (incr == 1) {
+                        EMIT("        let _hyd_cnt%d = %lld - %s\n", hyd_tmp_counter, (long long)h.lim, V);
+                    } else {
+                        EMIT("        let _hyd_cnt%d = %lld - %s / %lld + 1\n",
+                             hyd_tmp_counter, (long long)(h.lim - 1), V, (long long)incr);
+                    }
+                } else {
+                    EMIT("    if %s <= 2147483647 {\n", h.limexpr);
+                    EMIT("        if %s < %s {\n", V, h.limexpr);
+                    if (incr == 1) {
+                        EMIT("            let _hyd_cnt%d = %s - %s\n", hyd_tmp_counter, h.limexpr, V);
+                    } else {
+                        EMIT("            let _hyd_cnt%d = %s - 1 - %s / %lld + 1\n",
+                             hyd_tmp_counter, h.limexpr, V, (long long)incr);
+                    }
+                }
+                for (int m = 0; m < nacc; m++) {
+                    int64_t tot = acc_tot[m];
+                    if (tot == 0) continue;
+                    char op_c = tot >= 0 ? '+' : '-';
+                    int64_t mag = tot >= 0 ? tot : -tot;
+                    if (mag == 1) {
+                        EMIT("        let %s = %s %c _hyd_cnt%d\n",
+                             acc_dst[m], acc_dst[m], op_c, hyd_tmp_counter);
+                    } else {
+                        EMIT("        let _hyd_dlt%d = _hyd_cnt%d * %lld\n",
+                             hyd_tmp_counter, hyd_tmp_counter, (long long)mag);
+                        EMIT("        let %s = %s %c _hyd_dlt%d\n",
+                             acc_dst[m], acc_dst[m], op_c, hyd_tmp_counter);
+                    }
+                }
+                if (incr == 1) {
+                    if (h.has_lim)
+                        EMIT("        let %s = %lld\n", V, (long long)h.lim);
+                    else
+                        EMIT("        let %s = %s\n", V, h.limexpr);
+                } else {
+                    EMIT("        let _hyd_adv%d = _hyd_cnt%d * %lld\n",
+                         hyd_tmp_counter, hyd_tmp_counter, (long long)incr);
+                    EMIT("        let %s = %s + _hyd_adv%d\n", V, V, hyd_tmp_counter);
+                }
+                if (!h.has_lim) EMIT("        }\n");
+                EMIT("    }\n");
+                EMIT("}\n");
+                hyd_tmp_counter++;
+                EMIT("%s\n", trimmed);
+                for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
+                EMIT("}\n");
+                if (p2_dbg())
+                    fprintf(stderr, "[opt] O(1) closed-form induction solved: while %s < %s\n",
+                            h.var, h.has_lim ? "(lit)" : h.limexpr);
+                handled = 1;
+            }
+            if (!handled && all_acc && h.has_lim) {
                 if (h.lim >= HYD_SCALE) {
                     int64_t guard = (HYD_SCALE - 1) * incr;
                     if (h.lim > guard) {
@@ -8912,7 +9272,7 @@ static int p2_try_transform(int i, int j) {
                         if (main_lim <= HYD_INT32_MAX) lim_ok = 1;
                     }
                 }
-            } else if (all_acc) {
+            } else if (!handled && all_acc) {
                 int64_t guard = (HYD_SCALE - 1) * incr;
                 if (guard <= HYD_INT32_MAX) {
                     lim_ok = 1;
@@ -8920,8 +9280,7 @@ static int p2_try_transform(int i, int j) {
                              hyd_tmp_counter, h.limexpr, (long long)guard);
                 }
             }
-            /* verify overflow headroom for scaled constants */
-            if (lim_ok) {
+            if (!handled && lim_ok) {
                 for (int k = 0; k < b.nvalid; k++) {
                     int64_t cv = 0;
                     if (p2_match_incr(b.valid[k], V, &cv)) {
@@ -8936,7 +9295,7 @@ static int p2_try_transform(int i, int j) {
                     }
                 }
             }
-            if (lim_ok && p2_budget_ok(b.nvalid + 2 + (hoist[0] ? 1 : 0))) {
+            if (!handled && lim_ok && p2_budget_ok(b.nvalid + 2 + (hoist[0] ? 1 : 0))) {
                 if (hoist[0]) EMIT("%s", hoist);
                 if (h.has_lim)
                     EMIT("while %s < %lld {\n", h.var, (long long)main_lim);
@@ -8962,7 +9321,6 @@ static int p2_try_transform(int i, int j) {
                 }
                 EMIT("}\n");
                 hyd_tmp_counter++;
-                /* remainder: original loop, verbatim */
                 EMIT("%s\n", trimmed);
                 for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
                 EMIT("}\n");
@@ -8974,41 +9332,49 @@ static int p2_try_transform(int i, int j) {
         }
     }
 
-    /* ---------------- peel: invariant conditional accumulators (x64) ------ */
-    /* body shape: 'if V (>|>=) T {' / acc* / '}' / incr  (nothing else).
-     * False region [start,T] is peeled into a preamble; in the true region
-     * the guard is invariant so the accumulators scale by the block step.  */
+    /* ---------------- Turbine 6: O(1) invariant conditional accumulator solver ------ */
+    /* Body shape: optional unconditional accs + 'if V (>|>=) T {' / cond_acc+ / '}' + incr */
     if (!handled && p2_eliminate_enabled && b.nvalid >= 4) {
-        char ifvar[64], ttok[128];
-        int op_ge = 0;                                 /* 1 = '>=' else '>'  */
-        int is_if = 0;
-        {
-            const char *p = b.valid[0];
+        int if_idx = -1, close_idx = -1;
+        for (int k = 0; k < b.nvalid; k++) {
+            const char *p = b.valid[k];
             while (*p == ' ' || *p == '\t') p++;
             if (p2_starts(p, "if")) {
-                p += 2;
+                if (if_idx >= 0) { if_idx = -1; break; }
+                if_idx = k;
+            } else if (!strcmp(p, "}")) {
+                if (close_idx >= 0) { close_idx = -1; break; }
+                close_idx = k;
+            }
+        }
+        char ifvar[64] = "", ttok[128] = "";
+        int op_ge = 0;
+        int is_if = 0;
+        if (if_idx >= 0 && close_idx > if_idx + 1) {
+            const char *p = b.valid[if_idx];
+            while (*p == ' ' || *p == '\t') p++;
+            p += 2;
+            while (*p == ' ' || *p == '\t') p++;
+            const char *vs = p;
+            while (isalnum((unsigned char)*p) || *p == '_') p++;
+            size_t vl = (size_t)(p - vs);
+            if (vl && vl < sizeof ifvar) {
+                memcpy(ifvar, vs, vl);
+                ifvar[vl] = '\0';
                 while (*p == ' ' || *p == '\t') p++;
-                const char *vs = p;
-                while (isalnum((unsigned char)*p) || *p == '_') p++;
-                size_t vl = (size_t)(p - vs);
-                if (vl && vl < sizeof ifvar) {
-                    memcpy(ifvar, vs, vl);
-                    ifvar[vl] = '\0';
+                if (*p == '>' && !p2_has_token(p, "<<") && !p2_has_token(p, ">>")) {
+                    p++;
+                    if (*p == '=') { op_ge = 1; p++; }
                     while (*p == ' ' || *p == '\t') p++;
-                    if (*p == '>' && !p2_has_token(p, "<<") && !p2_has_token(p, ">>")) {
-                        p++;
-                        if (*p == '=') { op_ge = 1; p++; }
-                        while (*p == ' ' || *p == '\t') p++;
-                        if (isdigit((unsigned char)*p) || is_ident0((unsigned char)*p)) {
-                            const char *ts = p;
-                            while (isalnum((unsigned char)*p) || *p == '_') p++;
-                            size_t tl = (size_t)(p - ts);
-                            if (tl && tl < sizeof ttok) {
-                                memcpy(ttok, ts, tl);
-                                ttok[tl] = '\0';
-                                while (*p == ' ' || *p == '\t') p++;
-                                if (*p == '{') is_if = 1;
-                            }
+                    if (isdigit((unsigned char)*p) || is_ident0((unsigned char)*p)) {
+                        const char *ts = p;
+                        while (isalnum((unsigned char)*p) || *p == '_') p++;
+                        size_t tl = (size_t)(p - ts);
+                        if (tl && tl < sizeof ttok) {
+                            memcpy(ttok, ts, tl);
+                            ttok[tl] = '\0';
+                            while (*p == ' ' || *p == '\t') p++;
+                            if (*p == '{') is_if = 1;
                         }
                     }
                 }
@@ -9017,129 +9383,133 @@ static int p2_try_transform(int i, int j) {
         if (is_if && !strcmp(ifvar, h.var) && strcmp(ttok, h.var) != 0) {
             int64_t incr = 0;
             int nincr = 0;
-            for (int k = 0; k < b.nvalid; k++) {
+            char uacc_dst[32][128], cacc_dst[32][128];
+            int64_t uacc_tot[32], cacc_tot[32];
+            int nuacc = 0, ncacc = 0;
+            int ok = 1;
+            for (int k = 0; ok && k < b.nvalid; k++) {
+                if (k == if_idx || k == close_idx) continue;
                 int64_t cv = 0;
-                if (p2_match_incr(b.valid[k], h.var, &cv)) { nincr++; incr = cv; }
+                if (p2_match_incr(b.valid[k], h.var, &cv)) {
+                    if (k > if_idx && k < close_idx) { ok = 0; break; }
+                    nincr++;
+                    incr = cv;
+                    continue;
+                }
+                char dd[128];
+                int64_t tot = 0;
+                if (!p2_match_acc(b.valid[k], h.var, dd, sizeof dd, &tot)) {
+                    ok = 0;
+                    break;
+                }
+                if (k > if_idx && k < close_idx) {
+                    int fnd = -1;
+                    for (int m = 0; m < ncacc; m++) if (!strcmp(cacc_dst[m], dd)) { fnd = m; break; }
+                    if (fnd >= 0) cacc_tot[fnd] += tot;
+                    else if (ncacc < 32) { snprintf(cacc_dst[ncacc], sizeof cacc_dst[0], "%s", dd); cacc_tot[ncacc++] = tot; }
+                    else ok = 0;
+                } else {
+                    int fnd = -1;
+                    for (int m = 0; m < nuacc; m++) if (!strcmp(uacc_dst[m], dd)) { fnd = m; break; }
+                    if (fnd >= 0) uacc_tot[fnd] += tot;
+                    else if (nuacc < 32) { snprintf(uacc_dst[nuacc], sizeof uacc_dst[0], "%s", dd); uacc_tot[nuacc++] = tot; }
+                    else ok = 0;
+                }
             }
-            /* structure: [if, acc+, }, incr] */
-            int ok = (nincr == 1) &&
-                     strcmp(b.valid[b.nvalid - 2], "}") == 0;
+            if (nincr != 1 || ncacc < 1) ok = 0;
             int64_t tval = 0;
             int t_is_lit = isdigit((unsigned char)ttok[0]);
             if (t_is_lit) tval = strtoll(ttok, NULL, 10);
-            /* literal-threshold safety: skip when the true region is empty */
             if (ok && h.has_lim && t_is_lit && !(tval + 1 < h.lim)) ok = 0;
-            /* threshold/limit vars must be untouched by the body */
-            if (ok && !t_is_lit) {
+            if (ok) {
                 for (int k = 0; k < b.nvalid; k++) {
                     char dd[128];
                     const char *rr = NULL;
-                    if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr) &&
-                        (!strcmp(dd, ttok) ||
-                         (!h.has_lim && !strcmp(dd, h.limexpr)))) {
-                        ok = 0;
-                        break;
+                    if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr)) {
+                        if (!t_is_lit && !strcmp(dd, ttok)) { ok = 0; break; }
+                        if (!h.has_lim && !strcmp(dd, h.limexpr)) { ok = 0; break; }
                     }
                 }
             }
-            if (ok && h.has_lim) {
-                for (int k = 0; k < b.nvalid; k++) {   /* limit untouched    */
-                    char dd[128];
-                    const char *rr = NULL;
-                    if (p2_parse_let(b.valid[k], dd, sizeof dd, &rr) &&
-                        !strcmp(dd, h.limexpr)) {
-                        ok = 0;
-                        break;
-                    }
+            int lim_simple = h.has_lim;
+            if (!h.has_lim) {
+                lim_simple = 1;
+                for (const char *q = h.limexpr; *q; q++) {
+                    if (!is_ident1((unsigned char)*q)) { lim_simple = 0; break; }
                 }
             }
-            /* middle lines must all be accumulators that never read V */
-            int64_t acc_tot[32];
-            char acc_dst[32][128];
-            int nacc = 0;
-            if (ok) {
-                for (int k = 1; ok && k < b.nvalid - 2; k++) {
-                    if (!p2_match_acc(b.valid[k], h.var, acc_dst[nacc],
-                                      sizeof acc_dst[0], &acc_tot[nacc])) {
-                        ok = 0;
-                        break;
-                    }
-                    nacc++;
-                }
-                if (nacc < 1) ok = 0;
+            int closed_peel_ok = ok && (incr == 1) && lim_simple && (!h.has_lim || h.lim <= HYD_INT32_MAX);
+            for (int m = 0; closed_peel_ok && m < nuacc; m++) {
+                int64_t mag = uacc_tot[m] < 0 ? -uacc_tot[m] : uacc_tot[m];
+                if (mag > 1000000000LL) closed_peel_ok = 0;
             }
-            /* overflow headroom */
-            int step = 64;
-            if (ok) {
-                if (incr > HYD_INT32_MAX / step) ok = 0;
-                for (int k = 0; ok && k < nacc; k++) {
-                    int64_t mag = acc_tot[k] < 0 ? -acc_tot[k] : acc_tot[k];
-                    if (mag > HYD_INT32_MAX / step) ok = 0;
-                }
-                int64_t guard = (int64_t)(step - 1) * incr;
-                if (h.has_lim && h.lim <= guard) ok = 0;
-                if (!h.has_lim && guard > HYD_INT32_MAX) ok = 0;
+            for (int m = 0; closed_peel_ok && m < ncacc; m++) {
+                int64_t mag = cacc_tot[m] < 0 ? -cacc_tot[m] : cacc_tot[m];
+                if (mag > 1000000000LL) closed_peel_ok = 0;
             }
-            if (ok && p2_budget_ok(b.nvalid + 5)) {
-                int use_simple_pre = h.has_lim && t_is_lit;
-                /* textual limit for the guarded preamble (literal or variable) */
+            if (closed_peel_ok && p2_budget_ok(nuacc + ncacc + 16)) {
                 char limtext[192];
-                if (h.has_lim)
-                    snprintf(limtext, sizeof limtext, "%lld", (long long)h.lim);
-                else
-                    snprintf(limtext, sizeof limtext, "%s", h.limexpr);
-                if (use_simple_pre) {
-                    /* false region fits inside the loop: plain preamble */
-                    if (op_ge)
-                        EMIT("while %s < %lld {\n", h.var, (long long)tval);
-                    else
-                        EMIT("while %s <= %lld {\n", h.var, (long long)tval);
-                    EMIT("    let %s = %s + %lld\n", h.var, h.var, (long long)incr);
-                    EMIT("}\n");
+                if (h.has_lim) snprintf(limtext, sizeof limtext, "%lld", (long long)h.lim);
+                else snprintf(limtext, sizeof limtext, "%s", h.limexpr);
+
+                EMIT("if %s >= 0 {\n", h.var);
+                if (!h.has_lim) EMIT("    if %s <= 2147483647 {\n", limtext);
+                if (!t_is_lit) EMIT("    if %s >= 0 {\n", ttok);
+                EMIT("    if %s < %s {\n", h.var, limtext);
+                if (nuacc > 0) {
+                    EMIT("        let _hyd_ucnt%d = %s - %s\n", hyd_tmp_counter, limtext, h.var);
+                    for (int m = 0; m < nuacc; m++) {
+                        int64_t tot = uacc_tot[m];
+                        if (tot == 0) continue;
+                        char op_c = tot >= 0 ? '+' : '-';
+                        int64_t mag = tot >= 0 ? tot : -tot;
+                        if (mag == 1) {
+                            EMIT("        let %s = %s %c _hyd_ucnt%d\n", uacc_dst[m], uacc_dst[m], op_c, hyd_tmp_counter);
+                        } else {
+                            EMIT("        let _hyd_udlt%d = _hyd_ucnt%d * %lld\n", hyd_tmp_counter, hyd_tmp_counter, (long long)mag);
+                            EMIT("        let %s = %s %c _hyd_udlt%d\n", uacc_dst[m], uacc_dst[m], op_c, hyd_tmp_counter);
+                        }
+                    }
+                }
+                if (t_is_lit) {
+                    int64_t ft = op_ge ? tval : (tval + 1);
+                    EMIT("        if %s < %lld {\n", h.var, (long long)ft);
+                    EMIT("            let %s = %lld\n", h.var, (long long)ft);
+                    EMIT("        }\n");
                 } else {
-                    /* variable bound: guard the preamble with the loop limit */
-                    EMIT("while %s < %s {\n", h.var, limtext);
-                    if (op_ge)
-                        EMIT("    if %s >= %s {\n", h.var, ttok);
-                    else
-                        EMIT("    if %s > %s {\n", h.var, ttok);
-                    EMIT("        break\n");
-                    EMIT("    }\n");
-                    EMIT("    let %s = %s + %lld\n", h.var, h.var, (long long)incr);
-                    EMIT("}\n");
+                    if (op_ge) EMIT("        let _hyd_ft%d = %s\n", hyd_tmp_counter, ttok);
+                    else EMIT("        let _hyd_ft%d = %s + 1\n", hyd_tmp_counter, ttok);
+                    EMIT("        if %s < _hyd_ft%d {\n", h.var, hyd_tmp_counter);
+                    EMIT("            let %s = _hyd_ft%d\n", h.var, hyd_tmp_counter);
+                    EMIT("        }\n");
                 }
-                int64_t guard = (int64_t)(step - 1) * incr;
-                if (h.has_lim) {
-                    EMIT("while %s < %lld {\n", h.var,
-                         (long long)(h.lim - guard));
-                } else {
-                    EMIT("let _hyd_lim%d = %s - %lld\n", hyd_tmp_counter,
-                         h.limexpr, (long long)guard);
-                    EMIT("while %s < _hyd_lim%d {\n", h.var, hyd_tmp_counter);
+                EMIT("        if %s < %s {\n", h.var, limtext);
+                EMIT("            let _hyd_ccnt%d = %s - %s\n", hyd_tmp_counter, limtext, h.var);
+                for (int m = 0; m < ncacc; m++) {
+                    int64_t tot = cacc_tot[m];
+                    if (tot == 0) continue;
+                    char op_c = tot >= 0 ? '+' : '-';
+                    int64_t mag = tot >= 0 ? tot : -tot;
+                    if (mag == 1) {
+                        EMIT("            let %s = %s %c _hyd_ccnt%d\n", cacc_dst[m], cacc_dst[m], op_c, hyd_tmp_counter);
+                    } else {
+                        EMIT("            let _hyd_cdlt%d = _hyd_ccnt%d * %lld\n", hyd_tmp_counter, hyd_tmp_counter, (long long)mag);
+                        EMIT("            let %s = %s %c _hyd_cdlt%d\n", cacc_dst[m], cacc_dst[m], op_c, hyd_tmp_counter);
+                    }
                 }
-                for (int k = 0; k < nacc; k++) {
-                    int64_t mag = acc_tot[k] < 0 ? -acc_tot[k] : acc_tot[k];
-                    mag *= step;
-                    if (acc_tot[k] >= 0)
-                        EMIT("    let %s = %s + %lld\n", acc_dst[k], acc_dst[k],
-                             (long long)mag);
-                    else
-                        EMIT("    let %s = %s - %lld\n", acc_dst[k], acc_dst[k],
-                             (long long)mag);
-                }
-                EMIT("    let %s = %s + %lld\n", h.var, h.var,
-                     (long long)(incr * step));
+                EMIT("        }\n");
+                EMIT("        let %s = %s\n", h.var, limtext);
+                EMIT("    }\n");
+                if (!t_is_lit) EMIT("    }\n");
+                if (!h.has_lim) EMIT("    }\n");
                 EMIT("}\n");
                 hyd_tmp_counter++;
-                /* remainder: true region guaranteed, original statements */
                 EMIT("%s\n", trimmed);
-                for (int k = 1; k < b.nvalid - 2; k++)
-                    EMIT("    %s\n", b.valid[k]);
-                EMIT("    %s\n", b.valid[b.nvalid - 1]);
+                for (int k = 0; k < b.nlines; k++) EMIT("%s", b.lines[k]);
                 EMIT("}\n");
                 if (p2_dbg())
-                    fprintf(stderr, "[opt] invariant peel x%d: while %s < %s thr %s\n",
-                            step, h.var, h.has_lim ? "(lit)" : h.limexpr, ttok);
+                    fprintf(stderr, "[opt] O(1) closed-form conditional peel: while %s < %s thr %s\n",
+                            h.var, h.has_lim ? "(lit)" : h.limexpr, ttok);
                 handled = 1;
             }
         }
@@ -9451,7 +9821,22 @@ int main(int argc, char **argv) {
     FILE *dest_out = out_path ? fopen(out_path, "w") : stdout;
     if (!dest_out) die("Cannot write", out_path);
 
-    fprintf(dest_out, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 1048576\nlet _nx_sp = _nx_call_stack\nlet _nx_fp = _nx_call_stack\nlet _nx_cur_closure = 0\n");
+    if (!hydron_opt_enabled) {
+        fprintf(dest_out, "let _TRUE_ = 1\nlet _FALSE_ = 0\nlet _nx_call_stack = alloc 1048576\nlet _nx_sp = _nx_call_stack\nlet _nx_fp = _nx_call_stack\nlet _nx_cur_closure = 0\n");
+    } else {
+        int need_true = 0, need_false = 0, need_stack = (g_lambda_count > 0), need_closure = (g_lambda_count > 0);
+        for (int li = 0; li < P2n; li++) {
+            const char *ln = P2[li];
+            if (!need_true && strstr(ln, "_TRUE_")) need_true = 1;
+            if (!need_false && strstr(ln, "_FALSE_")) need_false = 1;
+            if (!need_stack && (strstr(ln, "_nx_sp") || strstr(ln, "_nx_fp") || strstr(ln, "_nx_call_stack"))) need_stack = 1;
+            if (!need_closure && strstr(ln, "_nx_cur_closure")) need_closure = 1;
+        }
+        if (need_true) fprintf(dest_out, "let _TRUE_ = 1\n");
+        if (need_false) fprintf(dest_out, "let _FALSE_ = 0\n");
+        if (need_stack) fprintf(dest_out, "let _nx_call_stack = alloc 1048576\nlet _nx_sp = _nx_call_stack\nlet _nx_fp = _nx_call_stack\n");
+        if (need_closure) fprintf(dest_out, "let _nx_cur_closure = 0\n");
+    }
     emit_lambdas_and_dispatchers(dest_out);
 
     for (int li = 0; li < P2n; li++) {

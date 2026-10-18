@@ -945,6 +945,36 @@ static int parse_expression(const char** pp, const char* dest_reg) {
             break;
         }
         char op = *p++;
+        const char* p_peek = skip_whitespace(p);
+        if (isdigit((unsigned char)*p_peek)) {
+            char* endp = NULL;
+            long long imm = strtoll(p_peek, &endp, 10);
+            if (endp && endp > p_peek) {
+                if ((op == '+' || op == '-') && imm >= 0 && imm <= 4095) {
+                    p = endp;
+                    if (imm > 0) {
+                        emit_inst("%s %s, %s, #%lld", op == '+' ? "add" : "sub", dest_reg, dest_reg, imm);
+                    }
+                    continue;
+                }
+                if (op == '*' && imm > 0 && (imm & (imm - 1)) == 0) {
+                    int sh = 0;
+                    long long tmp_i = imm;
+                    while (tmp_i > 1) { tmp_i >>= 1; sh++; }
+                    if (sh >= 1 && sh <= 62) {
+                        p = endp;
+                        emit_inst("lsl %s, %s, #%d", dest_reg, dest_reg, sh);
+                        continue;
+                    }
+                }
+                if (op == '/' && imm == 2) {
+                    p = endp;
+                    emit_inst("add x1, %s, %s, lsr #63", dest_reg, dest_reg);
+                    emit_inst("asr %s, x1, #1", dest_reg);
+                    continue;
+                }
+            }
+        }
         p = parse_term(p, "x1");
         switch (op) {
             case '+': emit_inst("add %s, %s, x1", dest_reg, dest_reg); break;

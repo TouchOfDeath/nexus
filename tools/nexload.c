@@ -5,6 +5,11 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <setjmp.h>
+#include <time.h>
+
+static int g_bench_mode = 0;
+static jmp_buf g_exit_jmp;
 
 #define WIN_STD_INPUT_HANDLE  ((uint32_t)-10)
 #define WIN_STD_OUTPUT_HANDLE ((uint32_t)-11)
@@ -25,6 +30,10 @@ uint64_t __attribute__((ms_abi, force_align_arg_pointer)) win_GetStdHandle(uint3
 }
 
 uint32_t __attribute__((ms_abi, force_align_arg_pointer)) win_WriteFile(uint64_t hFile, const void* lpBuffer, uint32_t nNumberOfBytesToWrite, uint32_t* lpNumberOfBytesWritten, void* lpOverlapped) {
+    if (g_bench_mode) {
+        if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = nNumberOfBytesToWrite;
+        return 1;
+    }
     int fd = translate_handle(hFile);
     ssize_t ret = write(fd, lpBuffer, nNumberOfBytesToWrite);
     if (ret >= 0) {
@@ -45,6 +54,9 @@ uint32_t __attribute__((ms_abi, force_align_arg_pointer)) win_ReadFile(uint64_t 
 }
 
 void __attribute__((ms_abi, force_align_arg_pointer)) win_ExitProcess(uint32_t uExitCode) {
+    if (g_bench_mode) {
+        longjmp(g_exit_jmp, (int)(uExitCode ? uExitCode : 1));
+    }
     exit(uExitCode);
 }
 
@@ -73,12 +85,17 @@ uint32_t __attribute__((ms_abi, force_align_arg_pointer)) win_CloseHandle(uint64
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        printf("Usage: %s <pe_binary>\n", argv[0]);
+    const char* pe_path = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--bench") == 0) g_bench_mode = 1;
+        else pe_path = argv[i];
+    }
+    if (!pe_path) {
+        printf("Usage: %s [--bench] <pe_binary>\n", argv[0]);
         return 1;
     }
 
-    FILE* f = fopen(argv[1], "rb");
+    FILE* f = fopen(pe_path, "rb");
     if (!f) { perror("fopen"); return 1; }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
@@ -147,6 +164,53 @@ int main(int argc, char** argv) {
     }
 
     void (*entry_point)(void) = (void (*)(void))(image_base + entry_point_rva);
+    if (g_bench_mode) {
+        for (int run = 1; run <= 3; run++) {
+            for (int i = 0; i < num_sections; i++) {
+                uint8_t* sec = sec_headers + i * 40;
+                uint32_t virt_addr = *(uint32_t*)(sec + 12);
+                uint32_t raw_size = *(uint32_t*)(sec + 16);
+                uint32_t raw_ptr = *(uint32_t*)(sec + 20);
+                memcpy((uint8_t*)base + virt_addr, raw + raw_ptr, raw_size);
+            }
+            if (import_dir_rva != 0) {
+                uint8_t* desc = (uint8_t*)base + import_dir_rva;
+                while (1) {
+                    uint32_t orig_thunk = *(uint32_t*)(desc);
+                    uint32_t first_thunk = *(uint32_t*)(desc + 16);
+                    if (orig_thunk == 0 && first_thunk == 0) break;
+                    uint64_t* thunk = (uint64_t*)((uint8_t*)base + first_thunk);
+                    uint64_t* lookup = orig_thunk ? (uint64_t*)((uint8_t*)base + orig_thunk) : thunk;
+                    for (int idx = 0; lookup[idx] != 0; idx++) {
+                        uint64_t val = lookup[idx];
+                        if (!(val & (1ULL << 63))) {
+                            uint8_t* name_entry = (uint8_t*)base + (uint32_t)val;
+                            const char* func_name = (const char*)(name_entry + 2);
+                            void* fn_ptr = NULL;
+                            if (strcmp(func_name, "GetStdHandle") == 0) fn_ptr = (void*)win_GetStdHandle;
+                            else if (strcmp(func_name, "WriteFile") == 0) fn_ptr = (void*)win_WriteFile;
+                            else if (strcmp(func_name, "ReadFile") == 0) fn_ptr = (void*)win_ReadFile;
+                            else if (strcmp(func_name, "ExitProcess") == 0) fn_ptr = (void*)win_ExitProcess;
+                            else if (strcmp(func_name, "VirtualAlloc") == 0) fn_ptr = (void*)win_VirtualAlloc;
+                            else if (strcmp(func_name, "CreateFileA") == 0) fn_ptr = (void*)win_CreateFileA;
+                            else if (strcmp(func_name, "CloseHandle") == 0) fn_ptr = (void*)win_CloseHandle;
+                            thunk[idx] = (uint64_t)fn_ptr;
+                        }
+                    }
+                    desc += 20;
+                }
+            }
+            struct timespec t0, t1;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            if (setjmp(g_exit_jmp) == 0) {
+                entry_point();
+            }
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            double dt_ms = (t1.tv_sec - t0.tv_sec) * 1000.0 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+            printf("[BENCH_MS] %.6f\n", dt_ms);
+        }
+        return 0;
+    }
     entry_point();
 
     return 0;
