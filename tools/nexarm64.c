@@ -536,6 +536,30 @@ static void emit_runtime_stubs(void) {
     emit_inst("ldp x29, x30, [sp], #32");
     emit_inst("ret");
 
+    /* 6b. _nx_print_raw: prints null-terminated string at x0 without newline */
+    emit_label("_nx_print_raw");
+    emit_inst("stp x29, x30, [sp, #-32]!");
+    emit_inst("mov x29, sp");
+    emit_inst("str x19, [sp, #16]");
+    emit_inst("str x20, [sp, #24]");
+    emit_inst("mov x19, x0");
+    emit_inst("bl _nx_strlen");
+    emit_inst("mov x20, x0");
+    emit_inst("mov x0, #1");
+    emit_inst("mov x1, x19");
+    emit_inst("mov x2, x20");
+    if (g_target == TARGET_MACOS_ARM64) {
+        emit_inst("mov x16, #4");
+        emit_inst("svc #0x80");
+    } else {
+        emit_inst("mov x8, #64");
+        emit_inst("svc #0");
+    }
+    emit_inst("ldr x20, [sp, #24]");
+    emit_inst("ldr x19, [sp, #16]");
+    emit_inst("ldp x29, x30, [sp], #32");
+    emit_inst("ret");
+
     /* 7. _nx_read_int: reads signed 64-bit integer from stdin into x0 */
     emit_label("_nx_read_int");
     emit_inst("stp x29, x30, [sp, #-48]!");
@@ -1735,6 +1759,53 @@ static void compile_line(const char* line) {
         int vslot = resolve_var(vname);
         emit_inst("bl _nx_read_int");
         emit_store_var("x0", vslot);
+        return;
+    }
+
+    /* 18a. print_raw <var> OR print_raw "..." */
+    if (strncmp(p, "print_raw ", 10) == 0 || strncmp(p, "print_raw\t", 10) == 0) {
+        p += 10;
+        p = skip_whitespace(p);
+        if (*p == '"') {
+            p++;
+            const char* start = p;
+            while (*p && *p != '"') {
+                if (*p == '\\' && p[1]) p += 2;
+                else p++;
+            }
+            int slen = (int)(p - start);
+            int sid = add_string(start, slen);
+            if (*p == '"') p++;
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "L_str_%d", sid);
+            if (g_target == TARGET_MACOS_ARM64) {
+                emit_inst("adrp x0, %s@PAGE", lbl);
+                emit_inst("add x0, x0, %s@PAGEOFF", lbl);
+            } else {
+                emit_inst("adrp x0, %s", lbl);
+                emit_inst("add x0, x0, :lo12:%s", lbl);
+            }
+        } else {
+            char vname[64];
+            p = read_ident(p, vname, sizeof(vname));
+            int vslot = resolve_var(vname);
+            emit_load_var("x0", vslot);
+        }
+        emit_inst("bl _nx_print_raw");
+        return;
+    }
+
+    /* 18b. exit <code_or_var> */
+    if (strncmp(p, "exit ", 5) == 0 || strncmp(p, "exit\t", 5) == 0) {
+        p += 5;
+        parse_expression(&p, "x0");
+        if (g_target == TARGET_MACOS_ARM64) {
+            emit_inst("mov x16, #1");
+            emit_inst("svc #0x80");
+        } else {
+            emit_inst("mov x8, #93");
+            emit_inst("svc #0");
+        }
         return;
     }
 

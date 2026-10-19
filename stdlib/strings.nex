@@ -1004,3 +1004,104 @@ fn nx_str_levenshtein {
         let nx_r0 = load64 [_lv_prev + _lv_m8]
     }
 }
+
+# ------------------------------------------------------------------------------
+# fn nx_str_slice : allocates a new null-terminated substring of nx_i0
+#                   from byte index nx_i1 (inclusive) to nx_i2 (exclusive).
+#                   Returns pointer in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_slice {
+    let _sl_src = nx_i0
+    let _sl_start = nx_i1
+    let _sl_end = nx_i2
+    if _sl_src == 0 {
+        let _sl_empty = alloc 8
+        store [_sl_empty + 0] 0
+        let nx_r0 = _sl_empty
+        return
+    }
+    let _sl_len = len _sl_src
+    if _sl_start < 0 {
+        let _sl_start = 0
+    }
+    if _sl_end > _sl_len {
+        let _sl_end = _sl_len
+    }
+    if _sl_end <= _sl_start {
+        let _sl_empty = alloc 8
+        store [_sl_empty + 0] 0
+        let nx_r0 = _sl_empty
+        return
+    }
+    let _sl_out_len = _sl_end - _sl_start
+    let _sl_cap = _sl_out_len + 1
+    let _sl_buf = alloc _sl_cap
+    let _sl_i = 0
+    while _sl_i < _sl_out_len {
+        let _sl_pos = _sl_start + _sl_i
+        let _sl_ch = load [_sl_src + _sl_pos]
+        store [_sl_buf + _sl_i] _sl_ch
+        let _sl_i = _sl_i + 1
+    }
+    store [_sl_buf + _sl_out_len] 0
+    let nx_r0 = _sl_buf
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_concat_new : allocates a new null-terminated string = nx_i0 + nx_i1
+#                        Returns pointer in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_concat_new {
+    let _scn_a = nx_i0
+    let _scn_b = nx_i1
+    let _scn_la = len _scn_a
+    let _scn_lb = len _scn_b
+    let _scn_tot = _scn_la + _scn_lb
+    let _scn_cap = _scn_tot + 1
+    let _scn_buf = alloc _scn_cap
+    let nx_i0 = _scn_a
+    let nx_i1 = _scn_b
+    let nx_i2 = _scn_buf
+    call nx_str_concat
+    let nx_r0 = _scn_buf
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_trim_new : allocates a new null-terminated trimmed copy of nx_i0
+#                      Returns pointer in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_trim_new {
+    let _stn_src = nx_i0
+    let _stn_len = len _stn_src
+    let _stn_cap = _stn_len + 1
+    let _stn_buf = alloc _stn_cap
+    let nx_i0 = _stn_src
+    let nx_i1 = _stn_buf
+    call nx_str_trim
+    let nx_r0 = _stn_buf
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_int_to_str_new : allocates a new decimal string for integer nx_i0
+#                        Returns pointer in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_int_to_str_new {
+    let _its_val = nx_i0
+    let _its_buf = alloc 32
+    let nx_i0 = _its_val
+    let nx_i1 = _its_buf
+    call nx_int_to_str
+    let nx_r0 = _its_buf
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_str_from_char : allocates a 1-character null-terminated string for byte nx_i0
+#                       Returns pointer in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_str_from_char {
+    let _sfc_c = nx_i0
+    let _sfc_buf = alloc 8
+    store [_sfc_buf + 0] _sfc_c
+    store [_sfc_buf + 1] 0
+    let nx_r0 = _sfc_buf
+}

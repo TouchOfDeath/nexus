@@ -559,7 +559,7 @@ fn resolve_var {
         let k = x
         call load_m
         if v == h {
-            let w = y * 8 + 48
+            let w = y * 8 + 56
             let y = n
         }
         let y = y + 1
@@ -575,7 +575,7 @@ fn resolve_var {
             let k = x
             let v = h
             call save_m
-            let w = n * 8 + 48
+            let w = n * 8 + 56
             let k = x + 8
             let v = w
             call save_m
@@ -1910,27 +1910,31 @@ while r == 1 {
                         }
                     }
 
-                    # --- CASE 3: 'file_open "filename"' ---
+                    # --- CASE 3: 'file_open "filename" | <var>' ---
                     if g == 3 {
                         let i = i + 9
                         call skip_ws
                         let c = load [s + i]
                         if c == 34 {
                             let i = i + 1
-                        }
-                        call parse_str_lit
-                        store [t + q] 0
-                        let q = q + 1
+                            call parse_str_lit
+                            store [t + q] 0
+                            let q = q + 1
 
-                        # lea rcx, [rip + disp32] (48 8D 0D <disp32>)
-                        let b = 72
-                        call emit_b
-                        let b = 141
-                        call emit_b
-                        let b = 13
-                        call emit_b
-                        let v = x - p + 508
-                        call emit_d
+                            # lea rcx, [rip + disp32] (48 8D 0D <disp32>)
+                            let b = 72
+                            call emit_b
+                            let b = 141
+                            call emit_b
+                            let b = 13
+                            call emit_b
+                            let v = x - p + 508
+                            call emit_d
+                        } else {
+                            call parse_ident
+                            call resolve_var
+                            call ld_rcx
+                        }
 
                         # mov edx, 0x80000000 (BA 00 00 00 80)
                         let b = 186
@@ -2011,27 +2015,31 @@ while r == 1 {
                         call emit_d
                     }
 
-                    # --- CASE 4: 'file_create "filename"' ---
+                    # --- CASE 4: 'file_create "filename" | <var>' ---
                     if g == 4 {
                         let i = i + 11
                         call skip_ws
                         let c = load [s + i]
                         if c == 34 {
                             let i = i + 1
-                        }
-                        call parse_str_lit
-                        store [t + q] 0
-                        let q = q + 1
+                            call parse_str_lit
+                            store [t + q] 0
+                            let q = q + 1
 
-                        # lea rcx, [rip + disp32] (48 8D 0D <disp32>)
-                        let b = 72
-                        call emit_b
-                        let b = 141
-                        call emit_b
-                        let b = 13
-                        call emit_b
-                        let v = x - p + 508
-                        call emit_d
+                            # lea rcx, [rip + disp32] (48 8D 0D <disp32>)
+                            let b = 72
+                            call emit_b
+                            let b = 141
+                            call emit_b
+                            let b = 13
+                            call emit_b
+                            let v = x - p + 508
+                            call emit_d
+                        } else {
+                            call parse_ident
+                            call resolve_var
+                            call ld_rcx
+                        }
 
                         # mov edx, 0x40000000 (BA 00 00 00 40)
                         let b = 186
@@ -2252,7 +2260,7 @@ while r == 1 {
                             # mov rdx, [rbp + a] (48 8B 95 <a32>)
                             call ld_rdx
                         }
-                        call skip_ws
+                        call skip_sp
                         let c = load [s + i]
                         if c == 41 {
                             let i = i + 1
@@ -2333,7 +2341,7 @@ while r == 1 {
                                 call ld_rax
                             }
                         }
-                        call skip_ws
+                        call skip_sp
                         let c = load [s + i]
                         if c == 41 {
                             let i = i + 1
@@ -3245,6 +3253,9 @@ while r == 1 {
                                 if n == 115 {
                                     let f = 1
                                 }
+                                if n == 114 {
+                                    let f = 2
+                                }
                                 if n == 102 {
                                     let is_pfloat = 1
                                 }
@@ -3258,7 +3269,7 @@ while r == 1 {
                                 let v = 43324 - p
                                 call emit_d
                             } else {
-                                if f == 1 {
+                                if f >= 1 {
                                     let i = i + 9
                                 } else {
                                     let i = i + 5
@@ -3270,11 +3281,13 @@ while r == 1 {
                             if c == 34 {
                                 let i = i + 1
                                 call parse_str_lit
-                                # Append CRLF and null terminator: 13, 10, 0
-                                store [t + q] 13
-                                let q = q + 1
-                                store [t + q] 10
-                                let q = q + 1
+                                # Append CRLF (unless print_raw) and null terminator
+                                if f != 2 {
+                                    store [t + q] 13
+                                    let q = q + 1
+                                    store [t + q] 10
+                                    let q = q + 1
+                                }
                                 store [t + q] 0
                                 let q = q + 1
                                 let n = q - x - 1
@@ -3300,8 +3313,8 @@ while r == 1 {
 
                                 call emit_wf
                             } else {
-                                if f == 1 {
-                                    # Print String Variable: print_str <var>
+                                if f >= 1 {
+                                    # Print String Variable: print_str / print_raw <var>
                                     call parse_ident
                                     call resolve_var
                                     call ld_rdx
@@ -3349,45 +3362,47 @@ while r == 1 {
                                     # .done:
                                     call emit_wf
 
-                                    # mov dword ptr [rsp + 0x30], 0x00000A0D (C7 44 24 30 0D 0A 00 00)
-                                    let b = 199
-                                    call emit_b
-                                    let b = 68
-                                    call emit_b
-                                    let b = 36
-                                    call emit_b
-                                    let b = 48
-                                    call emit_b
-                                    let b = 13
-                                    call emit_b
-                                    let b = 10
-                                    call emit_b
-                                    let b = 0
-                                    call emit_b
-                                    let b = 0
-                                    call emit_b
+                                    if f == 1 {
+                                        # mov dword ptr [rsp + 0x30], 0x00000A0D (C7 44 24 30 0D 0A 00 00)
+                                        let b = 199
+                                        call emit_b
+                                        let b = 68
+                                        call emit_b
+                                        let b = 36
+                                        call emit_b
+                                        let b = 48
+                                        call emit_b
+                                        let b = 13
+                                        call emit_b
+                                        let b = 10
+                                        call emit_b
+                                        let b = 0
+                                        call emit_b
+                                        let b = 0
+                                        call emit_b
 
-                                    # lea rdx, [rsp + 0x30] (48 8D 54 24 30)
-                                    let b = 72
-                                    call emit_b
-                                    let b = 141
-                                    call emit_b
-                                    let b = 84
-                                    call emit_b
-                                    let b = 36
-                                    call emit_b
-                                    let b = 48
-                                    call emit_b
+                                        # lea rdx, [rsp + 0x30] (48 8D 54 24 30)
+                                        let b = 72
+                                        call emit_b
+                                        let b = 141
+                                        call emit_b
+                                        let b = 84
+                                        call emit_b
+                                        let b = 36
+                                        call emit_b
+                                        let b = 48
+                                        call emit_b
 
-                                    # mov r8d, 2 (41 B8 02 00 00 00)
-                                    let b = 65
-                                    call emit_b
-                                    let b = 184
-                                    call emit_b
-                                    let v = 2
-                                    call emit_d
+                                        # mov r8d, 2 (41 B8 02 00 00 00)
+                                        let b = 65
+                                        call emit_b
+                                        let b = 184
+                                        call emit_b
+                                        let v = 2
+                                        call emit_d
 
-                                    call emit_wf
+                                        call emit_wf
+                                    }
                                 } else {
                                     # 2. Print integer (uint, negative int, or variable)
                                     let n = 0
@@ -4047,6 +4062,49 @@ while r == 1 {
                     } else {
                         let chain_base = 52000
                         call chain_jump
+                    }
+                }
+            }
+        }
+
+        # ----------------------------------------------------------------------
+        # PARSE 'exit <code_or_var>'
+        # ----------------------------------------------------------------------
+        if c == 101 {
+            let k = i + 1
+            let n = load [s + k]
+            if n == 120 {
+                let k = i + 2
+                let n = load [s + k]
+                if n == 105 {
+                    let k = i + 3
+                    let n = load [s + k]
+                    if n == 116 {
+                        store [m + 1032] 1
+                        let i = i + 4
+                        call skip_ws
+                        let c = load [s + i]
+                        if c <= 57 {
+                            call parse_uint
+                            let b = 72
+                            call emit_b
+                            let b = 199
+                            call emit_b
+                            let b = 193
+                            call emit_b
+                            let v = u
+                            call emit_d
+                        } else {
+                            call parse_ident
+                            call resolve_var
+                            call ld_rcx
+                        }
+                        let b = 255
+                        call emit_b
+                        let b = 21
+                        call emit_b
+                        let v = 45620 - p
+                        call emit_d
                     }
                 }
             }

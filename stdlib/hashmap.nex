@@ -1,53 +1,218 @@
 # ==============================================================================
 #                 NEXUS STANDARD LIBRARY - MODULE: hashmap.nex
-#       Associative Hash Map (HashMap<K, V>) for integer keys/values
+#    Associative Hash Map (HashMap<K, V>) for integer & string keys/values
 # ==============================================================================
 #
-# A HashMap is a heap-allocated, open-addressing hash table that maps 64-bit
-# integer keys to 64-bit integer values. It uses linear probing for collision
-# resolution.
+# A HashMap is a heap-allocated, open-addressing hash table with automatic
+# capacity doubling (rehash at 50% load factor) and tombstone support for O(1)
+# removal. Supports both 64-bit integer keys (including key 0) and
+# null-terminated string keys (compared by content).
 #
-# Memory Layout (stored in a 32-byte struct on the heap):
-#   offset 0:  keys_ptr    - pointer to the key array
-#   offset 8:  vals_ptr    - pointer to the value array
-#   offset 16: count        - number of entries stored
-#   offset 24: capacity     - number of slots in keys/vals arrays
+# Memory Layout (stored in a 40-byte descriptor struct on the heap):
+#   offset 0:  keys_ptr    - pointer to the key array (8 bytes per slot)
+#   offset 8:  vals_ptr    - pointer to the value array (8 bytes per slot)
+#   offset 16: count       - number of live entries stored
+#   offset 24: capacity    - number of slots in keys/vals/state arrays
+#   offset 32: state_ptr   - pointer to per-slot state array (1 byte per slot)
 #
-# Empty slots have key = 0. Key 0 is valid but treated as "empty" sentinel.
-#
-# IMPORTANT: Functions that call other stdlib functions must use non-scratch
-# variables (not s0..s7) for data that must persist across the call.
-# We use _hm_* prefixed variables for this purpose.
+# Per-slot state byte:
+#   0 = empty       (slot never used / cleared)
+#   1 = int key     (keys_ptr[slot] is a 64-bit integer key)
+#   2 = string key  (keys_ptr[slot] is a null-terminated string pointer)
+#   3 = tombstone   (removed entry; probing continues past it)
+# ==============================================================================
 
 # ------------------------------------------------------------------------------
-# fn nx_hash_int : nx_r0 = hash of nx_i0 (always >= 0)
+# fn nx_hash_int : nx_r0 = hash of integer key nx_i0 (always >= 0)
 # ------------------------------------------------------------------------------
 fn nx_hash_int {
     let s0 = nx_i0
-    let s0 = s0 + 2654435761
+    let s0 = s0 * 2654435761
+    let s0 = s0 + 97
     if s0 < 0 {
         let s0 = 0 - s0
     }
+    if s0 < 0 {
+        let s0 = 0
+    }
     let nx_r0 = s0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hash_str : nx_r0 = djb2 hash of null-terminated string nx_i0 (always >= 0)
+# ------------------------------------------------------------------------------
+fn nx_hash_str {
+    let _hms_p = nx_i0
+    let nx_r0 = 5381
+    if _hms_p == 0 {
+        return
+    }
+    let _hms_i = 0
+    let _hms_c = load [_hms_p + 0]
+    while _hms_c != 0 {
+        let _hms_t = nx_r0 * 33
+        let nx_r0 = _hms_t + _hms_c
+        let _hms_i = _hms_i + 1
+        let _hms_c = load [_hms_p + _hms_i]
+    }
+    if nx_r0 < 0 {
+        let nx_r0 = 0 - nx_r0
+    }
+    if nx_r0 < 0 {
+        let nx_r0 = 0
+    }
 }
 
 # ------------------------------------------------------------------------------
 # fn nx_hashmap_new : allocates a new HashMap with initial capacity 16
 # ------------------------------------------------------------------------------
 fn nx_hashmap_new {
-    let s0 = alloc 32
-    let s1 = alloc 128
-    let s2 = alloc 128
-    store64 [s0 + 0] s1
-    store64 [s0 + 8] s2
-    store64 [s0 + 16] 0
-    store64 [s0 + 24] 16
-    let nx_r0 = s0
+    let _hmn_desc = alloc 40
+    let _hmn_kp = alloc 128
+    let _hmn_vp = alloc 128
+    let _hmn_sp = alloc 16
+    store64 [_hmn_desc + 0] _hmn_kp
+    store64 [_hmn_desc + 8] _hmn_vp
+    store64 [_hmn_desc + 16] 0
+    store64 [_hmn_desc + 24] 16
+    store64 [_hmn_desc + 32] _hmn_sp
+    let nx_r0 = _hmn_desc
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_hashmap_get : nx_r0 = value for key nx_i1 in map nx_i0
-#   Returns 0 if key not found
+# fn nx_hashmap_grow : doubles capacity of map nx_i0 and rehashes all live entries
+# ------------------------------------------------------------------------------
+fn nx_hashmap_grow {
+    let _hmg_map = nx_i0
+    let _hmg_cap = load64 [_hmg_map + 24]
+    let _hmg_new = _hmg_cap * 2
+    let _hmg_kp = load64 [_hmg_map + 0]
+    let _hmg_vp = load64 [_hmg_map + 8]
+    let _hmg_sp = load64 [_hmg_map + 32]
+    let _hmg_bytes = _hmg_new * 8
+    let _hmg_nkp = alloc _hmg_bytes
+    let _hmg_nvp = alloc _hmg_bytes
+    let _hmg_nsp = alloc _hmg_new
+
+    let _hmg_i = 0
+    while _hmg_i < _hmg_cap {
+        let _hmg_st = load [_hmg_sp + _hmg_i]
+        if _hmg_st == 1 {
+            let _hmg_k = load64 [_hmg_kp + _hmg_i * 8]
+            let _hmg_v = load64 [_hmg_vp + _hmg_i * 8]
+            let nx_i0 = _hmg_k
+            call nx_hash_int
+            let _hmg_slot = nx_r0 % _hmg_new
+            let _hmg_tst = load [_hmg_nsp + _hmg_slot]
+            while _hmg_tst != 0 {
+                let _hmg_slot = _hmg_slot + 1
+                if _hmg_slot >= _hmg_new {
+                    let _hmg_slot = 0
+                }
+                let _hmg_tst = load [_hmg_nsp + _hmg_slot]
+            }
+            store64 [_hmg_nkp + _hmg_slot * 8] _hmg_k
+            store64 [_hmg_nvp + _hmg_slot * 8] _hmg_v
+            store [_hmg_nsp + _hmg_slot] 1
+        }
+        if _hmg_st == 2 {
+            let _hmg_k = load64 [_hmg_kp + _hmg_i * 8]
+            let _hmg_v = load64 [_hmg_vp + _hmg_i * 8]
+            let nx_i0 = _hmg_k
+            call nx_hash_str
+            let _hmg_slot = nx_r0 % _hmg_new
+            let _hmg_tst = load [_hmg_nsp + _hmg_slot]
+            while _hmg_tst != 0 {
+                let _hmg_slot = _hmg_slot + 1
+                if _hmg_slot >= _hmg_new {
+                    let _hmg_slot = 0
+                }
+                let _hmg_tst = load [_hmg_nsp + _hmg_slot]
+            }
+            store64 [_hmg_nkp + _hmg_slot * 8] _hmg_k
+            store64 [_hmg_nvp + _hmg_slot * 8] _hmg_v
+            store [_hmg_nsp + _hmg_slot] 2
+        }
+        let _hmg_i = _hmg_i + 1
+    }
+
+    store64 [_hmg_map + 0] _hmg_nkp
+    store64 [_hmg_map + 8] _hmg_nvp
+    store64 [_hmg_map + 24] _hmg_new
+    store64 [_hmg_map + 32] _hmg_nsp
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_put : set integer key nx_i1 to value nx_i2 in map nx_i0
+# ------------------------------------------------------------------------------
+fn nx_hashmap_put {
+    let _hm_map = nx_i0
+    let _hm_key = nx_i1
+    let _hm_val = nx_i2
+    let _hm_cnt = load64 [_hm_map + 16]
+    let _hm_cap = load64 [_hm_map + 24]
+    let _hm_need = _hm_cnt + 1
+    let _hm_need = _hm_need * 2
+    if _hm_need >= _hm_cap {
+        let nx_i0 = _hm_map
+        call nx_hashmap_grow
+        let _hm_cap = load64 [_hm_map + 24]
+    }
+    let nx_i0 = _hm_key
+    call nx_hash_int
+    let _hm_slot = nx_r0 % _hm_cap
+    let _hm_probe = 0
+    let _hm_kp = load64 [_hm_map + 0]
+    let _hm_vp = load64 [_hm_map + 8]
+    let _hm_sp = load64 [_hm_map + 32]
+    let _hm_tomb = 0 - 1
+    while _hm_probe < _hm_cap {
+        let _hm_st = load [_hm_sp + _hm_slot]
+        if _hm_st == 0 {
+            if _hm_tomb >= 0 {
+                let _hm_slot = _hm_tomb
+            }
+            store64 [_hm_kp + _hm_slot * 8] _hm_key
+            store64 [_hm_vp + _hm_slot * 8] _hm_val
+            store [_hm_sp + _hm_slot] 1
+            let _hm_c2 = load64 [_hm_map + 16]
+            let _hm_c2 = _hm_c2 + 1
+            store64 [_hm_map + 16] _hm_c2
+            let nx_r0 = 1
+            return
+        }
+        if _hm_st == 3 {
+            if _hm_tomb < 0 {
+                let _hm_tomb = _hm_slot
+            }
+        }
+        if _hm_st == 1 {
+            let _hm_k = load64 [_hm_kp + _hm_slot * 8]
+            if _hm_k == _hm_key {
+                store64 [_hm_vp + _hm_slot * 8] _hm_val
+                let nx_r0 = 0
+                return
+            }
+        }
+        let _hm_slot = _hm_slot + 1
+        if _hm_slot >= _hm_cap {
+            let _hm_slot = 0
+        }
+        let _hm_probe = _hm_probe + 1
+    }
+    if _hm_tomb >= 0 {
+        store64 [_hm_kp + _hm_tomb * 8] _hm_key
+        store64 [_hm_vp + _hm_tomb * 8] _hm_val
+        store [_hm_sp + _hm_tomb] 1
+        let _hm_c2 = load64 [_hm_map + 16]
+        let _hm_c2 = _hm_c2 + 1
+        store64 [_hm_map + 16] _hm_c2
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_get : nx_r0 = value for integer key nx_i1 in map nx_i0 (0 if missing)
 # ------------------------------------------------------------------------------
 fn nx_hashmap_get {
     let _hm_map = nx_i0
@@ -55,20 +220,23 @@ fn nx_hashmap_get {
     let _hm_cap = load64 [_hm_map + 24]
     let nx_i0 = _hm_key
     call nx_hash_int
-    let _hm_slot = nx_r0
-    let _hm_slot = _hm_slot % _hm_cap
+    let _hm_slot = nx_r0 % _hm_cap
     let _hm_probe = 0
     let nx_r0 = 0
     let _hm_kp = load64 [_hm_map + 0]
     let _hm_vp = load64 [_hm_map + 8]
+    let _hm_sp = load64 [_hm_map + 32]
     while _hm_probe < _hm_cap {
-        let s0 = load64 [_hm_kp + _hm_slot * 8]
-        if s0 == _hm_key {
-            let nx_r0 = load64 [_hm_vp + _hm_slot * 8]
-            let _hm_probe = _hm_cap
+        let _hm_st = load [_hm_sp + _hm_slot]
+        if _hm_st == 0 {
+            return
         }
-        if s0 == 0 {
-            let _hm_probe = _hm_cap
+        if _hm_st == 1 {
+            let _hm_k = load64 [_hm_kp + _hm_slot * 8]
+            if _hm_k == _hm_key {
+                let nx_r0 = load64 [_hm_vp + _hm_slot * 8]
+                return
+            }
         }
         let _hm_slot = _hm_slot + 1
         if _hm_slot >= _hm_cap {
@@ -79,44 +247,7 @@ fn nx_hashmap_get {
 }
 
 # ------------------------------------------------------------------------------
-# fn nx_hashmap_put : set key nx_i1 to value nx_i2 in map nx_i0
-# ------------------------------------------------------------------------------
-fn nx_hashmap_put {
-    let _hm_map = nx_i0
-    let _hm_key = nx_i1
-    let _hm_val = nx_i2
-    let _hm_cap = load64 [_hm_map + 24]
-    let nx_i0 = _hm_key
-    call nx_hash_int
-    let _hm_slot = nx_r0
-    let _hm_slot = _hm_slot % _hm_cap
-    let _hm_probe = 0
-    let _hm_kp = load64 [_hm_map + 0]
-    let _hm_vp = load64 [_hm_map + 8]
-    while _hm_probe < _hm_cap {
-        let s0 = load64 [_hm_kp + _hm_slot * 8]
-        if s0 == _hm_key {
-            store64 [_hm_vp + _hm_slot * 8] _hm_val
-            let _hm_probe = _hm_cap
-        }
-        if s0 == 0 {
-            store64 [_hm_kp + _hm_slot * 8] _hm_key
-            store64 [_hm_vp + _hm_slot * 8] _hm_val
-            let s1 = load64 [_hm_map + 16]
-            let s1 = s1 + 1
-            store64 [_hm_map + 16] s1
-            let _hm_probe = _hm_cap
-        }
-        let _hm_slot = _hm_slot + 1
-        if _hm_slot >= _hm_cap {
-            let _hm_slot = 0
-        }
-        let _hm_probe = _hm_probe + 1
-    }
-}
-
-# ------------------------------------------------------------------------------
-# fn nx_hashmap_contains : nx_r0 = 1 if key exists, else 0
+# fn nx_hashmap_contains : nx_r0 = 1 if integer key nx_i1 exists in map nx_i0, else 0
 # ------------------------------------------------------------------------------
 fn nx_hashmap_contains {
     let _hm_map = nx_i0
@@ -124,19 +255,22 @@ fn nx_hashmap_contains {
     let _hm_cap = load64 [_hm_map + 24]
     let nx_i0 = _hm_key
     call nx_hash_int
-    let _hm_slot = nx_r0
-    let _hm_slot = _hm_slot % _hm_cap
+    let _hm_slot = nx_r0 % _hm_cap
     let _hm_probe = 0
     let nx_r0 = 0
     let _hm_kp = load64 [_hm_map + 0]
+    let _hm_sp = load64 [_hm_map + 32]
     while _hm_probe < _hm_cap {
-        let s0 = load64 [_hm_kp + _hm_slot * 8]
-        if s0 == _hm_key {
-            let nx_r0 = 1
-            let _hm_probe = _hm_cap
+        let _hm_st = load [_hm_sp + _hm_slot]
+        if _hm_st == 0 {
+            return
         }
-        if s0 == 0 {
-            let _hm_probe = _hm_cap
+        if _hm_st == 1 {
+            let _hm_k = load64 [_hm_kp + _hm_slot * 8]
+            if _hm_k == _hm_key {
+                let nx_r0 = 1
+                return
+            }
         }
         let _hm_slot = _hm_slot + 1
         if _hm_slot >= _hm_cap {
@@ -144,6 +278,236 @@ fn nx_hashmap_contains {
         }
         let _hm_probe = _hm_probe + 1
     }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_remove : removes integer key nx_i1 from map nx_i0
+#   nx_r0 = 1 if key was found and removed, 0 otherwise
+# ------------------------------------------------------------------------------
+fn nx_hashmap_remove {
+    let _hm_map = nx_i0
+    let _hm_key = nx_i1
+    let _hm_cap = load64 [_hm_map + 24]
+    let nx_i0 = _hm_key
+    call nx_hash_int
+    let _hm_slot = nx_r0 % _hm_cap
+    let _hm_probe = 0
+    let nx_r0 = 0
+    let _hm_kp = load64 [_hm_map + 0]
+    let _hm_sp = load64 [_hm_map + 32]
+    while _hm_probe < _hm_cap {
+        let _hm_st = load [_hm_sp + _hm_slot]
+        if _hm_st == 0 {
+            return
+        }
+        if _hm_st == 1 {
+            let _hm_k = load64 [_hm_kp + _hm_slot * 8]
+            if _hm_k == _hm_key {
+                store [_hm_sp + _hm_slot] 3
+                let _hm_c2 = load64 [_hm_map + 16]
+                let _hm_c2 = _hm_c2 - 1
+                store64 [_hm_map + 16] _hm_c2
+                let nx_r0 = 1
+                return
+            }
+        }
+        let _hm_slot = _hm_slot + 1
+        if _hm_slot >= _hm_cap {
+            let _hm_slot = 0
+        }
+        let _hm_probe = _hm_probe + 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_put_str : set string key nx_i1 to value nx_i2 in map nx_i0
+# ------------------------------------------------------------------------------
+fn nx_hashmap_put_str {
+    let _hms_map = nx_i0
+    let _hms_key = nx_i1
+    let _hms_val = nx_i2
+    let _hms_cnt = load64 [_hms_map + 16]
+    let _hms_cap = load64 [_hms_map + 24]
+    let _hms_need = _hms_cnt + 1
+    let _hms_need = _hms_need * 2
+    if _hms_need >= _hms_cap {
+        let nx_i0 = _hms_map
+        call nx_hashmap_grow
+        let _hms_cap = load64 [_hms_map + 24]
+    }
+    let nx_i0 = _hms_key
+    call nx_hash_str
+    let _hms_slot = nx_r0 % _hms_cap
+    let _hms_probe = 0
+    let _hms_kp = load64 [_hms_map + 0]
+    let _hms_vp = load64 [_hms_map + 8]
+    let _hms_sp = load64 [_hms_map + 32]
+    let _hms_tomb = 0 - 1
+    while _hms_probe < _hms_cap {
+        let _hms_st = load [_hms_sp + _hms_slot]
+        if _hms_st == 0 {
+            if _hms_tomb >= 0 {
+                let _hms_slot = _hms_tomb
+            }
+            store64 [_hms_kp + _hms_slot * 8] _hms_key
+            store64 [_hms_vp + _hms_slot * 8] _hms_val
+            store [_hms_sp + _hms_slot] 2
+            let _hms_c2 = load64 [_hms_map + 16]
+            let _hms_c2 = _hms_c2 + 1
+            store64 [_hms_map + 16] _hms_c2
+            let nx_r0 = 1
+            return
+        }
+        if _hms_st == 3 {
+            if _hms_tomb < 0 {
+                let _hms_tomb = _hms_slot
+            }
+        }
+        if _hms_st == 2 {
+            let _hms_k = load64 [_hms_kp + _hms_slot * 8]
+            let nx_i0 = _hms_k
+            let nx_i1 = _hms_key
+            call nx_str_cmp
+            if nx_r0 == 0 {
+                store64 [_hms_vp + _hms_slot * 8] _hms_val
+                let nx_r0 = 0
+                return
+            }
+        }
+        let _hms_slot = _hms_slot + 1
+        if _hms_slot >= _hms_cap {
+            let _hms_slot = 0
+        }
+        let _hms_probe = _hms_probe + 1
+    }
+    if _hms_tomb >= 0 {
+        store64 [_hms_kp + _hms_tomb * 8] _hms_key
+        store64 [_hms_vp + _hms_tomb * 8] _hms_val
+        store [_hms_sp + _hms_tomb] 2
+        let _hms_c2 = load64 [_hms_map + 16]
+        let _hms_c2 = _hms_c2 + 1
+        store64 [_hms_map + 16] _hms_c2
+        let nx_r0 = 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_get_str : nx_r0 = value for string key nx_i1 in map nx_i0 (0 if missing)
+# ------------------------------------------------------------------------------
+fn nx_hashmap_get_str {
+    let _hms_map = nx_i0
+    let _hms_key = nx_i1
+    let _hms_cap = load64 [_hms_map + 24]
+    let nx_i0 = _hms_key
+    call nx_hash_str
+    let _hms_slot = nx_r0 % _hms_cap
+    let _hms_probe = 0
+    let _hms_kp = load64 [_hms_map + 0]
+    let _hms_vp = load64 [_hms_map + 8]
+    let _hms_sp = load64 [_hms_map + 32]
+    while _hms_probe < _hms_cap {
+        let _hms_st = load [_hms_sp + _hms_slot]
+        if _hms_st == 0 {
+            let nx_r0 = 0
+            return
+        }
+        if _hms_st == 2 {
+            let _hms_k = load64 [_hms_kp + _hms_slot * 8]
+            let nx_i0 = _hms_k
+            let nx_i1 = _hms_key
+            call nx_str_cmp
+            if nx_r0 == 0 {
+                let nx_r0 = load64 [_hms_vp + _hms_slot * 8]
+                return
+            }
+        }
+        let _hms_slot = _hms_slot + 1
+        if _hms_slot >= _hms_cap {
+            let _hms_slot = 0
+        }
+        let _hms_probe = _hms_probe + 1
+    }
+    let nx_r0 = 0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_contains_str : nx_r0 = 1 if string key nx_i1 exists in map nx_i0
+# ------------------------------------------------------------------------------
+fn nx_hashmap_contains_str {
+    let _hms_map = nx_i0
+    let _hms_key = nx_i1
+    let _hms_cap = load64 [_hms_map + 24]
+    let nx_i0 = _hms_key
+    call nx_hash_str
+    let _hms_slot = nx_r0 % _hms_cap
+    let _hms_probe = 0
+    let _hms_kp = load64 [_hms_map + 0]
+    let _hms_sp = load64 [_hms_map + 32]
+    while _hms_probe < _hms_cap {
+        let _hms_st = load [_hms_sp + _hms_slot]
+        if _hms_st == 0 {
+            let nx_r0 = 0
+            return
+        }
+        if _hms_st == 2 {
+            let _hms_k = load64 [_hms_kp + _hms_slot * 8]
+            let nx_i0 = _hms_k
+            let nx_i1 = _hms_key
+            call nx_str_cmp
+            if nx_r0 == 0 {
+                let nx_r0 = 1
+                return
+            }
+        }
+        let _hms_slot = _hms_slot + 1
+        if _hms_slot >= _hms_cap {
+            let _hms_slot = 0
+        }
+        let _hms_probe = _hms_probe + 1
+    }
+    let nx_r0 = 0
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_hashmap_remove_str : removes string key nx_i1 from map nx_i0 (1 if removed)
+# ------------------------------------------------------------------------------
+fn nx_hashmap_remove_str {
+    let _hms_map = nx_i0
+    let _hms_key = nx_i1
+    let _hms_cap = load64 [_hms_map + 24]
+    let nx_i0 = _hms_key
+    call nx_hash_str
+    let _hms_slot = nx_r0 % _hms_cap
+    let _hms_probe = 0
+    let _hms_kp = load64 [_hms_map + 0]
+    let _hms_sp = load64 [_hms_map + 32]
+    while _hms_probe < _hms_cap {
+        let _hms_st = load [_hms_sp + _hms_slot]
+        if _hms_st == 0 {
+            let nx_r0 = 0
+            return
+        }
+        if _hms_st == 2 {
+            let _hms_k = load64 [_hms_kp + _hms_slot * 8]
+            let nx_i0 = _hms_k
+            let nx_i1 = _hms_key
+            call nx_str_cmp
+            if nx_r0 == 0 {
+                store [_hms_sp + _hms_slot] 3
+                let _hms_c2 = load64 [_hms_map + 16]
+                let _hms_c2 = _hms_c2 - 1
+                store64 [_hms_map + 16] _hms_c2
+                let nx_r0 = 1
+                return
+            }
+        }
+        let _hms_slot = _hms_slot + 1
+        if _hms_slot >= _hms_cap {
+            let _hms_slot = 0
+        }
+        let _hms_probe = _hms_probe + 1
+    }
+    let nx_r0 = 0
 }
 
 # ------------------------------------------------------------------------------
@@ -164,13 +528,15 @@ fn nx_hashmap_cap {
 # fn nx_hashmap_clear : remove all entries
 # ------------------------------------------------------------------------------
 fn nx_hashmap_clear {
-    let s0 = nx_i0
-    let s1 = load64 [s0 + 24]
-    let s2 = load64 [s0 + 0]
-    let s3 = 0
-    while s3 < s1 {
-        store64 [s2 + s3 * 8] 0
-        let s3 = s3 + 1
+    let _hmc_map = nx_i0
+    let _hmc_cap = load64 [_hmc_map + 24]
+    let _hmc_kp = load64 [_hmc_map + 0]
+    let _hmc_sp = load64 [_hmc_map + 32]
+    let _hmc_i = 0
+    while _hmc_i < _hmc_cap {
+        store64 [_hmc_kp + _hmc_i * 8] 0
+        store [_hmc_sp + _hmc_i] 0
+        let _hmc_i = _hmc_i + 1
     }
-    store64 [s0 + 16] 0
+    store64 [_hmc_map + 16] 0
 }

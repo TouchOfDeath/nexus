@@ -1962,7 +1962,7 @@ IRModule *build_ir_from_nexus(const char *path) {
         }
 
         /* Print string statement */
-        if (strncmp(p, "print_str ", 10) == 0) {
+        if (strncmp(p, "print_str ", 10) == 0 || strncmp(p, "print_raw ", 10) == 0) {
             char val_str[512];
             safe_strcpy(val_str, p + 10, sizeof(val_str));
             char *nl = strchr(val_str, '\n');

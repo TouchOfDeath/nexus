@@ -20,7 +20,9 @@ Two layers ship with NEXUS:
 | `print_str <var>` | print string variable contents + CRLF |
 | `print_str "text"` | print string literal + CRLF |
 | `print_float <var>` | print 64-bit float variable formatted with 6 decimal places |
+| `print_raw <expr>` | print string or integer without trailing newline |
 | `read <var>` | read one signed decimal integer line from stdin |
+| `exit <code>` | terminate process immediately with status code `<code>` |
 
 ### Expressions (right side of `let`)
 

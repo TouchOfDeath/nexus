@@ -1,0 +1,132 @@
+# ==============================================================================
+#                 NEXUS DOMAIN APPLICATION - TEST 2: CSV ANALYTICS
+#            Text Processing, Delimiter Slicing & Department Aggregator
+# ==============================================================================
+# Demonstrates:
+#   - Writing and reading CSV data files via stdlib/io.nex
+#   - Line and comma-delimited tokenization using string slicing
+#   - Numeric conversion from string tokens via int(token)
+#   - Grouping and aggregation with string-keyed HashMaps
+#   - Verifies 14 business intelligence analytics assertions
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+fn main {
+    print "=== Running CSV Analytics Engine ==="
+    let csv_file = "/tmp/nexus_corp_data.csv"
+    let csv_text = "id,department,employees,revenue_k\n1,Engineering,40,1200\n2,Engineering,25,800\n3,Sales,30,1000\n4,Sales,20,700\n5,Marketing,30,1000\n6,Support,20,400\n"
+
+    nx_write_file(csv_file, csv_text)
+    let exists = nx_file_exists(csv_file)
+    assert_eq exists, 1
+
+    let raw_data = nx_read_file(csv_file)
+    assert_eq raw_data != 0, 1
+
+    # Aggregation HashMaps:
+    # dept_emp: maps department name -> total employees
+    # dept_rev: maps department name -> total revenue in $k
+    let dept_emp = nx_hashmap_new(16)
+    let dept_rev = nx_hashmap_new(16)
+
+    let total_rows = 0
+    let total_headcount = 0
+    let total_revenue = 0
+    let min_revenue = 999999
+    let max_revenue = 0
+
+    let tot_len = len raw_data
+    let offset = 0
+    let line_idx = 0
+
+    while offset < tot_len {
+        let line = nx_read_line(raw_data, offset)
+        if line == 0 {
+            let offset = tot_len
+        } else {
+            let llen = len line
+            let l_offset = offset + llen
+            if l_offset < tot_len && load [raw_data + l_offset] == 13 {
+                let l_offset += 1
+            }
+            if l_offset < tot_len && load [raw_data + l_offset] == 10 {
+                let l_offset += 1
+            }
+            let offset = l_offset
+
+            # Skip header row (line_idx 0)
+            if line_idx > 0 && llen > 0 {
+                total_rows += 1
+
+                # Parse CSV row: id,department,employees,revenue_k
+                # Find commas
+                let c1 = nx_str_index_of(line, ",")
+                let rest1 = nx_str_slice(line, c1 + 1, llen)
+                let c2 = nx_str_index_of(rest1, ",")
+                let rlen1 = len rest1
+                let rest2 = nx_str_slice(rest1, c2 + 1, rlen1)
+                let c3 = nx_str_index_of(rest2, ",")
+                let rlen2 = len rest2
+
+                let dept = nx_str_slice(rest1, 0, c2)
+                let emp_str = nx_str_slice(rest2, 0, c3)
+                let rev_str = nx_str_slice(rest2, c3 + 1, rlen2)
+
+                let emp = int(emp_str)
+                let rev = int(rev_str)
+
+                total_headcount += emp
+                total_revenue += rev
+
+                if rev < min_revenue {
+                    let min_revenue = rev
+                }
+                if rev > max_revenue {
+                    let max_revenue = rev
+                }
+
+                # Aggregate by department
+                let cur_dept_emp = 0
+                if nx_hashmap_contains_str(dept_emp, dept) == 1 {
+                    let cur_dept_emp = nx_hashmap_get_str(dept_emp, dept)
+                }
+                nx_hashmap_put_str(dept_emp, dept, cur_dept_emp + emp)
+
+                let cur_dept_rev = 0
+                if nx_hashmap_contains_str(dept_rev, dept) == 1 {
+                    let cur_dept_rev = nx_hashmap_get_str(dept_rev, dept)
+                }
+                nx_hashmap_put_str(dept_rev, dept, cur_dept_rev + rev)
+            }
+            let line_idx = line_idx + 1
+        }
+    }
+
+    let avg_revenue = total_revenue / total_rows
+
+    # Assertions across the 14 business metrics
+    assert_eq total_rows, 6
+    assert_eq total_headcount, 165
+    assert_eq total_revenue, 5100
+    assert_eq avg_revenue, 850
+    assert_eq min_revenue, 400
+    assert_eq max_revenue, 1200
+
+    assert_eq nx_hashmap_get_str(dept_emp, "Engineering"), 65
+    assert_eq nx_hashmap_get_str(dept_rev, "Engineering"), 2000
+
+    assert_eq nx_hashmap_get_str(dept_emp, "Sales"), 50
+    assert_eq nx_hashmap_get_str(dept_rev, "Sales"), 1700
+
+    assert_eq nx_hashmap_get_str(dept_emp, "Marketing"), 30
+    assert_eq nx_hashmap_get_str(dept_rev, "Marketing"), 1000
+
+    assert_eq nx_hashmap_get_str(dept_emp, "Support"), 20
+    assert_eq nx_hashmap_get_str(dept_rev, "Support"), 400
+
+    print "CSV_PROCESSOR_PASS"
+    call nx_assert_summary
+}
+
+call main

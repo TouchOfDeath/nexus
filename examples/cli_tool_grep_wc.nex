@@ -1,0 +1,146 @@
+# ==============================================================================
+#                 NEXUS DOMAIN APPLICATION - TEST 1: CLI TOOL
+#              Multi-Function 'grep' & 'wc' Command-Line Utility
+# ==============================================================================
+# Demonstrates:
+#   - os_argc and os_argv(i) command-line argument processing
+#   - High-level file reading & writing via stdlib/io.nex
+#   - String slicing, pattern searching, and line-by-line scanning
+#   - Automated 7-assertion self-test mode when invoked without CLI arguments
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+fn count_file_stats(content) {
+    if content == 0 {
+        return 0, 0, 0
+    }
+    let total_bytes = len content
+    let total_lines = 0
+    let total_words = 0
+    let in_word = 0
+
+    for i in 0..total_bytes {
+        let ch = load [content + i]
+        if ch == 10 {
+            total_lines += 1
+        }
+        # Space, tab, newline, carriage return
+        if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+            let in_word = 0
+        } else {
+            if in_word == 0 {
+                total_words += 1
+                let in_word = 1
+            }
+        }
+    }
+    return total_lines, total_words, total_bytes
+}
+
+fn run_grep_scan(content, pat) {
+    if content == 0 || pat == 0 {
+        return 0, 0, 0
+    }
+    let tot = len content
+    let plen = len pat
+    let offset = 0
+    let line_no = 0
+    let match_count = 0
+    let first_match = 0
+    let second_match = 0
+
+    while offset < tot {
+        line_no += 1
+        let cur_line = nx_read_line(content, offset)
+        if cur_line == 0 {
+            let offset = tot
+        } else {
+            let llen = len cur_line
+            let l_offset = offset + llen
+            # Account for \n and \r
+            if l_offset < tot && load [content + l_offset] == 13 {
+                let l_offset += 1
+            }
+            if l_offset < tot && load [content + l_offset] == 10 {
+                let l_offset += 1
+            }
+            let offset = l_offset
+
+            # Search pattern in line
+            let idx = nx_str_index_of(cur_line, pat)
+            if idx >= 0 {
+                match_count += 1
+                if match_count == 1 {
+                    let first_match = line_no
+                }
+                if match_count == 2 {
+                    let second_match = line_no
+                }
+            }
+        }
+    }
+    return match_count, first_match, second_match
+}
+
+fn main {
+    # If invoked with CLI arguments:
+    if os_argc >= 3 {
+        let mode = os_argv(1)
+        if mode == "--wc" {
+            let file_path = os_argv(2)
+            let data = nx_read_file(file_path)
+            if data == 0 {
+                nx_eprint("Error: could not read file")
+                exit(1)
+            }
+            let lines, words, bytes = count_file_stats(data)
+            print_raw "Lines: "
+            print lines
+            print_raw "Words: "
+            print words
+            print_raw "Bytes: "
+            print bytes
+            exit(0)
+        }
+        if mode == "--grep" && os_argc >= 4 {
+            let pat = os_argv(2)
+            let file_path = os_argv(3)
+            let data = nx_read_file(file_path)
+            if data == 0 {
+                nx_eprint("Error: could not read file")
+                exit(1)
+            }
+            let cnt, m1, m2 = run_grep_scan(data, pat)
+            print_raw "Matches found: "
+            print cnt
+            exit(0)
+        }
+    }
+
+    # Default Automated Self-Test Mode (7 assertions)
+    print "=== Running CLI Tool Self-Test Suite ==="
+    let sample_path = "/tmp/nexus_grep_wc_sample.txt"
+    let sample_text = "Alpha line one\nBeta line two with grep target\nGamma line three\nDelta line four with grep target\nEpsilon final line\n"
+    nx_write_file(sample_path, sample_text)
+
+    let exists = nx_file_exists(sample_path)
+    assert_eq exists, 1
+
+    let file_content = nx_read_file(sample_path)
+    let l_cnt, w_cnt, b_cnt = count_file_stats(file_content)
+
+    assert_eq l_cnt, 5
+    assert_eq w_cnt, 21
+    assert_eq b_cnt, 115
+
+    let m_cnt, m1, m2 = run_grep_scan(file_content, "grep target")
+    assert_eq m_cnt, 2
+    assert_eq m1, 2
+    assert_eq m2, 4
+
+    print "CLI_TOOL_GREP_WC_PASS"
+    call nx_assert_summary
+}
+
+call main

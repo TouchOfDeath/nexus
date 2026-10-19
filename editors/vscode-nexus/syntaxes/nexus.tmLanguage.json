@@ -3,30 +3,15 @@
   "name": "NEXUS",
   "scopeName": "source.nexus",
   "patterns": [
-    {
-      "include": "#comments"
-    },
-    {
-      "include": "#strings"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#stdlib-fns"
-    },
-    {
-      "include": "#struct-member"
-    },
-    {
-      "include": "#constants"
-    },
-    {
-      "include": "#operators"
-    },
-    {
-      "include": "#identifiers"
-    }
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#keywords" },
+    { "include": "#stdlib-fns" },
+    { "include": "#struct-member" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
   ],
   "repository": {
     "comments": {
@@ -46,9 +31,17 @@
           "patterns": [
             {
               "name": "constant.character.escape.nexus",
-              "match": "\\\\[nr\"\\\\]"
+              "match": "\\\\([nrt0e\"'\\\\]|x[0-9A-Fa-f]{2})"
             }
           ]
+        }
+      ]
+    },
+    "chars": {
+      "patterns": [
+        {
+          "name": "constant.character.literal.nexus",
+          "match": "'(\\\\([nrt0e\"'\\\\]|x[0-9A-Fa-f]{2})|[^'\\\\])'"
         }
       ]
     },
@@ -56,11 +49,11 @@
       "patterns": [
         {
           "name": "keyword.control.flow.nexus",
-          "match": "\\b(if|else|while|return|call|break|continue|for)\\b"
+          "match": "\\b(if|if_f|else|while|while_f|for|in|step|match|return|call|break|continue|exit)\\b"
         },
         {
           "name": "keyword.declaration.nexus",
-          "match": "\\b(let|fn|struct)\\b"
+          "match": "\\b(let|local|var|int|float|const|fn|struct|enum|impl)\\b"
         },
         {
           "name": "keyword.control.import.nexus",
@@ -68,17 +61,17 @@
         },
         {
           "name": "keyword.other.io.nexus",
-          "match": "\\b(print|print_str|read)\\b"
+          "match": "\\b(print|print_str|print_float|print_raw|read)\\b"
         },
         {
           "name": "support.function.builtin.nexus",
-          "match": "\\b(alloc|load|store|len|abs|file_open|file_create|file_read|file_write|file_close)\\b"
+          "match": "\\b(alloc|load|load8|load16|load32|load64|store|store8|store16|store32|store64|fload|fstore|len|abs|str|itof|ftoi|fadd|fsub|fmul|fdiv|fsqrt|fneg|file_open|file_create|file_read|file_write|file_close|os_argc|os_argv|syscall|syscall0|syscall1|syscall2|syscall3|syscall4|syscall5|syscall6|assert_eq|assert_ne|frame_pointer|stack_pointer|frame_parent)\\b"
         }
       ]
     },
     "stdlib-fns": {
       "name": "support.function.stdlib.nexus",
-      "match": "\\b(nx_max|nx_min|nx_clamp|nx_sign|nx_pow|nx_isqrt|nx_gcd|nx_lcm|nx_fib|nx_is_prime|nx_digits|nx_arr_fill|nx_arr_iota|nx_arr_sum|nx_arr_max|nx_arr_min|nx_arr_index_of|nx_arr_reverse|nx_arr_count|nx_str_len|nx_str_copy|nx_str_cmp|nx_str_concat|nx_str_chr|nx_str_to_int|nx_int_to_str)\\b"
+      "match": "\\b(nx_[A-Za-z0-9_]+|x11_[A-Za-z0-9_]+)\\b"
     },
     "struct-member": {
       "name": "variable.other.member.nexus",
@@ -97,14 +90,34 @@
     "constants": {
       "patterns": [
         {
+          "name": "constant.language.boolean.nexus",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.nexus",
+          "match": "\\b0[xX][0-9A-Fa-f_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.nexus",
+          "match": "\\b0[oO][0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.nexus",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.nexus",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9]+)?\\b"
+        },
+        {
           "name": "constant.numeric.integer.nexus",
-          "match": "\\b(0|[1-9][0-9]*)\\b"
+          "match": "\\b(0|[1-9][0-9_]*)\\b"
         }
       ]
     },
     "operators": {
       "name": "keyword.operator.nexus",
-      "match": "(==|!=|<=|>=|\\+|-|\\*|/|%|=)"
+      "match": "(\\*\\*=|<<=|>>=|\\+=\\.|\\-=\\.|\\*=\\.|/=\\.|==\\.|!=\\.|<=\\.|>=\\.|<\\.|>\\.|\\+\\.|\\-\\.|\\*\\.|/\\.|\\.\\.=|\\.\\.|\\?\\?|=>|\\+\\+|\\-\\-|&&|\\|\\||\\+=|\\-=|\\*=|/=|%=|&=|\\|=|\\^=|<<|>>|==|!=|<=|>=|\\*\\*|\\+|\\-|\\*|/|%|&|\\||\\^|~|!|\\?|:|=|<|>)"
     },
     "identifiers": {
       "name": "variable.other.nexus",
