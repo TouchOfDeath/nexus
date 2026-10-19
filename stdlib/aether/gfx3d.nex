@@ -1,0 +1,1594 @@
+# ==============================================================================
+#  AETHER 3D GRAPHICS ENGINE & SCENE GRAPH (stdlib/aether/gfx3d.nex)
+#  Vertex/Index Buffers, Procedural & OBJ Meshes, Programmable Shaders,
+#  Materials, 32-bit Depth Buffer, Backface Culling, Perspective & Ortho Cameras,
+#  Directional/Point/Spot Lighting, Shadow Mapping, Skybox, RenderTargets &
+#  Post-Processing, and Hierarchical Scene Graph
+# ==============================================================================
+
+include "stdlib/aether/gfx2d.nex"
+
+const AE_SHADER_UNLIT       = 0
+const AE_SHADER_LAMBERT     = 1
+const AE_SHADER_PHONG       = 2
+const AE_SHADER_TOON        = 3
+const AE_SHADER_NORMAL_VIS  = 4
+const AE_SHADER_WIREFRAME   = 5
+const AE_SHADER_SKYBOX      = 6
+const AE_SHADER_CUSTOM      = 7
+
+const AE_CULL_NONE          = 0
+const AE_CULL_BACK          = 1
+const AE_CULL_FRONT         = 2
+
+const AE_LIGHT_DIRECTIONAL  = 0
+const AE_LIGHT_POINT        = 1
+const AE_LIGHT_SPOT         = 2
+
+const AE_POST_INVERT        = 1
+const AE_POST_GRAYSCALE     = 2
+const AE_POST_VIGNETTE      = 3
+const AE_POST_SCANLINES     = 4
+
+struct AeMesh {
+    vbuf
+    vcount
+    vcap
+    ibuf
+    icount
+    icap
+}
+
+struct AeShader {
+    id
+    kind
+    compiled
+    u_color
+    u_roughness
+    u_shininess
+    u_time_ms
+    u_custom0
+}
+
+struct AeMaterial {
+    shader
+    albedo_color
+    texture
+    shininess
+    wireframe
+    cull_mode
+}
+
+struct AeCamera3D {
+    pos_x
+    pos_y
+    pos_z
+    target_x
+    target_y
+    target_z
+    up_x
+    up_y
+    up_z
+    fov_deg
+    aspect_fp
+    near_fp
+    far_fp
+    is_ortho
+    ortho_size_fp
+    view_mat
+    proj_mat
+    vp_mat
+}
+
+struct AeRenderTarget {
+    width
+    height
+    color_tex
+    depth_buf
+}
+
+struct AeNode3D {
+    id
+    parent
+    first_child
+    next_sibling
+    tx
+    ty
+    tz
+    rx
+    ry
+    rz
+    sx
+    sy
+    sz
+    mesh
+    material
+    visible
+    local_mat
+    world_mat
+}
+
+# ------------------------------------------------------------------------------
+# 3D Pipeline State Initialization & Queries
+# ------------------------------------------------------------------------------
+fn ae_3d_ensure_init() {
+    ae_ensure_ctx()
+    let init3d = load64 [_ae_ctx + 3000]
+    if init3d == 1 { return 1 }
+    store64 [_ae_ctx + 3000] 1
+    store64 [_ae_ctx + 3008] 1              # depth_test enabled
+    store64 [_ae_ctx + 3016] 1              # depth_write enabled
+    store64 [_ae_ctx + 3024] AE_CULL_BACK   # backface culling
+    store64 [_ae_ctx + 3032] 0              # wireframe mode
+
+    # Ambient light (r, g, b in 0..255, intensity in fp 1000)
+    store64 [_ae_ctx + 3040] 45
+    store64 [_ae_ctx + 3048] 50
+    store64 [_ae_ctx + 3056] 65
+    store64 [_ae_ctx + 3064] 1000
+
+    # Directional light (dir_x, dir_y, dir_z normalized fp, r, g, b, intensity_fp, enabled)
+    store64 [_ae_ctx + 3072] 0 - 408
+    store64 [_ae_ctx + 3080] 0 - 816
+    store64 [_ae_ctx + 3088] 0 - 408
+    store64 [_ae_ctx + 3096] 255
+    store64 [_ae_ctx + 3104] 248
+    store64 [_ae_ctx + 3112] 235
+    store64 [_ae_ctx + 3120] 950
+    store64 [_ae_ctx + 3128] 1
+
+    # Point lights table (up to 4 point lights, 64 bytes each)
+    let pl_buf = alloc 256
+    store64 [_ae_ctx + 3136] pl_buf
+    store64 [_ae_ctx + 3144] 0
+
+    # Active 3D camera Matrices (view, proj, vp)
+    let vmat = ae_mat4_new()
+    let pmat = ae_mat4_new()
+    let vpmat = ae_mat4_new()
+    store64 [_ae_ctx + 3152] vmat
+    store64 [_ae_ctx + 3160] pmat
+    store64 [_ae_ctx + 3168] vpmat
+
+    # Shadow map state
+    store64 [_ae_ctx + 3200] 0              # shadow_enabled
+    store64 [_ae_ctx + 3208] 0 - 300        # shadow_plane_y (fp)
+    store64 [_ae_ctx + 3216] 400            # shadow_darkness (fp 0..1000)
+    return 1
+}
+
+fn ae_3d_set_depth_test(enabled) {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3008] enabled
+    return enabled
+}
+
+fn ae_3d_set_depth_write(enabled) {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3016] enabled
+    return enabled
+}
+
+fn ae_3d_set_cull_mode(mode) {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3024] mode
+    return mode
+}
+
+fn ae_3d_set_wireframe(enabled) {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3032] enabled
+    return enabled
+}
+
+# ------------------------------------------------------------------------------
+# Lighting & Shadow Mapping Configuration
+# ------------------------------------------------------------------------------
+fn ae_light_set_ambient(r, g, b, intensity_fp = 1000) {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3040] ae_clamp(r, 0, 255)
+    store64 [_ae_ctx + 3048] ae_clamp(g, 0, 255)
+    store64 [_ae_ctx + 3056] ae_clamp(b, 0, 255)
+    store64 [_ae_ctx + 3064] intensity_fp
+    return 1
+}
+
+fn ae_light_set_directional(dx_fp, dy_fp, dz_fp, r, g, b, intensity_fp = 1000) {
+    ae_3d_ensure_init()
+    let v = ae_vec3(dx_fp, dy_fp, dz_fp)
+    let vn = ae_vec3_normalize(v)
+    let nx = load64 [vn + 0]
+    let ny = load64 [vn + 8]
+    let nz = load64 [vn + 16]
+    store64 [_ae_ctx + 3072] nx
+    store64 [_ae_ctx + 3080] ny
+    store64 [_ae_ctx + 3088] nz
+    store64 [_ae_ctx + 3096] ae_clamp(r, 0, 255)
+    store64 [_ae_ctx + 3104] ae_clamp(g, 0, 255)
+    store64 [_ae_ctx + 3112] ae_clamp(b, 0, 255)
+    store64 [_ae_ctx + 3120] intensity_fp
+    store64 [_ae_ctx + 3128] 1
+    return 1
+}
+
+fn ae_light_clear_points() {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3144] 0
+    return 0
+}
+
+fn ae_light_add_point(px_fp, py_fp, pz_fp, r, g, b, radius_fp = 5000, intensity_fp = 1000) {
+    ae_3d_ensure_init()
+    let cnt = load64 [_ae_ctx + 3144]
+    if cnt >= 4 { return 0 - 1 }
+    let pl_buf = load64 [_ae_ctx + 3136]
+    let off = cnt * 64
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    let off6 = off + 48
+    let off7 = off + 56
+    store64 [pl_buf + off] px_fp
+    store64 [pl_buf + off1] py_fp
+    store64 [pl_buf + off2] pz_fp
+    store64 [pl_buf + off3] ae_clamp(r, 0, 255)
+    store64 [pl_buf + off4] ae_clamp(g, 0, 255)
+    store64 [pl_buf + off5] ae_clamp(b, 0, 255)
+    store64 [pl_buf + off6] radius_fp
+    store64 [pl_buf + off7] intensity_fp
+    store64 [_ae_ctx + 3144] cnt + 1
+    return cnt
+}
+
+fn ae_shadow_enable(plane_y_fp = -1000, darkness_fp = 450) {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3200] 1
+    store64 [_ae_ctx + 3208] plane_y_fp
+    store64 [_ae_ctx + 3216] darkness_fp
+    return 1
+}
+
+fn ae_shadow_disable() {
+    ae_3d_ensure_init()
+    store64 [_ae_ctx + 3200] 0
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Programmable Shader System & Materials
+# ------------------------------------------------------------------------------
+fn ae_shader_create(kind, vert_src = "default_vs", frag_src = "default_fs") {
+    ae_3d_ensure_init()
+    let vlen = len vert_src
+    let flen = len frag_src
+    if vlen <= 0 {
+        ae_set_error(AE_ERR_SHADER_COMPILE, "Vertex shader source cannot be empty")
+        return 0
+    }
+    if flen <= 0 {
+        ae_set_error(AE_ERR_SHADER_COMPILE, "Fragment shader source cannot be empty")
+        return 0
+    }
+    let b0 = load [vert_src + 0]
+    if b0 == 33 {
+        ae_set_error(AE_ERR_SHADER_COMPILE, "Shader compilation failed: syntax error in vertex stage")
+        return 0
+    }
+    let sh = alloc 64
+    store64 [sh + 0] kind + 1
+    store64 [sh + 8] kind
+    store64 [sh + 16] 1
+    store64 [sh + 24] AE_COLOR_WHITE
+    store64 [sh + 32] 500
+    store64 [sh + 40] 32
+    store64 [sh + 48] 0
+    store64 [sh + 56] 0
+    return sh
+}
+
+fn ae_shader_set_uniform_int(sh, name, val) {
+    if sh == 0 {
+        ae_set_error(AE_ERR_INVALID_HANDLE, "Null shader handle in ae_shader_set_uniform_int")
+        return 0
+    }
+    if name == "u_color" {
+        store64 [sh + 24] val
+        return 1
+    }
+    if name == "u_roughness" {
+        store64 [sh + 32] val
+        return 1
+    }
+    if name == "u_shininess" {
+        store64 [sh + 40] val
+        return 1
+    }
+    if name == "u_time_ms" {
+        store64 [sh + 48] val
+        return 1
+    }
+    if name == "u_custom0" {
+        store64 [sh + 56] val
+        return 1
+    }
+    ae_set_error(AE_ERR_SHADER_COMPILE, "Unknown shader uniform")
+    return 0
+}
+
+fn ae_material_create(shader_kind = 2, albedo_color = 2147483647, tex = 0) {
+    let sh = ae_shader_create(shader_kind, "vs_main", "fs_main")
+    let mat = alloc 48
+    store64 [mat + 0] sh
+    store64 [mat + 8] albedo_color
+    store64 [mat + 16] tex
+    store64 [mat + 24] 32
+    store64 [mat + 32] 0
+    store64 [mat + 40] AE_CULL_BACK
+    return mat
+}
+
+fn ae_material_set_texture(mat, tex) {
+    if mat == 0 { return 0 }
+    store64 [mat + 16] tex
+    return 1
+}
+
+fn ae_material_set_color(mat, color) {
+    if mat == 0 { return 0 }
+    store64 [mat + 8] color
+    return 1
+}
+
+fn ae_material_set_wireframe(mat, wf) {
+    if mat == 0 { return 0 }
+    store64 [mat + 32] wf
+    return 1
+}
+
+fn ae_material_set_cull(mat, cull_mode) {
+    if mat == 0 { return 0 }
+    store64 [mat + 40] cull_mode
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 3D Camera (Perspective & Orthographic, LookAt, Orbit, FPS)
+# ------------------------------------------------------------------------------
+fn ae_camera3d_update(cam) {
+    let px = load64 [cam + 0]
+    let py = load64 [cam + 8]
+    let pz = load64 [cam + 16]
+    let tx = load64 [cam + 24]
+    let ty = load64 [cam + 32]
+    let tz = load64 [cam + 40]
+    let ux = load64 [cam + 48]
+    let uy = load64 [cam + 56]
+    let uz = load64 [cam + 64]
+    let fov = load64 [cam + 72]
+    let asp = load64 [cam + 80]
+    let near_p = load64 [cam + 88]
+    let far_p = load64 [cam + 96]
+    let is_ortho = load64 [cam + 104]
+    let osize = load64 [cam + 112]
+    let vm = load64 [cam + 120]
+    let pm = load64 [cam + 128]
+    let vpm = load64 [cam + 136]
+
+    ae_mat4_look_at(vm, px, py, pz, tx, ty, tz, ux, uy, uz)
+    if is_ortho == 1 {
+        let half_w = (osize * asp) / 1000
+        let neg_hw = 0 - half_w
+        let neg_os = 0 - osize
+        ae_mat4_ortho(pm, neg_hw, half_w, neg_os, osize, near_p, far_p)
+    } else {
+        ae_mat4_perspective(pm, fov, asp, near_p, far_p)
+    }
+    ae_mat4_mul(vpm, pm, vm)
+    return cam
+}
+
+fn ae_camera3d_perspective(fov_deg, aspect_fp, near_fp, far_fp) {
+    ae_3d_ensure_init()
+    let cam = alloc 144
+    store64 [cam + 0] 0
+    store64 [cam + 8] 1500
+    store64 [cam + 16] 4000
+    store64 [cam + 24] 0
+    store64 [cam + 32] 0
+    store64 [cam + 40] 0
+    store64 [cam + 48] 0
+    store64 [cam + 56] 1000
+    store64 [cam + 64] 0
+    store64 [cam + 72] fov_deg
+    store64 [cam + 80] aspect_fp
+    store64 [cam + 88] near_fp
+    store64 [cam + 96] far_fp
+    store64 [cam + 104] 0
+    store64 [cam + 112] 2000
+    let vm = ae_mat4_new()
+    let pm = ae_mat4_new()
+    let vpm = ae_mat4_new()
+    store64 [cam + 120] vm
+    store64 [cam + 128] pm
+    store64 [cam + 136] vpm
+    ae_camera3d_update(cam)
+    return cam
+}
+
+fn ae_camera3d_orthographic(ortho_size_fp, aspect_fp, near_fp, far_fp) {
+    let cam = ae_camera3d_perspective(60, aspect_fp, near_fp, far_fp)
+    store64 [cam + 104] 1
+    store64 [cam + 112] ortho_size_fp
+    ae_camera3d_update(cam)
+    return cam
+}
+
+fn ae_camera3d_set_position(cam, x_fp, y_fp, z_fp) {
+    store64 [cam + 0] x_fp
+    store64 [cam + 8] y_fp
+    store64 [cam + 16] z_fp
+    ae_camera3d_update(cam)
+    return cam
+}
+
+fn ae_camera3d_set_target(cam, tx_fp, ty_fp, tz_fp) {
+    store64 [cam + 24] tx_fp
+    store64 [cam + 32] ty_fp
+    store64 [cam + 40] tz_fp
+    ae_camera3d_update(cam)
+    return cam
+}
+
+fn ae_camera3d_orbit(cam, target_x, target_y, target_z, dist_fp, yaw_deg, pitch_deg) {
+    let pitch_clamped = ae_clamp(pitch_deg, -85, 85)
+    let cp = ae_cos_deg(pitch_clamped)
+    let sp = ae_sin_deg(pitch_clamped)
+    let cy = ae_cos_deg(yaw_deg)
+    let sy = ae_sin_deg(yaw_deg)
+    let h_dist = (dist_fp * cp) / 1000
+    let px = target_x + (h_dist * sy) / 1000
+    let py = target_y + (dist_fp * sp) / 1000
+    let pz = target_z + (h_dist * cy) / 1000
+    store64 [cam + 0] px
+    store64 [cam + 8] py
+    store64 [cam + 16] pz
+    store64 [cam + 24] target_x
+    store64 [cam + 32] target_y
+    store64 [cam + 40] target_z
+    ae_camera3d_update(cam)
+    return cam
+}
+
+fn ae_camera3d_begin(cam) {
+    ae_3d_ensure_init()
+    ae_camera3d_update(cam)
+    let vm = load64 [cam + 120]
+    let pm = load64 [cam + 128]
+    let vpm = load64 [cam + 136]
+    let ctx_vm = load64 [_ae_ctx + 3152]
+    let ctx_pm = load64 [_ae_ctx + 3160]
+    let ctx_vpm = load64 [_ae_ctx + 3168]
+    ae_mat4_copy(ctx_vm, vm)
+    ae_mat4_copy(ctx_pm, pm)
+    ae_mat4_copy(ctx_vpm, vpm)
+    store64 [_ae_ctx + 3176] load64 [cam + 0]
+    store64 [_ae_ctx + 3184] load64 [cam + 8]
+    store64 [_ae_ctx + 3192] load64 [cam + 16]
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Vertex & Index Buffers, Procedural Meshes & Wavefront .OBJ Loader
+# ------------------------------------------------------------------------------
+fn ae_mesh_create(max_verts = 512, max_indices = 1536) {
+    let mesh = alloc 48
+    let vb_sz = max_verts * 72 + 72
+    let ib_sz = max_indices * 8 + 24
+    let vb = alloc vb_sz
+    let ib = alloc ib_sz
+    store64 [mesh + 0] vb
+    store64 [mesh + 8] 0
+    store64 [mesh + 16] max_verts
+    store64 [mesh + 24] ib
+    store64 [mesh + 32] 0
+    store64 [mesh + 40] max_indices
+    return mesh
+}
+
+fn ae_mesh_add_vertex(mesh, px, py, pz, nx, ny, nz, u_fp = 0, v_fp = 0, color = 2147483647) {
+    let vc = load64 [mesh + 8]
+    let vcap = load64 [mesh + 16]
+    if vc >= vcap { return vc - 1 }
+    let vb = load64 [mesh + 0]
+    let off = vc * 72
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    let off6 = off + 48
+    let off7 = off + 56
+    let off8 = off + 64
+    store64 [vb + off] px
+    store64 [vb + off1] py
+    store64 [vb + off2] pz
+    store64 [vb + off3] nx
+    store64 [vb + off4] ny
+    store64 [vb + off5] nz
+    store64 [vb + off6] u_fp
+    store64 [vb + off7] v_fp
+    store64 [vb + off8] color
+    store64 [mesh + 8] vc + 1
+    return vc
+}
+
+fn ae_mesh_add_triangle(mesh, i0, i1, i2) {
+    let ic = load64 [mesh + 32]
+    let icap = load64 [mesh + 40]
+    if ic + 3 > icap { return ic }
+    let ib = load64 [mesh + 24]
+    let off0 = ic * 8
+    let off1 = off0 + 8
+    let off2 = off0 + 16
+    store64 [ib + off0] i0
+    store64 [ib + off1] i1
+    store64 [ib + off2] i2
+    store64 [mesh + 32] ic + 3
+    return ic + 3
+}
+
+fn ae_mesh_add_quad_face(mesh, x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3, nx, ny, nz, color = 2147483647) {
+    let v0 = ae_mesh_add_vertex(mesh, x0, y0, z0, nx, ny, nz, 0, 1000, color)
+    let v1 = ae_mesh_add_vertex(mesh, x1, y1, z1, nx, ny, nz, 1000, 1000, color)
+    let v2 = ae_mesh_add_vertex(mesh, x2, y2, z2, nx, ny, nz, 1000, 0, color)
+    let v3 = ae_mesh_add_vertex(mesh, x3, y3, z3, nx, ny, nz, 0, 0, color)
+    ae_mesh_add_triangle(mesh, v0, v1, v2)
+    ae_mesh_add_triangle(mesh, v0, v2, v3)
+    return 1
+}
+
+fn ae_mesh_create_cube(size_fp = 1000) {
+    let h = size_fp / 2
+    let nh = 0 - h
+    let m = ae_mesh_create(32, 64)
+    ae_mesh_add_quad_face(m, nh, nh, h,  h, nh, h,  h, h, h,  nh, h, h,  0, 0, 1000, AE_COLOR_WHITE)
+    ae_mesh_add_quad_face(m, h, nh, nh,  nh, nh, nh,  nh, h, nh,  h, h, nh,  0, 0, -1000, AE_COLOR_WHITE)
+    ae_mesh_add_quad_face(m, h, nh, h,  h, nh, nh,  h, h, nh,  h, h, h,  1000, 0, 0, AE_COLOR_WHITE)
+    ae_mesh_add_quad_face(m, nh, nh, nh,  nh, nh, h,  nh, h, h,  nh, h, nh,  -1000, 0, 0, AE_COLOR_WHITE)
+    ae_mesh_add_quad_face(m, nh, h, h,  h, h, h,  h, h, nh,  nh, h, nh,  0, 1000, 0, AE_COLOR_WHITE)
+    ae_mesh_add_quad_face(m, nh, nh, nh,  h, nh, nh,  h, nh, h,  nh, nh, h,  0, -1000, 0, AE_COLOR_WHITE)
+    return m
+}
+
+fn ae_mesh_create_plane(width_fp = 2000, depth_fp = 2000, subdiv = 2) {
+    if subdiv <= 0 { let subdiv = 1 }
+    let s_p2 = subdiv + 2
+    let vcap = s_p2 * s_p2
+    let icap = subdiv * subdiv * 6 + 12
+    let m = ae_mesh_create(vcap, icap)
+    let hw = width_fp / 2
+    let hd = depth_fp / 2
+    let iz = 0
+    while iz <= subdiv {
+        let z = (iz * depth_fp) / subdiv - hd
+        let vf = (iz * 1000) / subdiv
+        let ix = 0
+        while ix <= subdiv {
+            let x = (ix * width_fp) / subdiv - hw
+            let uf = (ix * 1000) / subdiv
+            ae_mesh_add_vertex(m, x, 0, z, 0, 1000, 0, uf, vf, AE_COLOR_WHITE)
+            let ix = ix + 1
+        }
+        let iz = iz + 1
+    }
+    let stride = subdiv + 1
+    let rz = 0
+    while rz < subdiv {
+        let rx = 0
+        while rx < subdiv {
+            let i0 = rz * stride + rx
+            let i1 = i0 + 1
+            let rz_next = rz + 1
+            let i3 = rz_next * stride + rx
+            let i2 = i3 + 1
+            ae_mesh_add_triangle(m, i0, i3, i2)
+            ae_mesh_add_triangle(m, i0, i2, i1)
+            let rx = rx + 1
+        }
+        let rz = rz + 1
+    }
+    return m
+}
+
+fn ae_mesh_create_pyramid(base_fp = 1000, height_fp = 1200) {
+    let h = base_fp / 2
+    let nh = 0 - h
+    let hy = height_fp / 2
+    let nhy = 0 - hy
+    let m = ae_mesh_create(24, 36)
+    let v0 = ae_mesh_add_vertex(m, 0, hy, 0, 0, 600, 800, 500, 0, AE_COLOR_WHITE)
+    let v1 = ae_mesh_add_vertex(m, nh, nhy, h, 0, 600, 800, 0, 1000, AE_COLOR_WHITE)
+    let v2 = ae_mesh_add_vertex(m, h, nhy, h, 0, 600, 800, 1000, 1000, AE_COLOR_WHITE)
+    ae_mesh_add_triangle(m, v0, v1, v2)
+
+    let v3 = ae_mesh_add_vertex(m, 0, hy, 0, 800, 600, 0, 500, 0, AE_COLOR_WHITE)
+    let v4 = ae_mesh_add_vertex(m, h, nhy, h, 800, 600, 0, 0, 1000, AE_COLOR_WHITE)
+    let v5 = ae_mesh_add_vertex(m, h, nhy, nh, 800, 600, 0, 1000, 1000, AE_COLOR_WHITE)
+    ae_mesh_add_triangle(m, v3, v4, v5)
+
+    let v6 = ae_mesh_add_vertex(m, 0, hy, 0, 0, 600, -800, 500, 0, AE_COLOR_WHITE)
+    let v7 = ae_mesh_add_vertex(m, h, nhy, nh, 0, 600, -800, 0, 1000, AE_COLOR_WHITE)
+    let v8 = ae_mesh_add_vertex(m, nh, nhy, nh, 0, 600, -800, 1000, 1000, AE_COLOR_WHITE)
+    ae_mesh_add_triangle(m, v6, v7, v8)
+
+    let v9 = ae_mesh_add_vertex(m, 0, hy, 0, -800, 600, 0, 500, 0, AE_COLOR_WHITE)
+    let v10 = ae_mesh_add_vertex(m, nh, nhy, nh, -800, 600, 0, 0, 1000, AE_COLOR_WHITE)
+    let v11 = ae_mesh_add_vertex(m, nh, nhy, h, -800, 600, 0, 1000, 1000, AE_COLOR_WHITE)
+    ae_mesh_add_triangle(m, v9, v10, v11)
+
+    ae_mesh_add_quad_face(m, nh, nhy, nh, h, nhy, nh, h, nhy, h, nh, nhy, h, 0, -1000, 0, AE_COLOR_WHITE)
+    return m
+}
+
+fn ae_mesh_create_sphere(radius_fp = 1000, rings = 6, sectors = 10) {
+    if rings < 3 { let rings = 3 }
+    if sectors < 4 { let sectors = 4 }
+    let r_p2 = rings + 2
+    let s_p2 = sectors + 2
+    let vcap = r_p2 * s_p2
+    let icap = rings * sectors * 6 + 24
+    let m = ae_mesh_create(vcap, icap)
+    let r = 0
+    while r <= rings {
+        let pitch_deg = 90 - (r * 180) / rings
+        let ny = ae_sin_deg(pitch_deg)
+        let xz_r = ae_cos_deg(pitch_deg)
+        let vf = (r * 1000) / rings
+        let s = 0
+        while s <= sectors {
+            let yaw_deg = (s * 360) / sectors
+            let nx = (xz_r * ae_sin_deg(yaw_deg)) / 1000
+            let nz = (xz_r * ae_cos_deg(yaw_deg)) / 1000
+            let px = (nx * radius_fp) / 1000
+            let py = (ny * radius_fp) / 1000
+            let pz = (nz * radius_fp) / 1000
+            let uf = (s * 1000) / sectors
+            ae_mesh_add_vertex(m, px, py, pz, nx, ny, nz, uf, vf, AE_COLOR_WHITE)
+            let s = s + 1
+        }
+        let r = r + 1
+    }
+    let stride = sectors + 1
+    let r = 0
+    while r < rings {
+        let s = 0
+        while s < sectors {
+            let i0 = r * stride + s
+            let i1 = i0 + 1
+            let r_next = r + 1
+            let i3 = r_next * stride + s
+            let i2 = i3 + 1
+            ae_mesh_add_triangle(m, i0, i3, i2)
+            ae_mesh_add_triangle(m, i0, i2, i1)
+            let s = s + 1
+        }
+        let r = r + 1
+    }
+    return m
+}
+
+# Parses Wavefront OBJ text ("v x y z" and "f i1 i2 i3") into an AeMesh
+fn ae_obj_parse_int_fp(src, pos, slen) {
+    let idx = pos
+    while idx < slen {
+        let ch = load [src + idx]
+        if ch != 32 {
+            if ch != 9 { break }
+        }
+        let idx = idx + 1
+    }
+    let sign = 1
+    if idx < slen {
+        let ch = load [src + idx]
+        if ch == 45 {
+            let sign = 0 - 1
+            let idx = idx + 1
+        }
+    }
+    let int_part = 0
+    while idx < slen {
+        let ch = load [src + idx]
+        if ch < 48 { break }
+        if ch > 57 { break }
+        let int_part = int_part * 10 + (ch - 48)
+        let idx = idx + 1
+    }
+    let frac_part = 0
+    let frac_div = 1
+    if idx < slen {
+        let ch = load [src + idx]
+        if ch == 46 {
+            let idx = idx + 1
+            while idx < slen {
+                let dch = load [src + idx]
+                if dch < 48 { break }
+                if dch > 57 { break }
+                if frac_div < 1000 {
+                    let frac_part = frac_part * 10 + (dch - 48)
+                    let frac_div = frac_div * 10
+                }
+                let idx = idx + 1
+            }
+        }
+    }
+    let abs_fp = int_part * 1000 + (frac_part * 1000) / frac_div
+    let val_fp = sign * abs_fp
+    return val_fp, idx
+}
+
+fn ae_obj_parse_face_idx(src, pos, slen) {
+    let idx = pos
+    while idx < slen {
+        let ch = load [src + idx]
+        if ch != 32 {
+            if ch != 9 { break }
+        }
+        let idx = idx + 1
+    }
+    let v_idx = 0
+    while idx < slen {
+        let ch = load [src + idx]
+        if ch < 48 { break }
+        if ch > 57 { break }
+        let v_idx = v_idx * 10 + (ch - 48)
+        let idx = idx + 1
+    }
+    while idx < slen {
+        let ch = load [src + idx]
+        if ch == 32 { break }
+        if ch == 9 { break }
+        if ch == 10 { break }
+        if ch == 13 { break }
+        let idx = idx + 1
+    }
+    return v_idx, idx
+}
+
+fn ae_mesh_from_obj_str(obj_text) {
+    let slen = len obj_text
+    if slen <= 0 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Empty OBJ mesh string")
+        return 0
+    }
+    let m = ae_mesh_create(512, 1536)
+    let i = 0
+    while i < slen {
+        while i < slen {
+            let ch = load [obj_text + i]
+            if ch != 32 {
+                if ch != 9 {
+                    if ch != 13 {
+                        if ch != 10 { break }
+                    }
+                }
+            }
+            let i = i + 1
+        }
+        if i >= slen { break }
+        let c0 = load [obj_text + i]
+        let c1 = 0
+        if i + 1 < slen {
+            let i1 = i + 1
+            let c1 = load [obj_text + i1]
+        }
+        if c0 == 118 {
+            if c1 == 32 {
+                let vx, p1 = ae_obj_parse_int_fp(obj_text, i + 2, slen)
+                let vy, p2 = ae_obj_parse_int_fp(obj_text, p1, slen)
+                let vz, p3 = ae_obj_parse_int_fp(obj_text, p2, slen)
+                let nv = ae_vec3(vx, vy, vz)
+                let nvn = ae_vec3_normalize(nv)
+                let nx = load64 [nvn + 0]
+                let ny = load64 [nvn + 8]
+                let nz = load64 [nvn + 16]
+                ae_mesh_add_vertex(m, vx, vy, vz, nx, ny, nz, 500, 500, AE_COLOR_WHITE)
+                let i = p3
+            }
+        }
+        if c0 == 102 {
+            if c1 == 32 {
+                let f0, p1 = ae_obj_parse_face_idx(obj_text, i + 2, slen)
+                let f1, p2 = ae_obj_parse_face_idx(obj_text, p1, slen)
+                let f2, p3 = ae_obj_parse_face_idx(obj_text, p2, slen)
+                if f0 > 0 {
+                    if f1 > 0 {
+                        if f2 > 0 {
+                            ae_mesh_add_triangle(m, f0 - 1, f1 - 1, f2 - 1)
+                        }
+                    }
+                }
+                let i = p3
+            }
+        }
+        while i < slen {
+            let ch = load [obj_text + i]
+            let i = i + 1
+            if ch == 10 { break }
+        }
+    }
+    let vc = load64 [m + 8]
+    if vc == 0 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "No vertices found in OBJ mesh")
+        return 0
+    }
+    return m
+}
+
+fn ae_mesh_load_obj(path) {
+    ae_3d_ensure_init()
+    let fd = file_open path 0
+    if fd < 0 {
+        ae_set_error(AE_ERR_ASSET_NOT_FOUND, "OBJ mesh file not found")
+        return 0
+    }
+    let buf = alloc 262144
+    let n = file_read fd buf 262140
+    file_close fd
+    if n <= 0 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Empty OBJ file")
+        return 0
+    }
+    store [buf + n] 0
+    let m = ae_mesh_from_obj_str(buf)
+    return m
+}
+
+# ------------------------------------------------------------------------------
+# Programmable Vertex & Fragment Lighting / Shading Evaluation
+# ------------------------------------------------------------------------------
+fn ae_shade_surface(wx, wy, wz, nx, ny, nz, base_color, shader_kind, shininess) {
+    if shader_kind == AE_SHADER_UNLIT {
+        return base_color
+    }
+    if shader_kind == AE_SHADER_NORMAL_VIS {
+        let nx_s = nx + 1000
+        let ny_s = ny + 1000
+        let nz_s = nz + 1000
+        let nr = ae_clamp((nx_s * 255) / 2000, 0, 255)
+        let ng = ae_clamp((ny_s * 255) / 2000, 0, 255)
+        let nb = ae_clamp((nz_s * 255) / 2000, 0, 255)
+        let nc = ae_rgb(nr, ng, nb)
+        return nc
+    }
+
+    let br = ae_color_r(base_color)
+    let bg = ae_color_g(base_color)
+    let bb = ae_color_b(base_color)
+    let ba = ae_color_a(base_color)
+
+    let amb_r = load64 [_ae_ctx + 3040]
+    let amb_g = load64 [_ae_ctx + 3048]
+    let amb_b = load64 [_ae_ctx + 3056]
+    let amb_i = load64 [_ae_ctx + 3064]
+
+    let total_r = (br * amb_r * amb_i) / 255000
+    let total_g = (bg * amb_g * amb_i) / 255000
+    let total_b = (bb * amb_b * amb_i) / 255000
+
+    # Directional light contribution
+    let dir_en = load64 [_ae_ctx + 3128]
+    if dir_en == 1 {
+        let ldx = 0 - load64 [_ae_ctx + 3072]
+        let ldy = 0 - load64 [_ae_ctx + 3080]
+        let ldz = 0 - load64 [_ae_ctx + 3088]
+        let lr = load64 [_ae_ctx + 3096]
+        let lg = load64 [_ae_ctx + 3104]
+        let lb = load64 [_ae_ctx + 3112]
+        let li = load64 [_ae_ctx + 3120]
+
+        let ndotl = (nx * ldx + ny * ldy + nz * ldz) / 1000
+        if ndotl > 0 {
+            if shader_kind == AE_SHADER_TOON {
+                if ndotl > 750 {
+                    let ndotl = 1000
+                } else if ndotl > 400 {
+                    let ndotl = 600
+                } else {
+                    let ndotl = 250
+                }
+            }
+            let diff_i = (ndotl * li) / 1000
+            let total_r = total_r + (br * lr * diff_i) / 255000
+            let total_g = total_g + (bg * lg * diff_i) / 255000
+            let total_b = total_b + (bb * lb * diff_i) / 255000
+
+            if shader_kind == AE_SHADER_PHONG {
+                let cam_x = load64 [_ae_ctx + 3176]
+                let cam_y = load64 [_ae_ctx + 3184]
+                let cam_z = load64 [_ae_ctx + 3192]
+                let vvec = ae_vec3(cam_x - wx, cam_y - wy, cam_z - wz)
+                let vn = ae_vec3_normalize(vvec)
+                let vx = load64 [vn + 0]
+                let vy = load64 [vn + 8]
+                let vz = load64 [vn + 16]
+                let hvec = ae_vec3(ldx + vx, ldy + vy, ldz + vz)
+                let hn = ae_vec3_normalize(hvec)
+                let hx = load64 [hn + 0]
+                let hy = load64 [hn + 8]
+                let hz = load64 [hn + 16]
+                let ndoth = (nx * hx + ny * hy + nz * hz) / 1000
+                if ndoth > 0 {
+                    let s2 = (ndoth * ndoth) / 1000
+                    let s4 = (s2 * s2) / 1000
+                    let s8 = (s4 * s4) / 1000
+                    let spec = (s8 * li) / 2000
+                    let total_r = total_r + (lr * spec) / 1000
+                    let total_g = total_g + (lg * spec) / 1000
+                    let total_b = total_b + (lb * spec) / 1000
+                }
+            }
+        }
+    }
+
+    # Point lights contribution
+    let pl_cnt = load64 [_ae_ctx + 3144]
+    let pl_buf = load64 [_ae_ctx + 3136]
+    let pi = 0
+    while pi < pl_cnt {
+        let off = pi * 64
+        let off1 = off + 8
+        let off2 = off + 16
+        let off3 = off + 24
+        let off4 = off + 32
+        let off5 = off + 40
+        let off6 = off + 48
+        let off7 = off + 56
+        let lpx = load64 [pl_buf + off]
+        let lpy = load64 [pl_buf + off1]
+        let lpz = load64 [pl_buf + off2]
+        let lpr = load64 [pl_buf + off3]
+        let lpg = load64 [pl_buf + off4]
+        let lpb = load64 [pl_buf + off5]
+        let lrad = load64 [pl_buf + off6]
+        let lpi = load64 [pl_buf + off7]
+
+        let dx = lpx - wx
+        let dy = lpy - wy
+        let dz = lpz - wz
+        let d2 = (dx * dx + dy * dy + dz * dz) / 1000
+        let dist = ae_isqrt(d2 * 1000)
+        if dist < lrad {
+            if dist <= 10 { let dist = 10 }
+            let rem_d = lrad - dist
+            let atten = (rem_d * 1000) / lrad
+            let atten = (atten * atten) / 1000
+            let lx = (dx * 1000) / dist
+            let ly = (dy * 1000) / dist
+            let lz = (dz * 1000) / dist
+            let ndotl = (nx * lx + ny * ly + nz * lz) / 1000
+            if ndotl > 0 {
+                let p_i = (ndotl * atten * lpi) / 1000000
+                let total_r = total_r + (br * lpr * p_i) / 255000
+                let total_g = total_g + (bg * lpg * p_i) / 255000
+                let total_b = total_b + (bb * lpb * p_i) / 255000
+            }
+        }
+        let pi = pi + 1
+    }
+
+    let out_c = ae_rgba(ae_clamp(total_r, 0, 255), ae_clamp(total_g, 0, 255), ae_clamp(total_b, 0, 255), ba)
+    return out_c
+}
+
+# ------------------------------------------------------------------------------
+# 3D Z-Buffered Scanline Triangle Rasterizer (Depth Test, Texture & Shading)
+# ------------------------------------------------------------------------------
+fn ae_rasterize_triangle_3d(x0, y0, z0, u0, v0, x1, y1, z1, u1, v1, x2, y2, z2, u2, v2, face_color, tex) {
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let cbuf = load64 [_ae_ctx + 632]
+    let dbuf = load64 [_ae_ctx + 640]
+    if cbuf == 0 { return 0 }
+
+    let min_x = ae_min(x0, ae_min(x1, x2))
+    let max_x = ae_max(x0, ae_max(x1, x2))
+    let min_y = ae_min(y0, ae_min(y1, y2))
+    let max_y = ae_max(y0, ae_max(y1, y2))
+
+    let sx0 = load64 [_ae_ctx + 2560]
+    let sy0 = load64 [_ae_ctx + 2568]
+    let sw = load64 [_ae_ctx + 2576]
+    let sh = load64 [_ae_ctx + 2584]
+
+    if max_x < sx0 { return 0 }
+    if max_y < sy0 { return 0 }
+    if min_x >= sx0 + sw { return 0 }
+    if min_y >= sy0 + sh { return 0 }
+
+    let min_x = ae_max(min_x, sx0)
+    let min_y = ae_max(min_y, sy0)
+    let max_x = ae_min(max_x, sx0 + sw - 1)
+    let max_y = ae_min(max_y, sy0 + sh - 1)
+
+    let dx10 = x1 - x0
+    let dy20 = y2 - y0
+    let dy10 = y1 - y0
+    let dx20 = x2 - x0
+    let area = dx10 * dy20 - dy10 * dx20
+    if area == 0 { return 0 }
+
+    let depth_test = load64 [_ae_ctx + 3008]
+    let depth_write = load64 [_ae_ctx + 3016]
+    let bmode = load64 [_ae_ctx + 2592]
+
+    let py = min_y
+    while py <= max_y {
+        let px = min_x
+        while px <= max_x {
+            let w0 = (x1 - px) * (y2 - py) - (y1 - py) * (x2 - px)
+            let w1 = (x2 - px) * (y0 - py) - (y2 - py) * (x0 - px)
+            let w2 = (x0 - px) * (y1 - py) - (y0 - py) * (x1 - px)
+            let inside = 0
+            if area > 0 {
+                if w0 >= 0 {
+                    if w1 >= 0 {
+                        if w2 >= 0 { let inside = 1 }
+                    }
+                }
+            } else {
+                if w0 <= 0 {
+                    if w1 <= 0 {
+                        if w2 <= 0 { let inside = 1 }
+                    }
+                }
+            }
+            if inside == 1 {
+                let z_num = w0 * z0 + w1 * z1 + w2 * z2
+                let z = z_num / area
+                let pix_off = (py * fbw + px) * 4
+                let pass_depth = 1
+                if depth_test == 1 {
+                    if dbuf != 0 {
+                        let cur_z = load32 [dbuf + pix_off]
+                        if z > cur_z { let pass_depth = 0 }
+                    }
+                }
+                if pass_depth == 1 {
+                    if depth_write == 1 {
+                        if dbuf != 0 {
+                            store32 [dbuf + pix_off] z
+                        }
+                    }
+                    let out_c = face_color
+                    if tex != 0 {
+                        let u_num = w0 * u0 + w1 * u1 + w2 * u2
+                        let v_num = w0 * v0 + w1 * v1 + w2 * v2
+                        let u = u_num / area
+                        let v = v_num / area
+                        let tc = ae_texture_sample(tex, u, v)
+                        let out_c = ae_color_modulate(tc, face_color)
+                    }
+                    if bmode == 0 {
+                        store32 [cbuf + pix_off] out_c
+                    } else {
+                        let dst_c = load32 [cbuf + pix_off]
+                        let bl_c = ae_blend_color(dst_c, out_c, bmode)
+                        store32 [cbuf + pix_off] bl_c
+                    }
+                }
+            }
+            let px = px + 1
+        }
+        let py = py + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 3D Mesh Draw Pipeline (Model->World->Clip->NDC->Viewport + Shadow Pass)
+# ------------------------------------------------------------------------------
+fn ae_draw_mesh_internal(mesh, model_mat, mat, is_shadow_pass) {
+    if mesh == 0 { return 0 }
+    let vb = load64 [mesh + 0]
+    let vcount = load64 [mesh + 8]
+    let ib = load64 [mesh + 24]
+    let icount = load64 [mesh + 32]
+    if vcount <= 0 { return 0 }
+    if icount < 3 { return 0 }
+
+    let vp_mat = load64 [_ae_ctx + 3168]
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+
+    let sh_kind = AE_SHADER_PHONG
+    let albedo = AE_COLOR_WHITE
+    let tex = 0
+    let shininess = 32
+    let wf = load64 [_ae_ctx + 3032]
+    let cull_mode = load64 [_ae_ctx + 3024]
+
+    if mat != 0 {
+        let sh = load64 [mat + 0]
+        if sh != 0 {
+            let sh_kind = load64 [sh + 8]
+        }
+        let albedo = load64 [mat + 8]
+        let tex = load64 [mat + 16]
+        let shininess = load64 [mat + 24]
+        let m_wf = load64 [mat + 32]
+        if m_wf == 1 { let wf = 1 }
+        let cull_mode = load64 [mat + 40]
+    }
+    if sh_kind == AE_SHADER_WIREFRAME { let wf = 1 }
+
+    let shadow_y = load64 [_ae_ctx + 3208]
+    let shadow_dark = load64 [_ae_ctx + 3216]
+    let ldx = load64 [_ae_ctx + 3072]
+    let ldy = load64 [_ae_ctx + 3080]
+    let ldz = load64 [_ae_ctx + 3088]
+    if ldy == 0 { let ldy = 0 - 800 }
+
+    let tri_drawn = 0
+    let idx = 0
+    while idx + 2 < icount {
+        let ioff0 = idx * 8
+        let ioff1 = ioff0 + 8
+        let ioff2 = ioff0 + 16
+        let i0 = load64 [ib + ioff0]
+        let i1 = load64 [ib + ioff1]
+        let i2 = load64 [ib + ioff2]
+
+        let voff0 = i0 * 72
+        let voff1 = i1 * 72
+        let voff2 = i2 * 72
+
+        let v0_y = voff0 + 8
+        let v0_z = voff0 + 16
+        let v0_nx = voff0 + 24
+        let v0_ny = voff0 + 32
+        let v0_nz = voff0 + 40
+        let v0_u = voff0 + 48
+        let v0_v = voff0 + 56
+
+        let v1_y = voff1 + 8
+        let v1_z = voff1 + 16
+        let v1_u = voff1 + 48
+        let v1_v = voff1 + 56
+
+        let v2_y = voff2 + 8
+        let v2_z = voff2 + 16
+        let v2_u = voff2 + 48
+        let v2_v = voff2 + 56
+
+        let lx0 = load64 [vb + voff0]
+        let ly0 = load64 [vb + v0_y]
+        let lz0 = load64 [vb + v0_z]
+        let lnx = load64 [vb + v0_nx]
+        let lny = load64 [vb + v0_ny]
+        let lnz = load64 [vb + v0_nz]
+        let u0 = load64 [vb + v0_u]
+        let v0 = load64 [vb + v0_v]
+
+        let lx1 = load64 [vb + voff1]
+        let ly1 = load64 [vb + v1_y]
+        let lz1 = load64 [vb + v1_z]
+        let u1 = load64 [vb + v1_u]
+        let v1 = load64 [vb + v1_v]
+
+        let lx2 = load64 [vb + voff2]
+        let ly2 = load64 [vb + v2_y]
+        let lz2 = load64 [vb + v2_z]
+        let u2 = load64 [vb + v2_u]
+        let v2 = load64 [vb + v2_v]
+
+        let wx0, wy0, wz0 = ae_mat4_transform_point(model_mat, lx0, ly0, lz0)
+        let wx1, wy1, wz1 = ae_mat4_transform_point(model_mat, lx1, ly1, lz1)
+        let wx2, wy2, wz2 = ae_mat4_transform_point(model_mat, lx2, ly2, lz2)
+
+        if is_shadow_pass == 1 {
+            let dy_sh0 = shadow_y - wy0
+            let t0 = (dy_sh0 * 1000) / ldy
+            let wx0 = wx0 + (ldx * t0) / 1000
+            let wy0 = shadow_y + 15
+            let wz0 = wz0 + (ldz * t0) / 1000
+
+            let dy_sh1 = shadow_y - wy1
+            let t1 = (dy_sh1 * 1000) / ldy
+            let wx1 = wx1 + (ldx * t1) / 1000
+            let wy1 = shadow_y + 15
+            let wz1 = wz1 + (ldz * t1) / 1000
+
+            let dy_sh2 = shadow_y - wy2
+            let t2 = (dy_sh2 * 1000) / ldy
+            let wx2 = wx2 + (ldx * t2) / 1000
+            let wy2 = shadow_y + 15
+            let wz2 = wz2 + (ldz * t2) / 1000
+        }
+
+        let cx0, cy0, cz0, cw0 = ae_mat4_transform_vec4(vp_mat, wx0, wy0, wz0, 1000)
+        let cx1, cy1, cz1, cw1 = ae_mat4_transform_vec4(vp_mat, wx1, wy1, wz1, 1000)
+        let cx2, cy2, cz2, cw2 = ae_mat4_transform_vec4(vp_mat, wx2, wy2, wz2, 1000)
+
+        if cw0 > 100 {
+            if cw1 > 100 {
+                if cw2 > 100 {
+                    let ndc_x0 = (cx0 * 1000) / cw0
+                    let ndc_y0 = (cy0 * 1000) / cw0
+                    let nx0_p = ndc_x0 + 1000
+                    let ny0_p = 1000 - ndc_y0
+                    let sx0 = (nx0_p * fbw) / 2000
+                    let sy0 = (ny0_p * fbh) / 2000
+                    let sz0 = cw0
+
+                    let ndc_x1 = (cx1 * 1000) / cw1
+                    let ndc_y1 = (cy1 * 1000) / cw1
+                    let nx1_p = ndc_x1 + 1000
+                    let ny1_p = 1000 - ndc_y1
+                    let sx1 = (nx1_p * fbw) / 2000
+                    let sy1 = (ny1_p * fbh) / 2000
+                    let sz1 = cw1
+
+                    let ndc_x2 = (cx2 * 1000) / cw2
+                    let ndc_y2 = (cy2 * 1000) / cw2
+                    let nx2_p = ndc_x2 + 1000
+                    let ny2_p = 1000 - ndc_y2
+                    let sx2 = (nx2_p * fbw) / 2000
+                    let sy2 = (ny2_p * fbh) / 2000
+                    let sz2 = cw2
+
+                    let s_area = (sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0)
+                    let keep = 1
+                    if is_shadow_pass == 0 {
+                        if cull_mode == AE_CULL_BACK {
+                            if s_area >= 0 { let keep = 0 }
+                        } else if cull_mode == AE_CULL_FRONT {
+                            if s_area <= 0 { let keep = 0 }
+                        }
+                    }
+
+                    if keep == 1 {
+                        if is_shadow_pass == 1 {
+                            let sh_col = ae_rgba(10, 12, 18, (shadow_dark * 255) / 1000)
+                            ae_rasterize_triangle_3d(sx0, sy0, sz0, 0, 0, sx1, sy1, sz1, 0, 0, sx2, sy2, sz2, 0, 0, sh_col, 0)
+                        } else {
+                            let e1 = ae_vec3(wx1 - wx0, wy1 - wy0, wz1 - wz0)
+                            let e2 = ae_vec3(wx2 - wx0, wy2 - wy0, wz2 - wz0)
+                            let cn = ae_vec3_cross(e1, e2)
+                            let wn = ae_vec3_normalize(cn)
+                            let wnx = load64 [wn + 0]
+                            let wny = load64 [wn + 8]
+                            let wnz = load64 [wn + 16]
+
+                            let sum_wx = wx0 + wx1 + wx2
+                            let sum_wy = wy0 + wy1 + wy2
+                            let sum_wz = wz0 + wz1 + wz2
+                            let cx_mid = sum_wx / 3
+                            let cy_mid = sum_wy / 3
+                            let cz_mid = sum_wz / 3
+                            let fcol = ae_shade_surface(cx_mid, cy_mid, cz_mid, wnx, wny, wnz, albedo, sh_kind, shininess)
+
+                            if wf == 1 {
+                                ae_draw_line_raw(sx0, sy0, sx1, sy1, fcol)
+                                ae_draw_line_raw(sx1, sy1, sx2, sy2, fcol)
+                                ae_draw_line_raw(sx2, sy2, sx0, sy0, fcol)
+                            } else {
+                                ae_rasterize_triangle_3d(sx0, sy0, sz0, u0, v0, sx1, sy1, sz1, u1, v1, sx2, sy2, sz2, u2, v2, fcol, tex)
+                            }
+                        }
+                        let tri_drawn = tri_drawn + 1
+                    }
+                }
+            }
+        }
+        let idx = idx + 3
+    }
+
+    let dc = load64 [_ae_ctx + 152]
+    let vc = load64 [_ae_ctx + 160]
+    let tc = load64 [_ae_ctx + 168]
+    store64 [_ae_ctx + 152] dc + 1
+    store64 [_ae_ctx + 160] vc + tri_drawn * 3
+    store64 [_ae_ctx + 168] tc + tri_drawn
+    return tri_drawn
+}
+
+fn ae_draw_mesh_mat4(mesh, model_mat, mat = 0) {
+    ae_3d_ensure_init()
+    let sh_en = load64 [_ae_ctx + 3200]
+    if sh_en == 1 {
+        let prev_blend = ae_get_blend_mode()
+        ae_set_blend_mode(AE_BLEND_ALPHA)
+        ae_draw_mesh_internal(mesh, model_mat, mat, 1)
+        ae_set_blend_mode(prev_blend)
+    }
+    let tris = ae_draw_mesh_internal(mesh, model_mat, mat, 0)
+    return tris
+}
+
+fn ae_draw_mesh_trs(mesh, tx, ty, tz, rx_deg, ry_deg, rz_deg, sx_fp, sy_fp, sz_fp, mat = 0) {
+    ae_3d_ensure_init()
+    let m = ae_mat4_new()
+    ae_mat4_from_trs(m, tx, ty, tz, rx_deg, ry_deg, rz_deg, sx_fp, sy_fp, sz_fp)
+    let r = ae_draw_mesh_mat4(mesh, m, mat)
+    return r
+}
+
+# ------------------------------------------------------------------------------
+# Skybox Renderer (Atmospheric Zenith-Horizon-Ground Gradient)
+# ------------------------------------------------------------------------------
+fn ae_draw_skybox(zenith_color, horizon_color, ground_color) {
+    ae_3d_ensure_init()
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let cbuf = load64 [_ae_ctx + 632]
+    let dbuf = load64 [_ae_ctx + 640]
+    if cbuf == 0 { return 0 }
+
+    let half_h = fbh / 2
+    if half_h <= 0 { let half_h = 1 }
+    let y = 0
+    while y < fbh {
+        let row_c = horizon_color
+        if y < half_h {
+            let t_fp = (y * 1000) / half_h
+            let row_c = ae_color_lerp(zenith_color, horizon_color, t_fp)
+        } else {
+            let dy_h = y - half_h
+            let t_fp = (dy_h * 1000) / half_h
+            let row_c = ae_color_lerp(horizon_color, ground_color, t_fp)
+        }
+        let row_off = y * fbw
+        let x = 0
+        while x < fbw {
+            let off = (row_off + x) * 4
+            store32 [cbuf + off] row_c
+            if dbuf != 0 {
+                store32 [dbuf + off] 1000000000
+            }
+            let x = x + 1
+        }
+        let y = y + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Offscreen RenderTargets (Framebuffers) & Post-Processing Pipeline
+# ------------------------------------------------------------------------------
+fn ae_render_target_create(width, height) {
+    if width <= 0 { return 0 }
+    if height <= 0 { return 0 }
+    let rt = alloc 32
+    let tex = ae_texture_create(width, height)
+    let dbuf_sz = width * height * 4 + 16
+    let dbuf = alloc dbuf_sz
+    store64 [rt + 0] width
+    store64 [rt + 8] height
+    store64 [rt + 16] tex
+    store64 [rt + 24] dbuf
+    return rt
+}
+
+fn ae_render_target_begin(rt) {
+    ae_ensure_ctx()
+    if rt == 0 { return 0 }
+    store64 [_ae_ctx + 3300] load64 [_ae_ctx + 552]
+    store64 [_ae_ctx + 3308] load64 [_ae_ctx + 560]
+    store64 [_ae_ctx + 3316] load64 [_ae_ctx + 632]
+    store64 [_ae_ctx + 3324] load64 [_ae_ctx + 640]
+
+    let rw = load64 [rt + 0]
+    let rh = load64 [rt + 8]
+    let tex = load64 [rt + 16]
+    let pbuf = load64 [tex + 16]
+    let dbuf = load64 [rt + 24]
+
+    store64 [_ae_ctx + 552] rw
+    store64 [_ae_ctx + 560] rh
+    store64 [_ae_ctx + 632] pbuf
+    store64 [_ae_ctx + 640] dbuf
+    store64 [_ae_ctx + 2560] 0
+    store64 [_ae_ctx + 2568] 0
+    store64 [_ae_ctx + 2576] rw
+    store64 [_ae_ctx + 2584] rh
+    return 1
+}
+
+fn ae_render_target_end() {
+    let saved_cbuf = load64 [_ae_ctx + 3316]
+    if saved_cbuf == 0 { return 0 }
+    let sw = load64 [_ae_ctx + 3300]
+    let sh = load64 [_ae_ctx + 3308]
+    store64 [_ae_ctx + 552] sw
+    store64 [_ae_ctx + 560] sh
+    store64 [_ae_ctx + 632] saved_cbuf
+    store64 [_ae_ctx + 640] load64 [_ae_ctx + 3324]
+    store64 [_ae_ctx + 2560] 0
+    store64 [_ae_ctx + 2568] 0
+    store64 [_ae_ctx + 2576] sw
+    store64 [_ae_ctx + 2584] sh
+    store64 [_ae_ctx + 3316] 0
+    return 1
+}
+
+fn ae_render_target_texture(rt) {
+    if rt == 0 { return 0 }
+    let tex = load64 [rt + 16]
+    return tex
+}
+
+fn ae_post_process_apply(effect_type) {
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let half_w = fbw / 2
+    let half_h = fbh / 2
+    if half_w <= 0 { let half_w = 1 }
+    if half_h <= 0 { let half_h = 1 }
+    let y = 0
+    while y < fbh {
+        let x = 0
+        while x < fbw {
+            let off = (y * fbw + x) * 4
+            let c = load32 [cbuf + off]
+            let r = (c / 65536) % 256
+            let g = (c / 256) % 256
+            let b = c % 256
+            if effect_type == AE_POST_INVERT {
+                let r = 255 - r
+                let g = 255 - g
+                let b = 255 - b
+            } else if effect_type == AE_POST_GRAYSCALE {
+                let luma = (r * 299 + g * 587 + b * 114) / 1000
+                let r = luma
+                let g = luma
+                let b = luma
+            } else if effect_type == AE_POST_SCANLINES {
+                if (y % 2) == 1 {
+                    let r = (r * 650) / 1000
+                    let g = (g * 650) / 1000
+                    let b = (b * 650) / 1000
+                }
+            } else if effect_type == AE_POST_VIGNETTE {
+                let rx_d = x - half_w
+                let ry_d = y - half_h
+                let dx = (rx_d * 1000) / half_w
+                let dy = (ry_d * 1000) / half_h
+                let d2 = (dx * dx + dy * dy) / 1000
+                let factor = ae_clamp(1200 - (d2 * 550) / 1000, 150, 1000)
+                let r = (r * factor) / 1000
+                let g = (g * factor) / 1000
+                let b = (b * factor) / 1000
+            }
+            let out_c = 2130706432 + r * 65536 + g * 256 + b
+            store32 [cbuf + off] out_c
+            let x = x + 1
+        }
+        let y = y + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 3D Scene Graph (Parent-Child Hierarchy, Transform Propagation & Traversal)
+# ------------------------------------------------------------------------------
+fn ae_node3d_create(mesh = 0, mat = 0) {
+    let nd = alloc 144
+    store64 [nd + 0] 1
+    store64 [nd + 8] 0                  # parent
+    store64 [nd + 16] 0                 # first_child
+    store64 [nd + 24] 0                 # next_sibling
+    store64 [nd + 32] 0                 # tx
+    store64 [nd + 40] 0                 # ty
+    store64 [nd + 48] 0                 # tz
+    store64 [nd + 56] 0                 # rx
+    store64 [nd + 64] 0                 # ry
+    store64 [nd + 72] 0                 # rz
+    store64 [nd + 80] 1000              # sx
+    store64 [nd + 88] 1000              # sy
+    store64 [nd + 96] 1000              # sz
+    store64 [nd + 104] mesh
+    store64 [nd + 112] mat
+    store64 [nd + 120] 1                # visible
+    let lmat = ae_mat4_new()
+    let wmat = ae_mat4_new()
+    store64 [nd + 128] lmat
+    store64 [nd + 136] wmat
+    return nd
+}
+
+fn ae_node3d_set_position(nd, tx, ty, tz) {
+    store64 [nd + 32] tx
+    store64 [nd + 40] ty
+    store64 [nd + 48] tz
+    return nd
+}
+
+fn ae_node3d_set_rotation(nd, rx_deg, ry_deg, rz_deg) {
+    store64 [nd + 56] rx_deg
+    store64 [nd + 64] ry_deg
+    store64 [nd + 72] rz_deg
+    return nd
+}
+
+fn ae_node3d_set_scale(nd, sx_fp, sy_fp, sz_fp) {
+    store64 [nd + 80] sx_fp
+    store64 [nd + 88] sy_fp
+    store64 [nd + 96] sz_fp
+    return nd
+}
+
+fn ae_node3d_add_child(parent, child) {
+    if parent == 0 { return 0 }
+    if child == 0 { return 0 }
+    store64 [child + 8] parent
+    let prev_first = load64 [parent + 16]
+    store64 [child + 24] prev_first
+    store64 [parent + 16] child
+    return 1
+}
+
+fn ae_node3d_update_single(nd) {
+    let tx = load64 [nd + 32]
+    let ty = load64 [nd + 40]
+    let tz = load64 [nd + 48]
+    let rx = load64 [nd + 56]
+    let ry = load64 [nd + 64]
+    let rz = load64 [nd + 72]
+    let sx = load64 [nd + 80]
+    let sy = load64 [nd + 88]
+    let sz = load64 [nd + 96]
+    let lmat = load64 [nd + 128]
+    let wmat = load64 [nd + 136]
+    ae_mat4_from_trs(lmat, tx, ty, tz, rx, ry, rz, sx, sy, sz)
+    let parent = load64 [nd + 8]
+    if parent == 0 {
+        ae_mat4_copy(wmat, lmat)
+    } else {
+        let pwmat = load64 [parent + 136]
+        ae_mat4_mul(wmat, pwmat, lmat)
+    }
+    return wmat
+}
+
+fn ae_scene_draw(root_node) {
+    if root_node == 0 { return 0 }
+    let stack = alloc 512
+    store64 [stack + 0] root_node
+    let sp = 1
+    let drawn_nodes = 0
+    while sp > 0 {
+        let sp = sp - 1
+        let soff = sp * 8
+        let cur = load64 [stack + soff]
+        let vis = load64 [cur + 120]
+        if vis == 1 {
+            let wmat = ae_node3d_update_single(cur)
+            let mesh = load64 [cur + 104]
+            let mat = load64 [cur + 112]
+            if mesh != 0 {
+                ae_draw_mesh_mat4(mesh, wmat, mat)
+                let drawn_nodes = drawn_nodes + 1
+            }
+            let ch = load64 [cur + 16]
+            while ch != 0 {
+                if sp < 60 {
+                    let c_off = sp * 8
+                    store64 [stack + c_off] ch
+                    let sp = sp + 1
+                }
+                let ch = load64 [ch + 24]
+            }
+        }
+    }
+    return drawn_nodes
+}
+
+fn ae_node3d_world_position(nd) {
+    let wmat = ae_node3d_update_single(nd)
+    let wx, wy, wz = ae_mat4_transform_point(wmat, 0, 0, 0)
+    return wx, wy, wz
+}

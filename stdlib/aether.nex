@@ -1,0 +1,14 @@
+# ==============================================================================
+#  AETHER GRAPHICS, AUDIO, INPUT & GAME ENGINE FOR NEXUS (stdlib/aether.nex)
+#  Master Umbrella Module — `import aether` or `include "stdlib/aether.nex"`
+# ==============================================================================
+
+include "stdlib/aether/core.nex"
+include "stdlib/aether/math.nex"
+include "stdlib/aether/input.nex"
+include "stdlib/aether/window.nex"
+include "stdlib/aether/gfx2d.nex"
+include "stdlib/aether/gfx3d.nex"
+include "stdlib/aether/audio.nex"
+include "stdlib/aether/assets.nex"
+include "stdlib/aether/game.nex"

@@ -6,6 +6,25 @@
 
 ---
 
+## 0.6 v1.1.0 — Aether: 2D & 3D Graphics, Audio, Input, Asset & Game Engine (2026-10-19)
+- **Engine Architecture & Modules (`stdlib/aether.nex`, `stdlib/aether/*.nex`)**:
+  - `stdlib/aether/core.nex`: Unified context memory (`_ae_ctx`), 31-bit packed positive ARGB color pipeline, 4 blend modes, monotonic frame timing, FPS calculation, error diagnostics, and draw telemetry.
+  - `stdlib/aether/math.nex`: Fixed-point (1000 = 1.0) & float bridges, trig LUT (`ae_sin_deg`, `ae_cos_deg`), easing, `AeVec2`, `AeVec3`, `AeVec4`, `AeQuat`, `AeMat4` (TRS, LookAt, Perspective, Ortho), `AeAABB`, and `AeRay` intersections.
+  - `stdlib/aether/input.nex`: Physical key state transitions (down/pressed/released/repeat), separate printable text input queue, mouse deltas & wheel, gamepad axes & deadzone, event ring buffer, focus-loss auto-release, and action mapping.
+  - `stdlib/aether/window.nex`: High-DPI multi-window table, resize, fullscreen/borderless/minimize/restore, Linux X11 wire-protocol driver with automatic headless fallback, pixel/depth readback, FNV-1a checksums, and binary P6 PPM screenshot export.
+  - `stdlib/aether/gfx2d.nex`: Clipped/blended primitives, lines, thick lines, gradients, `AeCamera2D` with world-to-screen picking, textures (filtering & wrapping), `AeSprite`, `AeSpriteSheet`, `AeAnimator`, command batching, and 8x8 font typography.
+  - `stdlib/aether/gfx3d.nex`: Vertex/index buffers (`AeMesh`), procedural cube/plane/sphere/pyramid generators, Wavefront `.obj` loader, 32-bit depth buffer, backface culling, 7 shader profiles (Lambert, Phong, Toon, Normal, Wireframe), directional/point lights, planar shadow mapping, skybox, offscreen `AeRenderTarget` with post-processing, and hierarchical `AeNode3D` scene graph.
+  - `stdlib/aether/audio.nex`: 16-voice stereo PCM mixer, waveform & sweep synthesizer with ADSR envelopes, RIFF/WAVE `.wav` loader & exporter, volume/pitch/pan modulation, and 3D spatial audio distance/panning attenuation.
+  - `stdlib/aether/assets.nex` & `stdlib/aether/game.nex`: Reference-counted cached resource manager with missing-asset fallbacks, fixed-timestep `AeClock`, cooldown `AeTimer`, 2D/3D collision detection, debug wireframe overlays, and fade transitions.
+- **Compiler & Preprocessor Enhancements (`tools/nexprep.c`, `compiler/nexc_xl.elf`, `tools/nexelf.c`)**:
+  - Unquoted `import aether` and submodule imports, namespace method dispatch (`aether.*`, `ae.*`, `Color.*`), zero-overhead register-slot calling convention (`uses_nx_abi`), DAG call-graph-height local variable coalescing (Phase 2B), direct parameter slot passing, and multi-return tuple destructuring.
+  - Extended-capacity self-hosted compiler (`compiler/nexc_xl.elf` + `compiler/template_xl.bin`) supporting 241 KB of code capacity and 4,096 variable slots, integrated seamlessly into `./nexus` CLI driver while preserving 100% bit-for-bit Stage 5 self-hosting parity.
+- **Verification Suites & Examples**:
+  - 3 comprehensive automated test suites (`tests/test_aether_unit.nex`, `tests/test_aether_render.nex`, `tests/test_aether_failures.nex`) with 126 assertions passing 100%.
+  - 12 complete runnable example programs (`examples/aether_01_shapes.nex` .. `examples/aether_12_game3d.nex`).
+  - Cross-platform C hardware abstraction reference layer (`runtime/aether_pal.h`, `runtime/aether_pal.c`).
+  - Comprehensive documentation (`docs/AETHER_GRAPHICS_MANUAL.md`, `docs/AETHER_API_REFERENCE.md`, `docs/AETHER_ARCHITECTURE.md`).
+
 ## 0.5 v1.0.0 — Formal Release: Complete Language Loop, First-Class Strings, High-Level I/O & 5/5 Domain Applications (2026-10-19)
 - **Self-Hosted Compiler Core Upgrades (`compiler/nexc.nex`)**:
   - **Variable-Path File I/O**: `file_open <var>` and `file_create <var>` now accept string pointer variables in addition to string literals.

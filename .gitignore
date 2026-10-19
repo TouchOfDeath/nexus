@@ -23,6 +23,8 @@ __pycache__/
 !compiler/nexc3.elf
 !compiler/nexc4.exe
 !compiler/nexc4.elf
+!compiler/nexc_xl.exe
+!compiler/nexc_xl.elf
 
 # Compiler temporary outputs
 compiler/code.nex

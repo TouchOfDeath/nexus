@@ -1,0 +1,75 @@
+# ==============================================================================
+#  AETHER EXAMPLE 06: Playable 2D Arcade Game (examples/aether_06_game2d_pong.nex)
+#  Complete 2D Brick-Breaker / Pong Arena with fixed-timestep clock, action-mapped
+#  input, circle-rect collision detection, synthesized SFX, and score HUD.
+# ==============================================================================
+
+import aether
+
+let win = ae_window_create("Aether 06 - 2D Brick Breaker & Pong Arena", 480, 320)
+ae_set_max_frames(5)
+
+ae_action_bind(1, AE_KEY_LEFT, AE_KEY_A, 0, AE_PAD_DPAD_LEFT)
+ae_action_bind(2, AE_KEY_RIGHT, AE_KEY_D, 0, AE_PAD_DPAD_RIGHT)
+
+let sfx_hit = ae_sound_synth_tone(AE_WAVE_SQUARE, 520, 45, 700)
+let clk = ae_clock_create(16)
+
+let paddle_x = 190
+let paddle_y = 285
+let paddle_w = 100
+let paddle_h = 12
+
+let ball_x = 240
+let ball_y = 260
+let ball_vx = 6
+let ball_vy = -8
+let ball_r = 7
+let score = 0
+
+while ae_begin_frame() {
+    ae_clock_accumulate(clk, 32)
+    while ae_clock_consume_step(clk) {
+        if ae_action_down(1) { let paddle_x = paddle_x - 8 }
+        if ae_action_down(2) { let paddle_x = paddle_x + 8 }
+        # AI auto-track in headless demo mode
+        if ball_x > paddle_x + 50 { let paddle_x = paddle_x + 5 }
+        if ball_x < paddle_x + 50 { let paddle_x = paddle_x - 5 }
+        let paddle_x = ae_clamp(paddle_x, 10, 370)
+
+        let ball_x = ball_x + ball_vx
+        let ball_y = ball_y + ball_vy
+        if ball_x < 12 { let ball_vx = 0 - ball_vx }
+        if ball_x > 468 { let ball_vx = 0 - ball_vx }
+        if ball_y < 40 {
+            let ball_vy = 0 - ball_vy
+            let score = score + 100
+            ae_sound_play(sfx_hit, 800)
+        }
+        if ae_collide_circle_rect(ball_x, ball_y, ball_r, paddle_x, paddle_y, paddle_w, paddle_h) {
+            let ball_vy = 0 - ae_abs(ball_vy)
+            let score = score + 50
+            ae_sound_play(sfx_hit, 900)
+        }
+    }
+
+    ae_clear(AE_COLOR_NAVY)
+    # Draw bricks row
+    let b = 0
+    while b < 6 {
+        let bx = 25 + b * 72
+        ae_fill_rounded_rect(bx, 45, 64, 18, 4, AE_COLOR_CORAL)
+        let b = b + 1
+    }
+
+    # Draw paddle & ball
+    ae_fill_rounded_rect(paddle_x, paddle_y, paddle_w, paddle_h, 5, AE_COLOR_CYAN)
+    ae_fill_circle(ball_x, ball_y, ball_r, AE_COLOR_GOLD)
+
+    ae_draw_text("AETHER BREAKOUT | SCORE: " + str(score), 16, 12, 1, AE_COLOR_WHITE)
+    ae_audio_update(16)
+    ae_end_frame()
+}
+
+print "AETHER_06_GAME2D_OK"
+ae_shutdown()

@@ -1,0 +1,80 @@
+# ==============================================================================
+#  AETHER FAILURE MODES & ERROR DIAGNOSTICS SUITE (tests/test_aether_failures.nex)
+#  Verifies graceful error reporting and recovery for invalid window sizes,
+#  missing files, malformed formats, shader compile errors & invalid handles
+# ==============================================================================
+
+import aether
+include "stdlib/assert.nex"
+
+ae_set_backend(AE_BACKEND_HEADLESS)
+ae_log_set_level(AE_LOG_NONE)
+
+# 1. Invalid Window Dimensions
+let bad_win1 = ae_window_create("Invalid Width", 0, 480)
+assert_eq bad_win1, 0
+assert_eq ae_get_error(), AE_ERR_WINDOW
+ae_clear_error()
+
+let bad_win2 = ae_window_create("Invalid Height", 640, -10)
+assert_eq bad_win2, 0
+assert_eq ae_get_error(), AE_ERR_WINDOW
+ae_clear_error()
+
+let win = ae_window_create("Valid Window", 320, 240)
+assert_ne win, 0
+assert_eq ae_get_error(), AE_OK
+
+# 2. Missing Texture Asset -> Records AE_ERR_ASSET_NOT_FOUND & returns valid fallback texture
+let fallback_tex = ae_texture_load_ppm("/tmp/non_existent_aether_tex_999.ppm")
+assert_ne fallback_tex, 0
+assert_eq ae_get_error(), AE_ERR_ASSET_NOT_FOUND
+ae_clear_error()
+
+# 3. Missing OBJ Mesh Asset -> Records AE_ERR_ASSET_NOT_FOUND
+let bad_mesh = ae_mesh_load_obj("/tmp/non_existent_aether_mesh_999.obj")
+assert_eq bad_mesh, 0
+assert_eq ae_get_error(), AE_ERR_ASSET_NOT_FOUND
+ae_clear_error()
+
+# 4. Malformed OBJ String -> Records AE_ERR_INVALID_FORMAT
+let bad_obj = ae_mesh_from_obj_str("comment only with no vertices")
+assert_eq bad_obj, 0
+assert_eq ae_get_error(), AE_ERR_INVALID_FORMAT
+ae_clear_error()
+
+# 5. Missing WAV Audio Asset -> Records AE_ERR_ASSET_NOT_FOUND
+let bad_wav = ae_sound_load_wav("/tmp/non_existent_aether_audio_999.wav")
+assert_eq bad_wav, 0
+assert_eq ae_get_error(), AE_ERR_ASSET_NOT_FOUND
+ae_clear_error()
+
+# 6. Shader Compilation Failure & Unknown Uniform Diagnostics
+let bad_sh1 = ae_shader_create(AE_SHADER_CUSTOM, "", "fs_main")
+assert_eq bad_sh1, 0
+assert_eq ae_get_error(), AE_ERR_SHADER_COMPILE
+ae_clear_error()
+
+let bad_sh2 = ae_shader_create(AE_SHADER_CUSTOM, "!INVALID_GLSL_SYNTAX", "fs_main")
+assert_eq bad_sh2, 0
+assert_eq ae_get_error(), AE_ERR_SHADER_COMPILE
+ae_clear_error()
+
+let valid_sh = ae_shader_create(AE_SHADER_CUSTOM, "vs_main", "fs_main")
+assert_ne valid_sh, 0
+assert_eq ae_shader_set_uniform_int(0, "u_color", 123), 0
+assert_eq ae_get_error(), AE_ERR_INVALID_HANDLE
+ae_clear_error()
+
+assert_eq ae_shader_set_uniform_int(valid_sh, "u_unknown_param", 42), 0
+assert_eq ae_get_error(), AE_ERR_SHADER_COMPILE
+ae_clear_error()
+
+# 7. Null Sound Handle Playback
+assert_eq ae_sound_play(0, 1000), -1
+assert_eq ae_get_error(), AE_ERR_INVALID_HANDLE
+ae_clear_error()
+
+ae_shutdown()
+print "AETHER_FAILURES_TEST_PASS"
+call nx_assert_summary

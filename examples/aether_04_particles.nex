@@ -1,0 +1,80 @@
+# ==============================================================================
+#  AETHER EXAMPLE 04: 2D Particle System (examples/aether_04_particles.nex)
+#  Demonstrates an additive-blended 2D particle emitter with velocity, gravity,
+#  lifetime decay, and HSV color-over-life gradients.
+# ==============================================================================
+
+import aether
+
+let win = ae_window_create("Aether 04 - 2D Particle System", 480, 320)
+ae_set_max_frames(4)
+
+const MAX_PARTICLES = 48
+# Each particle: 48 bytes (px_fp, py_fp, vx_fp, vy_fp, life_ms, max_life_ms)
+let pbuf = alloc 2304
+
+let i = 0
+while i < MAX_PARTICLES {
+    let off = i * 48
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    let ang = (i * 360) / MAX_PARTICLES
+    let spd = 80 + (i % 5) * 35
+    let vx = (ae_cos_deg(ang) * spd) / 1000
+    let vy = (ae_sin_deg(ang) * spd) / 1000 - 40
+    store64 [pbuf + off] 240000
+    store64 [pbuf + off1] 180000
+    store64 [pbuf + off2] vx * 1000
+    store64 [pbuf + off3] vy * 1000
+    store64 [pbuf + off4] 800 - (i * 10)
+    store64 [pbuf + off5] 1000
+    let i = i + 1
+}
+
+while ae_begin_frame() {
+    ae_clear(AE_COLOR_BLACK)
+    ae_set_blend_mode(AE_BLEND_ADDITIVE)
+
+    let p = 0
+    while p < MAX_PARTICLES {
+        let off = p * 48
+        let off1 = off + 8
+        let off2 = off + 16
+        let off3 = off + 24
+        let off4 = off + 32
+        let off5 = off + 40
+        let px = load64 [pbuf + off]
+        let py = load64 [pbuf + off1]
+        let vx = load64 [pbuf + off2]
+        let vy = load64 [pbuf + off3] + 4500
+        let life = load64 [pbuf + off4] - 60
+        let mlife = load64 [pbuf + off5]
+        if life <= 0 {
+            let px = 240000
+            let py = 180000
+            let life = mlife
+        }
+        let px = px + vx
+        let py = py + vy
+        store64 [pbuf + off] px
+        store64 [pbuf + off1] py
+        store64 [pbuf + off3] vy
+        store64 [pbuf + off4] life
+
+        let hue = 10 + ((mlife - life) * 220) / mlife
+        let col = ae_color_from_hsv(hue, 90, 100)
+        let rad = 3 + (life * 6) / mlife
+        ae_fill_circle(px / 1000, py / 1000, rad, col)
+        let p = p + 1
+    }
+
+    ae_set_blend_mode(AE_BLEND_ALPHA)
+    ae_draw_text("ADDITIVE PARTICLE FOUNTAIN (48 EMITTERS)", 20, 16, 1, AE_COLOR_GOLD)
+    ae_end_frame()
+}
+
+print "AETHER_04_PARTICLES_OK"
+ae_shutdown()

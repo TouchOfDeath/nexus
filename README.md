@@ -22,6 +22,25 @@ NEXUS emits true native binaries across three major operating systems:
 
 ---
 
+## 🎮 AETHER: The 2D & 3D Graphics, Audio & Game Engine (v1.1.0)
+
+**Aether** (`import aether` / `stdlib/aether.nex`) is the first major, production-oriented 2D and 3D graphics, audio, input, asset, and game development library for Nexus. Written 100% in pure Nexus source code, Aether runs directly on bare-metal operating systems with **0% C runtime and 0% external library dependencies**.
+
+### Key Subsystems
+- **Window & Application Lifecycle (`stdlib/aether/window.nex`)**: High-DPI multi-window support, dynamic resize, VSync/FPS pacing, bare-metal X11 wire protocol, and deterministic offscreen rendering (`AE_BACKEND_HEADLESS`).
+- **2D Rendering Engine (`stdlib/aether/gfx2d.nex`)**: Antialiased primitives, thick lines, gradients, alpha/additive/multiply blending, scissor clipping, `AeCamera2D` (pan/zoom/rotation & world-to-screen picking), textures, spritesheets, `AeAnimator`, command batching, and 8x8 bitmap typography.
+- **3D Graphics Engine & Scene Graph (`stdlib/aether/gfx3d.nex`)**: Vertex/index buffers (`AeMesh`), procedural cube/plane/sphere/pyramid generators, Wavefront `.obj` loader, 32-bit Z-buffer rasterizer, backface culling, 7 programmable shader profiles (Lambert, Blinn-Phong, Toon, Normal, Wireframe), directional/point lights, planar shadow mapping, skybox, offscreen `AeRenderTarget` with post-processing, and hierarchical `AeNode3D` scene graphs.
+- **16-Voice Stereo Audio Engine (`stdlib/aether/audio.nex`)**: Procedural waveform synthesis (Sine, Square, Triangle, Sawtooth, Noise, Sweeps), RIFF/WAVE `.wav` loader & exporter, volume/pitch/pan modulation, and 3D spatial audio distance/panning attenuation.
+- **Input & Action Mapping (`stdlib/aether/input.nex`)**: Keyboard transitions, separate printable text input queue, mouse deltas/wheel, gamepad axes/deadzones, focus-loss key release, and abstract action mapping.
+- **Asset Manager & Game Utilities (`stdlib/aether/assets.nex`, `stdlib/aether/game.nex`)**: Ref-counted asset caching with missing-asset fallbacks, fixed-timestep `AeClock`, cooldown `AeTimer`, 2D/3D collision detection & raycasting, and telemetry HUD overlays.
+
+Comprehensive documentation:
+- 📖 [Aether Developer Manual & User Guide](docs/AETHER_GRAPHICS_MANUAL.md)
+- 📋 [Aether API Reference Specification](docs/AETHER_API_REFERENCE.md)
+- ⚙️ [Aether Systems Architecture & Internals](docs/AETHER_ARCHITECTURE.md)
+
+---
+
 ## 🚀 Recent Release Highlights (v8.9 – v1.0.0)
 
 - **v1.0.0 — Formal Language Release & Ecosystem Completion (2026-10-19)**:

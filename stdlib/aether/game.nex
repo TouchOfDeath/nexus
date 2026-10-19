@@ -1,0 +1,248 @@
+# ==============================================================================
+#  AETHER GAME UTILITIES, COLLISION, TIMERS & DEBUGGER (stdlib/aether/game.nex)
+#  Fixed-Timestep & Delta-Time Game Loop Clock, Cooldown Timers,
+#  2D & 3D Collision Detection & Raycasting, Debug Wireframe/HUD Renderer,
+#  and Scene State Transitions
+# ==============================================================================
+
+include "stdlib/aether/assets.nex"
+
+struct AeClock {
+    fixed_dt_ms
+    accum_ms
+    total_ms
+    steps_taken
+    alpha_fp
+}
+
+struct AeTimer {
+    duration_ms
+    elapsed_ms
+    looping
+    finished
+    active
+}
+
+# ------------------------------------------------------------------------------
+# Fixed-Timestep & Variable Delta-Time Game Loop Clock
+# ------------------------------------------------------------------------------
+fn ae_clock_create(fixed_dt_ms = 16) {
+    if fixed_dt_ms <= 0 { let fixed_dt_ms = 16 }
+    let clk = alloc 40
+    store64 [clk + 0] fixed_dt_ms
+    store64 [clk + 8] 0
+    store64 [clk + 16] 0
+    store64 [clk + 24] 0
+    store64 [clk + 32] 0
+    return clk
+}
+
+fn ae_clock_accumulate(clk, frame_dt_ms) {
+    if frame_dt_ms < 0 { let frame_dt_ms = 0 }
+    if frame_dt_ms > 250 { let frame_dt_ms = 250 }
+    let acc = load64 [clk + 8] + frame_dt_ms
+    let tot = load64 [clk + 16] + frame_dt_ms
+    store64 [clk + 8] acc
+    store64 [clk + 16] tot
+    return acc
+}
+
+fn ae_clock_consume_step(clk) {
+    let fdt = load64 [clk + 0]
+    let acc = load64 [clk + 8]
+    if acc >= fdt {
+        let rem = acc - fdt
+        store64 [clk + 8] rem
+        let st = load64 [clk + 24] + 1
+        store64 [clk + 24] st
+        store64 [clk + 32] (rem * 1000) / fdt
+        return 1
+    }
+    store64 [clk + 32] (acc * 1000) / fdt
+    return 0
+}
+
+fn ae_clock_alpha_fp(clk) {
+    let a = load64 [clk + 32]
+    return a
+}
+
+# ------------------------------------------------------------------------------
+# Gameplay Timers & Cooldowns
+# ------------------------------------------------------------------------------
+fn ae_timer_create(duration_ms, looping = 0) {
+    if duration_ms <= 0 { let duration_ms = 1 }
+    let t = alloc 40
+    store64 [t + 0] duration_ms
+    store64 [t + 8] 0
+    store64 [t + 16] looping
+    store64 [t + 24] 0
+    store64 [t + 32] 1
+    return t
+}
+
+fn ae_timer_update(t, dt_ms) {
+    if t == 0 { return 0 }
+    let act = load64 [t + 32]
+    if act == 0 { return 0 }
+    let dur = load64 [t + 0]
+    let el = load64 [t + 8] + dt_ms
+    let looping = load64 [t + 16]
+    if el >= dur {
+        if looping == 1 {
+            let el = el % dur
+            store64 [t + 8] el
+            store64 [t + 24] 1
+            return 1
+        }
+        store64 [t + 8] dur
+        store64 [t + 24] 1
+        store64 [t + 32] 0
+        return 1
+    }
+    store64 [t + 8] el
+    store64 [t + 24] 0
+    return 0
+}
+
+fn ae_timer_is_finished(t) {
+    let f = load64 [t + 24]
+    return f
+}
+
+fn ae_timer_progress_fp(t) {
+    let dur = load64 [t + 0]
+    let el = load64 [t + 8]
+    if dur <= 0 { return 1000 }
+    let p = ae_clamp((el * 1000) / dur, 0, 1000)
+    return p
+}
+
+fn ae_timer_reset(t) {
+    store64 [t + 8] 0
+    store64 [t + 24] 0
+    store64 [t + 32] 1
+    return t
+}
+
+# ------------------------------------------------------------------------------
+# 2D & 3D Collision Detection & Raycasting
+# ------------------------------------------------------------------------------
+fn ae_collide_point_rect(px, py, rx, ry, rw, rh) {
+    if px < rx { return 0 }
+    if py < ry { return 0 }
+    if px >= rx + rw { return 0 }
+    if py >= ry + rh { return 0 }
+    return 1
+}
+
+fn ae_collide_point_circle(px, py, cx, cy, radius) {
+    let dx = px - cx
+    let dy = py - cy
+    if dx * dx + dy * dy <= radius * radius { return 1 }
+    return 0
+}
+
+fn ae_collide_rect_rect(x1, y1, w1, h1, x2, y2, w2, h2) {
+    if x1 + w1 <= x2 { return 0 }
+    if x2 + w2 <= x1 { return 0 }
+    if y1 + h1 <= y2 { return 0 }
+    if y2 + h2 <= y1 { return 0 }
+    return 1
+}
+
+fn ae_collide_circle_circle(x1, y1, r1, x2, y2, r2) {
+    let dx = x2 - x1
+    let dy = y2 - y1
+    let rsum = r1 + r2
+    if dx * dx + dy * dy <= rsum * rsum { return 1 }
+    return 0
+}
+
+fn ae_collide_circle_rect(cx, cy, radius, rx, ry, rw, rh) {
+    let closest_x = ae_clamp(cx, rx, rx + rw)
+    let closest_y = ae_clamp(cy, ry, ry + rh)
+    let dx = cx - closest_x
+    let dy = cy - closest_y
+    if dx * dx + dy * dy <= radius * radius { return 1 }
+    return 0
+}
+
+fn ae_collide_sphere_sphere(x1_fp, y1_fp, z1_fp, r1_fp, x2_fp, y2_fp, z2_fp, r2_fp) {
+    let dx = x2_fp - x1_fp
+    let dy = y2_fp - y1_fp
+    let dz = z2_fp - z1_fp
+    let rsum = r1_fp + r2_fp
+    let d2 = dx * dx + dy * dy + dz * dz
+    if d2 <= rsum * rsum { return 1 }
+    return 0
+}
+
+fn ae_collide_aabb_aabb(box_a, box_b) {
+    let r = ae_aabb_intersects(box_a, box_b)
+    return r
+}
+
+fn ae_raycast_3d_plane_y(ray, plane_y_fp) {
+    let oy = load64 [ray + 8]
+    let dy = load64 [ray + 32]
+    if dy == 0 { return 0 - 1 }
+    let t_fp = ((plane_y_fp - oy) * 1000) / dy
+    if t_fp < 0 { return 0 - 1 }
+    return t_fp
+}
+
+# ------------------------------------------------------------------------------
+# Debug Visualization (2D Grid, Bounding Boxes, Velocity Vectors, 3D Axes & HUD)
+# ------------------------------------------------------------------------------
+fn ae_debug_draw_grid_2d(cell_size, color) {
+    if cell_size <= 4 { let cell_size = 32 }
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let x = 0
+    while x < fbw {
+        ae_draw_line_raw(x, 0, x, fbh - 1, color)
+        let x = x + cell_size
+    }
+    let y = 0
+    while y < fbh {
+        ae_draw_line_raw(0, y, fbw - 1, y, color)
+        let y = y + cell_size
+    }
+    return 1
+}
+
+fn ae_debug_draw_aabb_2d(x, y, w, h, color) {
+    ae_stroke_rect(x, y, w, h, 1, color)
+    ae_draw_line(x, y, x + w - 1, y + h - 1, color)
+    return 1
+}
+
+fn ae_debug_draw_hud(x = 8, y = 8) {
+    let fps = ae_fps()
+    let dc = ae_perf_draw_calls()
+    let tris = ae_perf_triangles()
+    let vc = ae_perf_vertices()
+    ae_fill_rounded_rect(x, y, 200, 44, 4, ae_rgba(15, 23, 42, 200))
+    ae_stroke_rect(x, y, 200, 44, 1, AE_COLOR_CYAN)
+    let line1 = "AETHER ENGINE | FPS: " + str(fps)
+    let line2 = "DRAWS: " + str(dc) + " V:" + str(vc) + " T:" + str(tris)
+    ae_draw_text(line1, x + 8, y + 8, 1, AE_COLOR_CYAN)
+    ae_draw_text(line2, x + 8, y + 24, 1, AE_COLOR_LIGHT_GRAY)
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Scene State & Fade Transition Helper
+# ------------------------------------------------------------------------------
+fn ae_transition_draw_fade(progress_fp, color = 2130706432) {
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let a = ae_clamp((progress_fp * 255) / 1000, 0, 255)
+    let c = ae_color_with_alpha(color, a)
+    let prev_b = ae_get_blend_mode()
+    ae_set_blend_mode(AE_BLEND_ALPHA)
+    ae_fill_rect(0, 0, fbw, fbh, c)
+    ae_set_blend_mode(prev_b)
+    return 1
+}

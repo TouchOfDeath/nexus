@@ -1,0 +1,1006 @@
+# ==============================================================================
+#                  AETHER GRAPHICS ENGINE FOR NEXUS: MATH MODULE
+#                       stdlib/aether/math.nex
+#   Vectors (2D/3D/4D), 4x4 Matrices, Quaternions, Projections, Rays, AABBs,
+#   Intersections, Easing & Trigonometry
+#
+#   CONVENTIONS:
+#   - Fixed-Point Scale: AE_ONE = 1000 (1.000 unit = 1000 milli-units).
+#   - 3D Coordinate System: Right-Handed (+X Right, +Y Up, -Z Forward).
+#   - 2D Screen Space: Origin (0,0) Top-Left (+X Right, +Y Down).
+#   - Matrices: Row-major 4x4 (16 x 64-bit integers, offset = (row*4 + col)*8).
+#   - Angles: Degrees (integer degrees).
+# ==============================================================================
+
+include "stdlib/aether/core.nex"
+
+struct AeVec2 {
+    x: int,
+    y: int
+}
+
+struct AeVec3 {
+    x: int,
+    y: int,
+    z: int
+}
+
+struct AeVec4 {
+    x: int,
+    y: int,
+    z: int,
+    w: int
+}
+
+struct AeQuat {
+    x: int,
+    y: int,
+    z: int,
+    w: int
+}
+
+struct AeRect {
+    x: int,
+    y: int,
+    w: int,
+    h: int
+}
+
+struct AeAABB {
+    min_x: int,
+    min_y: int,
+    min_z: int,
+    max_x: int,
+    max_y: int,
+    max_z: int
+}
+
+struct AeRay {
+    ox: int,
+    oy: int,
+    oz: int,
+    dx: int,
+    dy: int,
+    dz: int
+}
+
+# ------------------------------------------------------------------------------
+# Basic Fixed-Point, Float Bridge, Clamping & Easing Utilities
+# ------------------------------------------------------------------------------
+fn ae_f2fp(f_val) {
+    let scaled = fmul f_val 1000.0
+    let iv = ftoi scaled
+    return iv
+}
+
+fn ae_fp2f(fp_val) {
+    let fv = itof fp_val
+    let res = fdiv fv 1000.0
+    return res
+}
+
+fn ae_min(a, b) {
+    if a < b { return a }
+    return b
+}
+
+fn ae_max(a, b) {
+    if a > b { return a }
+    return b
+}
+
+fn ae_clamp(v, lo, hi) {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}
+
+fn ae_abs(v) {
+    if v < 0 {
+        let neg = 0 - v
+        return neg
+    }
+    return v
+}
+
+fn ae_sign(v) {
+    if v > 0 { return 1 }
+    if v < 0 {
+        let neg = 0 - 1
+        return neg
+    }
+    return 0
+}
+
+fn ae_fp_mul(a, b) {
+    let res = (a * b) / 1000
+    return res
+}
+
+fn ae_fp_div(a, b) {
+    if b == 0 { return 0 }
+    let res = (a * 1000) / b
+    return res
+}
+
+fn ae_isqrt(n) {
+    if n <= 0 { return 0 }
+    if n < 4 { return 1 }
+    let x = n
+    let y = (x + 1) / 2
+    while y < x {
+        let x = y
+        let y = (x + n / x) / 2
+    }
+    return x
+}
+
+fn ae_lerp(a, b, t_fp) {
+    let t = ae_clamp(t_fp, 0, 1000)
+    let res = a + ((b - a) * t) / 1000
+    return res
+}
+
+fn ae_smoothstep(edge0, edge1, x) {
+    if edge1 <= edge0 { return 0 }
+    let t = ((x - edge0) * 1000) / (edge1 - edge0)
+    let t = ae_clamp(t, 0, 1000)
+    let t2 = (t * t) / 1000
+    let factor = 3000 - 2 * t
+    let res = (t2 * factor) / 1000
+    return res
+}
+
+fn ae_ease_in_quad(t_fp) {
+    let t = ae_clamp(t_fp, 0, 1000)
+    let res = (t * t) / 1000
+    return res
+}
+
+fn ae_ease_out_quad(t_fp) {
+    let t = ae_clamp(t_fp, 0, 1000)
+    let inv = 1000 - t
+    let res = 1000 - (inv * inv) / 1000
+    return res
+}
+
+fn ae_ease_in_out_cubic(t_fp) {
+    let t = ae_clamp(t_fp, 0, 1000)
+    if t < 500 {
+        let t2 = (t * t) / 1000
+        let t3 = (t2 * t) / 1000
+        let res = 4 * t3
+        return res
+    }
+    let u = 2000 - 2 * t
+    let u2 = (u * u) / 1000
+    let u3 = (u2 * u) / 1000
+    let res = 1000 - u3 / 2
+    return res
+}
+
+# ------------------------------------------------------------------------------
+# Trigonometry Engine (1.000 = 1000 Fixed-Point)
+# ------------------------------------------------------------------------------
+fn ae_sin_deg(deg) {
+    let a = deg % 360
+    if a < 0 { let a = a + 360 }
+    let sign = 1
+    if a >= 180 {
+        let a = a - 180
+        let sign = 0 - 1
+    }
+    if a > 90 {
+        let a = 180 - a
+    }
+    let p = a * (180 - a)
+    let num = 4 * p * 1000
+    let den = 40500 - p
+    let val = (num + den / 2) / den
+    if a == 45 { let val = 707 }
+    let res = val * sign
+    return res
+}
+
+fn ae_cos_deg(deg) {
+    let res = ae_sin_deg(deg + 90)
+    return res
+}
+
+fn ae_tan_deg(deg) {
+    let c = ae_cos_deg(deg)
+    if c == 0 { return 1000000 }
+    let s = ae_sin_deg(deg)
+    let res = (s * 1000) / c
+    return res
+}
+
+fn ae_atan2_deg(y, x) {
+    if x == 0 {
+        if y == 0 { return 0 }
+    }
+    let ay = ae_abs(y)
+    let ax = ae_abs(x)
+    let angle = 0
+    if ax > ay {
+        let r = (ay * 1000) / ax
+        let corr = (156 * (1000 - r)) / 1000
+        let angle = (r * (450 + corr)) / 10000
+    } else {
+        let r = (ax * 1000) / ay
+        let corr = (156 * (1000 - r)) / 1000
+        let sub_a = (r * (450 + corr)) / 10000
+        let angle = 90 - sub_a
+    }
+    if x < 0 {
+        let angle = 180 - angle
+    }
+    if y < 0 {
+        let angle = 0 - angle
+    }
+    return angle
+}
+
+# ------------------------------------------------------------------------------
+# 2D Vectors (AeVec2)
+# ------------------------------------------------------------------------------
+fn ae_vec2(x, y) {
+    let v = alloc 16
+    store64 [v + 0] x
+    store64 [v + 8] y
+    return v
+}
+
+fn ae_vec2_add(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let v = ae_vec2(ax + bx, ay + by)
+    return v
+}
+
+fn ae_vec2_sub(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let v = ae_vec2(ax - bx, ay - by)
+    return v
+}
+
+fn ae_vec2_scale(a, s_fp) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let v = ae_vec2((ax * s_fp) / 1000, (ay * s_fp) / 1000)
+    return v
+}
+
+fn ae_vec2_dot(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let d = (ax * bx + ay * by) / 1000
+    return d
+}
+
+fn ae_vec2_len(a) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let lsq = ax * ax + ay * ay
+    let l = ae_isqrt(lsq)
+    return l
+}
+
+fn ae_vec2_dist(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let dx = ax - bx
+    let dy = ay - by
+    let l = ae_isqrt(dx * dx + dy * dy)
+    return l
+}
+
+fn ae_vec2_normalize(a) {
+    let l = ae_vec2_len(a)
+    if l <= 0 {
+        let z = ae_vec2(0, 0)
+        return z
+    }
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let v = ae_vec2((ax * 1000) / l, (ay * 1000) / l)
+    return v
+}
+
+fn ae_vec2_rotate_deg(a, deg) {
+    let c = ae_cos_deg(deg)
+    let s = ae_sin_deg(deg)
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let rx = (ax * c - ay * s) / 1000
+    let ry = (ax * s + ay * c) / 1000
+    let v = ae_vec2(rx, ry)
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# 3D Vectors (AeVec3)
+# ------------------------------------------------------------------------------
+fn ae_vec3(x, y, z) {
+    let v = alloc 24
+    store64 [v + 0] x
+    store64 [v + 8] y
+    store64 [v + 16] z
+    return v
+}
+
+fn ae_vec3_set(v, x, y, z) {
+    store64 [v + 0] x
+    store64 [v + 8] y
+    store64 [v + 16] z
+    return v
+}
+
+fn ae_vec3_add(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let v = ae_vec3(ax + bx, ay + by, az + bz)
+    return v
+}
+
+fn ae_vec3_sub(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let v = ae_vec3(ax - bx, ay - by, az - bz)
+    return v
+}
+
+fn ae_vec3_scale(a, s_fp) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let v = ae_vec3((ax * s_fp) / 1000, (ay * s_fp) / 1000, (az * s_fp) / 1000)
+    return v
+}
+
+fn ae_vec3_dot(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let d = (ax * bx + ay * by + az * bz) / 1000
+    return d
+}
+
+fn ae_vec3_dot_raw(ax, ay, az, bx, by, bz) {
+    let d = (ax * bx + ay * by + az * bz) / 1000
+    return d
+}
+
+fn ae_vec3_cross(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let cx = (ay * bz - az * by) / 1000
+    let cy = (az * bx - ax * bz) / 1000
+    let cz = (ax * by - ay * bx) / 1000
+    let v = ae_vec3(cx, cy, cz)
+    return v
+}
+
+fn ae_vec3_len(a) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let lsq = ax * ax + ay * ay + az * az
+    let l = ae_isqrt(lsq)
+    return l
+}
+
+fn ae_vec3_dist(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let dx = ax - bx
+    let dy = ay - by
+    let dz = az - bz
+    let l = ae_isqrt(dx * dx + dy * dy + dz * dz)
+    return l
+}
+
+fn ae_vec3_normalize(a) {
+    let l = ae_vec3_len(a)
+    if l <= 0 {
+        let z = ae_vec3(0, 0, 0)
+        return z
+    }
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let v = ae_vec3((ax * 1000) / l, (ay * 1000) / l, (az * 1000) / l)
+    return v
+}
+
+fn ae_vec3_lerp(a, b, t_fp) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let x = ae_lerp(ax, bx, t_fp)
+    let y = ae_lerp(ay, by, t_fp)
+    let z = ae_lerp(az, bz, t_fp)
+    let v = ae_vec3(x, y, z)
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# 4D Vectors & Quaternions (AeVec4 / AeQuat)
+# ------------------------------------------------------------------------------
+fn ae_vec4(x, y, z, w) {
+    let v = alloc 32
+    store64 [v + 0] x
+    store64 [v + 8] y
+    store64 [v + 16] z
+    store64 [v + 24] w
+    return v
+}
+
+fn ae_quat_identity() {
+    let q = ae_vec4(0, 0, 0, 1000)
+    return q
+}
+
+fn ae_quat_from_axis_angle(ax, ay, az, deg) {
+    let half = deg / 2
+    let s = ae_sin_deg(half)
+    let c = ae_cos_deg(half)
+    let l = ae_isqrt(ax * ax + ay * ay + az * az)
+    if l <= 0 {
+        let qi = ae_quat_identity()
+        return qi
+    }
+    let qx = (ax * s) / l
+    let qy = (ay * s) / l
+    let qz = (az * s) / l
+    let q = ae_vec4(qx, qy, qz, c)
+    return q
+}
+
+fn ae_quat_mul(a, b) {
+    let ax = load64 [a + 0]
+    let ay = load64 [a + 8]
+    let az = load64 [a + 16]
+    let aw = load64 [a + 24]
+    let bx = load64 [b + 0]
+    let by = load64 [b + 8]
+    let bz = load64 [b + 16]
+    let bw = load64 [b + 24]
+    let rx = (aw * bx + ax * bw + ay * bz - az * by) / 1000
+    let ry = (aw * by - ax * bz + ay * bw + az * bx) / 1000
+    let rz = (aw * bz + ax * by - ay * bx + az * bw) / 1000
+    let rw = (aw * bw - ax * bx - ay * by - az * bz) / 1000
+    let q = ae_vec4(rx, ry, rz, rw)
+    return q
+}
+
+fn ae_quat_rotate_vec3(q, v) {
+    let qx = load64 [q + 0]
+    let qy = load64 [q + 8]
+    let qz = load64 [q + 16]
+    let qw = load64 [q + 24]
+    let vx = load64 [v + 0]
+    let vy = load64 [v + 8]
+    let vz = load64 [v + 16]
+    let tx = 2 * (qy * vz - qz * vy)
+    let ty = 2 * (qz * vx - qx * vz)
+    let tz = 2 * (qx * vy - qy * vx)
+    let dx = qw * tx + qy * tz - qz * ty
+    let dy = qw * ty + qz * tx - qx * tz
+    let dz = qw * tz + qx * ty - qy * tx
+    if dx >= 0 { let dx = dx + 500000 } else { let dx = dx - 500000 }
+    if dy >= 0 { let dy = dy + 500000 } else { let dy = dy - 500000 }
+    if dz >= 0 { let dz = dz + 500000 } else { let dz = dz - 500000 }
+    let rx = vx + dx / 1000000
+    let ry = vy + dy / 1000000
+    let rz = vz + dz / 1000000
+    let res = ae_vec3(rx, ry, rz)
+    return res
+}
+
+# ------------------------------------------------------------------------------
+# 4x4 Matrices (Row-Major, 16 x 64-bit Qwords = 128 Bytes, 1000 = 1.0)
+# ------------------------------------------------------------------------------
+fn ae_mat4_identity(m) {
+    let i = 0
+    while i < 16 {
+        store64 [m + i * 8] 0
+        let i = i + 1
+    }
+    store64 [m + 0] 1000
+    store64 [m + 40] 1000
+    store64 [m + 80] 1000
+    store64 [m + 120] 1000
+    return m
+}
+
+fn ae_mat4_new() {
+    let m = alloc 128
+    ae_mat4_identity(m)
+    return m
+}
+
+fn ae_mat4_copy(dst, src) {
+    let i = 0
+    while i < 16 {
+        let v = load64 [src + i * 8]
+        store64 [dst + i * 8] v
+        let i = i + 1
+    }
+    return dst
+}
+
+fn ae_mat4_mul(out, a, b) {
+    let tmp = alloc 128
+    let r = 0
+    while r < 4 {
+        let c = 0
+        while c < 4 {
+            let r_off = r * 32
+            let r_off1 = r_off + 8
+            let r_off2 = r_off + 16
+            let r_off3 = r_off + 24
+            let a0 = load64 [a + r_off]
+            let a1 = load64 [a + r_off1]
+            let a2 = load64 [a + r_off2]
+            let a3 = load64 [a + r_off3]
+            let c_off = c * 8
+            let c_off1 = c_off + 32
+            let c_off2 = c_off + 64
+            let c_off3 = c_off + 96
+            let b0 = load64 [b + c_off]
+            let b1 = load64 [b + c_off1]
+            let b2 = load64 [b + c_off2]
+            let b3 = load64 [b + c_off3]
+            let sum = (a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3) / 1000
+            let dst_off = r_off + c_off
+            store64 [tmp + dst_off] sum
+            let c = c + 1
+        }
+        let r = r + 1
+    }
+    ae_mat4_copy(out, tmp)
+    return out
+}
+
+fn ae_mat4_translation(m, tx, ty, tz) {
+    ae_mat4_identity(m)
+    store64 [m + 24] tx
+    store64 [m + 56] ty
+    store64 [m + 88] tz
+    return m
+}
+
+fn ae_mat4_scaling(m, sx, sy, sz) {
+    ae_mat4_identity(m)
+    store64 [m + 0] sx
+    store64 [m + 40] sy
+    store64 [m + 80] sz
+    return m
+}
+
+fn ae_mat4_rotation_x(m, deg) {
+    ae_mat4_identity(m)
+    let c = ae_cos_deg(deg)
+    let s = ae_sin_deg(deg)
+    let ns = 0 - s
+    store64 [m + 40] c
+    store64 [m + 48] ns
+    store64 [m + 72] s
+    store64 [m + 80] c
+    return m
+}
+
+fn ae_mat4_rotation_y(m, deg) {
+    ae_mat4_identity(m)
+    let c = ae_cos_deg(deg)
+    let s = ae_sin_deg(deg)
+    let ns = 0 - s
+    store64 [m + 0] c
+    store64 [m + 16] s
+    store64 [m + 64] ns
+    store64 [m + 80] c
+    return m
+}
+
+fn ae_mat4_rotation_z(m, deg) {
+    ae_mat4_identity(m)
+    let c = ae_cos_deg(deg)
+    let s = ae_sin_deg(deg)
+    let ns = 0 - s
+    store64 [m + 0] c
+    store64 [m + 8] ns
+    store64 [m + 32] s
+    store64 [m + 40] c
+    return m
+}
+
+fn ae_mat4_from_trs(m, tx, ty, tz, rx_deg, ry_deg, rz_deg, sx, sy, sz) {
+    let ms = ae_mat4_new()
+    let mrx = ae_mat4_new()
+    let mry = ae_mat4_new()
+    let mrz = ae_mat4_new()
+    let mt = ae_mat4_new()
+    ae_mat4_scaling(ms, sx, sy, sz)
+    ae_mat4_rotation_x(mrx, rx_deg)
+    ae_mat4_rotation_y(mry, ry_deg)
+    ae_mat4_rotation_z(mrz, rz_deg)
+    ae_mat4_translation(mt, tx, ty, tz)
+    ae_mat4_mul(m, mry, mrx)
+    ae_mat4_mul(m, mrz, m)
+    ae_mat4_mul(m, m, ms)
+    ae_mat4_mul(m, mt, m)
+    return m
+}
+
+fn ae_mat4_look_at(m, ex, ey, ez, tx, ty, tz, ux, uy, uz) {
+    let fx = ex - tx
+    let fy = ey - ty
+    let fz = ez - tz
+    let flen = ae_isqrt(fx * fx + fy * fy + fz * fz)
+    if flen <= 0 {
+        ae_mat4_identity(m)
+        return m
+    }
+    let fx = (fx * 1000) / flen
+    let fy = (fy * 1000) / flen
+    let fz = (fz * 1000) / flen
+
+    let rx = (uy * fz - uz * fy) / 1000
+    let ry = (uz * fx - ux * fz) / 1000
+    let rz = (ux * fy - uy * fx) / 1000
+    let rlen = ae_isqrt(rx * rx + ry * ry + rz * rz)
+    if rlen <= 0 {
+        let rx = 1000
+        let ry = 0
+        let rz = 0
+    } else {
+        let rx = (rx * 1000) / rlen
+        let ry = (ry * 1000) / rlen
+        let rz = (rz * 1000) / rlen
+    }
+
+    let vx = (fy * rz - fz * ry) / 1000
+    let vy = (fz * rx - fx * rz) / 1000
+    let vz = (fx * ry - fy * rx) / 1000
+
+    let dot_r = 0 - (rx * ex + ry * ey + rz * ez) / 1000
+    let dot_v = 0 - (vx * ex + vy * ey + vz * ez) / 1000
+    let dot_f = 0 - (fx * ex + fy * ey + fz * ez) / 1000
+
+    store64 [m + 0] rx
+    store64 [m + 8] ry
+    store64 [m + 16] rz
+    store64 [m + 24] dot_r
+
+    store64 [m + 32] vx
+    store64 [m + 40] vy
+    store64 [m + 48] vz
+    store64 [m + 56] dot_v
+
+    store64 [m + 64] fx
+    store64 [m + 72] fy
+    store64 [m + 80] fz
+    store64 [m + 88] dot_f
+
+    store64 [m + 96] 0
+    store64 [m + 104] 0
+    store64 [m + 112] 0
+    store64 [m + 120] 1000
+    return m
+}
+
+fn ae_mat4_perspective(m, fov_deg, aspect_fp, near_fp, far_fp) {
+    let i = 0
+    while i < 16 {
+        store64 [m + i * 8] 0
+        let i = i + 1
+    }
+    let half_fov = fov_deg / 2
+    if half_fov < 5 { let half_fov = 5 }
+    if half_fov > 85 { let half_fov = 85 }
+    let tan_half = ae_tan_deg(half_fov)
+    if tan_half <= 0 { let tan_half = 577 }
+    let f = (1000 * 1000) / tan_half
+    let asp = aspect_fp
+    if asp <= 0 { let asp = 1000 }
+    let m00 = (f * 1000) / asp
+    let m11 = f
+    let diff = far_fp - near_fp
+    if diff <= 0 { let diff = 1000 }
+    let m22 = (0 - (far_fp + near_fp) * 1000) / diff
+    let m23 = (0 - 2 * far_fp * near_fp) / diff
+    let neg1000 = 0 - 1000
+
+    store64 [m + 0] m00
+    store64 [m + 40] m11
+    store64 [m + 80] m22
+    store64 [m + 88] m23
+    store64 [m + 112] neg1000
+    return m
+}
+
+fn ae_mat4_ortho(m, left_fp, right_fp, bottom_fp, top_fp, near_fp, far_fp) {
+    ae_mat4_identity(m)
+    let rl = right_fp - left_fp
+    let tb = top_fp - bottom_fp
+    let fn_d = far_fp - near_fp
+    if rl == 0 { let rl = 1000 }
+    if tb == 0 { let tb = 1000 }
+    if fn_d == 0 { let fn_d = 1000 }
+    let m00 = 2000000 / rl
+    let m11 = 2000000 / tb
+    let m22 = (0 - 2000000) / fn_d
+    let tx = (0 - (right_fp + left_fp) * 1000) / rl
+    let ty = (0 - (top_fp + bottom_fp) * 1000) / tb
+    let tz = (0 - (far_fp + near_fp) * 1000) / fn_d
+    store64 [m + 0] m00
+    store64 [m + 40] m11
+    store64 [m + 80] m22
+    store64 [m + 24] tx
+    store64 [m + 56] ty
+    store64 [m + 88] tz
+    return m
+}
+
+fn ae_mat4_transform_vec4(m, x, y, z, w) {
+    let m0 = load64 [m + 0]
+    let m1 = load64 [m + 8]
+    let m2 = load64 [m + 16]
+    let m3 = load64 [m + 24]
+    let m4 = load64 [m + 32]
+    let m5 = load64 [m + 40]
+    let m6 = load64 [m + 48]
+    let m7 = load64 [m + 56]
+    let m8 = load64 [m + 64]
+    let m9 = load64 [m + 72]
+    let m10 = load64 [m + 80]
+    let m11 = load64 [m + 88]
+    let m12 = load64 [m + 96]
+    let m13 = load64 [m + 104]
+    let m14 = load64 [m + 112]
+    let m15 = load64 [m + 120]
+    let ox = (m0 * x + m1 * y + m2 * z + m3 * w) / 1000
+    let oy = (m4 * x + m5 * y + m6 * z + m7 * w) / 1000
+    let oz = (m8 * x + m9 * y + m10 * z + m11 * w) / 1000
+    let ow = (m12 * x + m13 * y + m14 * z + m15 * w) / 1000
+    return ox, oy, oz, ow
+}
+
+fn ae_mat4_transform_point(m, x, y, z) {
+    let m0 = load64 [m + 0]
+    let m1 = load64 [m + 8]
+    let m2 = load64 [m + 16]
+    let m3 = load64 [m + 24]
+    let m4 = load64 [m + 32]
+    let m5 = load64 [m + 40]
+    let m6 = load64 [m + 48]
+    let m7 = load64 [m + 56]
+    let m8 = load64 [m + 64]
+    let m9 = load64 [m + 72]
+    let m10 = load64 [m + 80]
+    let m11 = load64 [m + 88]
+    let ox = (m0 * x + m1 * y + m2 * z) / 1000 + m3
+    let oy = (m4 * x + m5 * y + m6 * z) / 1000 + m7
+    let oz = (m8 * x + m9 * y + m10 * z) / 1000 + m11
+    return ox, oy, oz
+}
+
+fn ae_mat4_transform_dir(m, x, y, z) {
+    let m0 = load64 [m + 0]
+    let m1 = load64 [m + 8]
+    let m2 = load64 [m + 16]
+    let m4 = load64 [m + 32]
+    let m5 = load64 [m + 40]
+    let m6 = load64 [m + 48]
+    let m8 = load64 [m + 64]
+    let m9 = load64 [m + 72]
+    let m10 = load64 [m + 80]
+    let ox = (m0 * x + m1 * y + m2 * z) / 1000
+    let oy = (m4 * x + m5 * y + m6 * z) / 1000
+    let oz = (m8 * x + m9 * y + m10 * z) / 1000
+    return ox, oy, oz
+}
+
+# ------------------------------------------------------------------------------
+# Bounding Boxes (AeAABB) and Rays (AeRay)
+# ------------------------------------------------------------------------------
+fn ae_aabb_new(min_x, min_y, min_z, max_x, max_y, max_z) {
+    let b = alloc 48
+    store64 [b + 0] min_x
+    store64 [b + 8] min_y
+    store64 [b + 16] min_z
+    store64 [b + 24] max_x
+    store64 [b + 32] max_y
+    store64 [b + 40] max_z
+    return b
+}
+
+fn ae_aabb_contains_point(b, px, py, pz) {
+    let min_x = load64 [b + 0]
+    let min_y = load64 [b + 8]
+    let min_z = load64 [b + 16]
+    let max_x = load64 [b + 24]
+    let max_y = load64 [b + 32]
+    let max_z = load64 [b + 40]
+    if px < min_x { return 0 }
+    if py < min_y { return 0 }
+    if pz < min_z { return 0 }
+    if px > max_x { return 0 }
+    if py > max_y { return 0 }
+    if pz > max_z { return 0 }
+    return 1
+}
+
+fn ae_aabb_intersects(a, b) {
+    let a_min_x = load64 [a + 0]
+    let a_min_y = load64 [a + 8]
+    let a_min_z = load64 [a + 16]
+    let a_max_x = load64 [a + 24]
+    let a_max_y = load64 [a + 32]
+    let a_max_z = load64 [a + 40]
+    let b_min_x = load64 [b + 0]
+    let b_min_y = load64 [b + 8]
+    let b_min_z = load64 [b + 16]
+    let b_max_x = load64 [b + 24]
+    let b_max_y = load64 [b + 32]
+    let b_max_z = load64 [b + 40]
+    if a_max_x < b_min_x { return 0 }
+    if a_min_x > b_max_x { return 0 }
+    if a_max_y < b_min_y { return 0 }
+    if a_min_y > b_max_y { return 0 }
+    if a_max_z < b_min_z { return 0 }
+    if a_min_z > b_max_z { return 0 }
+    return 1
+}
+
+fn ae_ray_new(ox, oy, oz, dx, dy, dz) {
+    let r = alloc 48
+    store64 [r + 0] ox
+    store64 [r + 8] oy
+    store64 [r + 16] oz
+    store64 [r + 24] dx
+    store64 [r + 32] dy
+    store64 [r + 40] dz
+    return r
+}
+
+fn ae_ray_at(r, t_fp) {
+    let rx = load64 [r + 0]
+    let ry = load64 [r + 8]
+    let rz = load64 [r + 16]
+    let rdx = load64 [r + 24]
+    let rdy = load64 [r + 32]
+    let rdz = load64 [r + 40]
+    let ox = rx + (rdx * t_fp) / 1000
+    let oy = ry + (rdy * t_fp) / 1000
+    let oz = rz + (rdz * t_fp) / 1000
+    return ox, oy, oz
+}
+
+# Returns hit distance t_fp (>= 0) or -1 if no intersection
+fn ae_ray_intersect_sphere(r, sx, sy, sz, radius_fp) {
+    let rx = load64 [r + 0]
+    let ry = load64 [r + 8]
+    let rz = load64 [r + 16]
+    let dx = load64 [r + 24]
+    let dy = load64 [r + 32]
+    let dz = load64 [r + 40]
+    let ox = rx - sx
+    let oy = ry - sy
+    let oz = rz - sz
+    let b = (ox * dx + oy * dy + oz * dz) / 1000
+    let c = (ox * ox + oy * oy + oz * oz - radius_fp * radius_fp) / 1000
+    let disc = b * b - c * 1000
+    if disc < 0 {
+        let miss = 0 - 1
+        return miss
+    }
+    let sq = ae_isqrt(disc)
+    let t0 = 0 - b - sq
+    if t0 >= 0 { return t0 }
+    let t1 = 0 - b + sq
+    if t1 >= 0 { return t1 }
+    let miss = 0 - 1
+    return miss
+}
+
+fn ae_ray_intersect_aabb(r, box) {
+    let ox = load64 [r + 0]
+    let oy = load64 [r + 8]
+    let oz = load64 [r + 16]
+    let dx = load64 [r + 24]
+    let dy = load64 [r + 32]
+    let dz = load64 [r + 40]
+    let min_x = load64 [box + 0]
+    let min_y = load64 [box + 8]
+    let min_z = load64 [box + 16]
+    let max_x = load64 [box + 24]
+    let max_y = load64 [box + 32]
+    let max_z = load64 [box + 40]
+
+    let tmin = 0 - 1000000000
+    let tmax = 1000000000
+    let miss = 0 - 1
+
+    if dx == 0 {
+        if ox < min_x { return miss }
+        if ox > max_x { return miss }
+    } else {
+        let tx1 = ((min_x - ox) * 1000) / dx
+        let tx2 = ((max_x - ox) * 1000) / dx
+        if tx1 > tx2 {
+            let tmp = tx1
+            let tx1 = tx2
+            let tx2 = tmp
+        }
+        if tx1 > tmin { let tmin = tx1 }
+        if tx2 < tmax { let tmax = tx2 }
+    }
+
+    if dy == 0 {
+        if oy < min_y { return miss }
+        if oy > max_y { return miss }
+    } else {
+        let ty1 = ((min_y - oy) * 1000) / dy
+        let ty2 = ((max_y - oy) * 1000) / dy
+        if ty1 > ty2 {
+            let tmp = ty1
+            let ty1 = ty2
+            let ty2 = tmp
+        }
+        if ty1 > tmin { let tmin = ty1 }
+        if ty2 < tmax { let tmax = ty2 }
+    }
+
+    if dz == 0 {
+        if oz < min_z { return miss }
+        if oz > max_z { return miss }
+    } else {
+        let tz1 = ((min_z - oz) * 1000) / dz
+        let tz2 = ((max_z - oz) * 1000) / dz
+        if tz1 > tz2 {
+            let tmp = tz1
+            let tz1 = tz2
+            let tz2 = tmp
+        }
+        if tz1 > tmin { let tmin = tz1 }
+        if tz2 < tmax { let tmax = tz2 }
+    }
+
+    if tmax < 0 { return miss }
+    if tmin > tmax { return miss }
+    if tmin >= 0 { return tmin }
+    return tmax
+}

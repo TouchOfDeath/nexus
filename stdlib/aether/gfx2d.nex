@@ -1,0 +1,1320 @@
+# ==============================================================================
+#  AETHER 2D GRAPHICS ENGINE (stdlib/aether/gfx2d.nex)
+#  Command-Batched 2D Renderer, Primitives, Alpha/Additive/Multiply Blending,
+#  Scissor Clipping, 2D Camera, Textures, Sprites, SpriteSheets, Animator & Fonts
+# ==============================================================================
+
+include "stdlib/aether/math.nex"
+include "stdlib/aether/window.nex"
+
+const AE_FILTER_NEAREST  = 0
+const AE_FILTER_BILINEAR = 1
+
+const AE_WRAP_REPEAT     = 0
+const AE_WRAP_CLAMP      = 1
+const AE_WRAP_MIRROR     = 2
+
+const AE_ALIGN_LEFT      = 0
+const AE_ALIGN_CENTER    = 1
+const AE_ALIGN_RIGHT     = 2
+
+struct AeCamera2D {
+    x
+    y
+    zoom
+    rot_deg
+    offset_x
+    offset_y
+}
+
+struct AeTexture {
+    width
+    height
+    pixels
+    filter
+    wrap
+}
+
+struct AeSprite {
+    tex
+    u0
+    v0
+    u1
+    v1
+    origin_x
+    origin_y
+    tint
+}
+
+struct AeSpriteSheet {
+    tex
+    cell_w
+    cell_h
+    cols
+    rows
+    total_frames
+}
+
+struct AeAnimator {
+    sheet
+    start_frame
+    frame_count
+    fps
+    looping
+    cur_frame
+    accum_ms
+    playing
+}
+
+# ------------------------------------------------------------------------------
+# Scissor Clipping & Blend Mode State
+# ------------------------------------------------------------------------------
+fn ae_set_blend_mode(mode) {
+    ae_ensure_ctx()
+    let prev = load64 [_ae_ctx + 2592]
+    if prev != mode {
+        store64 [_ae_ctx + 2592] mode
+        ae_perf_add_state_change()
+    }
+    return mode
+}
+
+fn ae_get_blend_mode() {
+    let m = load64 [_ae_ctx + 2592]
+    return m
+}
+
+fn ae_scissor_begin(x, y, w, h) {
+    ae_ensure_ctx()
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let x0 = ae_clamp(x, 0, fbw)
+    let y0 = ae_clamp(y, 0, fbh)
+    let x1 = ae_clamp(x + w, 0, fbw)
+    let y1 = ae_clamp(y + h, 0, fbh)
+    store64 [_ae_ctx + 2560] x0
+    store64 [_ae_ctx + 2568] y0
+    store64 [_ae_ctx + 2576] x1 - x0
+    store64 [_ae_ctx + 2584] y1 - y0
+    store64 [_ae_ctx + 2600] 1
+    ae_perf_add_state_change()
+    return 1
+}
+
+fn ae_scissor_end() {
+    ae_ensure_ctx()
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    store64 [_ae_ctx + 2560] 0
+    store64 [_ae_ctx + 2568] 0
+    store64 [_ae_ctx + 2576] fbw
+    store64 [_ae_ctx + 2584] fbh
+    store64 [_ae_ctx + 2600] 0
+    ae_perf_add_state_change()
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 2D Camera System (Pan, Zoom, Rotation, World <-> Screen Conversion)
+# ------------------------------------------------------------------------------
+fn ae_camera2d_new(x = 0, y = 0, zoom_fp = 1000, rot_deg = 0) {
+    let cam = alloc 48
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    store64 [cam + 0] x
+    store64 [cam + 8] y
+    store64 [cam + 16] zoom_fp
+    store64 [cam + 24] rot_deg
+    store64 [cam + 32] fbw / 2
+    store64 [cam + 40] fbh / 2
+    return cam
+}
+
+fn ae_camera2d_set_offset(cam, ox, oy) {
+    store64 [cam + 32] ox
+    store64 [cam + 40] oy
+    return cam
+}
+
+fn ae_camera2d_begin(cam) {
+    ae_ensure_ctx()
+    let cx = load64 [cam + 0]
+    let cy = load64 [cam + 8]
+    let cz = load64 [cam + 16]
+    let cr = load64 [cam + 24]
+    let ox = load64 [cam + 32]
+    let oy = load64 [cam + 40]
+    if cz <= 10 { let cz = 1000 }
+    store64 [_ae_ctx + 2608] 1
+    store64 [_ae_ctx + 2616] cx
+    store64 [_ae_ctx + 2624] cy
+    store64 [_ae_ctx + 2632] cz
+    store64 [_ae_ctx + 2640] cr
+    store64 [_ae_ctx + 2648] ox
+    store64 [_ae_ctx + 2656] oy
+    return 1
+}
+
+fn ae_camera2d_end() {
+    store64 [_ae_ctx + 2608] 0
+    return 1
+}
+
+fn ae_world_to_screen_2d(wx, wy) {
+    let active = load64 [_ae_ctx + 2608]
+    if active == 0 {
+        return wx, wy
+    }
+    let cx = load64 [_ae_ctx + 2616]
+    let cy = load64 [_ae_ctx + 2624]
+    let cz = load64 [_ae_ctx + 2632]
+    let cr = load64 [_ae_ctx + 2640]
+    let ox = load64 [_ae_ctx + 2648]
+    let oy = load64 [_ae_ctx + 2656]
+    let dx = wx - cx
+    let dy = wy - cy
+    if cr != 0 {
+        let c = ae_cos_deg(cr)
+        let s = ae_sin_deg(cr)
+        let rdx = (dx * c - dy * s) / 1000
+        let rdy = (dx * s + dy * c) / 1000
+        let dx = rdx
+        let dy = rdy
+    }
+    let sx = ox + (dx * cz) / 1000
+    let sy = oy + (dy * cz) / 1000
+    return sx, sy
+}
+
+fn ae_screen_to_world_2d(sx, sy) {
+    let active = load64 [_ae_ctx + 2608]
+    if active == 0 {
+        return sx, sy
+    }
+    let cx = load64 [_ae_ctx + 2616]
+    let cy = load64 [_ae_ctx + 2624]
+    let cz = load64 [_ae_ctx + 2632]
+    let cr = load64 [_ae_ctx + 2640]
+    let ox = load64 [_ae_ctx + 2648]
+    let oy = load64 [_ae_ctx + 2656]
+    if cz <= 0 { let cz = 1000 }
+    let dx = ((sx - ox) * 1000) / cz
+    let dy = ((sy - oy) * 1000) / cz
+    if cr != 0 {
+        let neg_cr = 0 - cr
+        let c = ae_cos_deg(neg_cr)
+        let s = ae_sin_deg(neg_cr)
+        let rdx = (dx * c - dy * s) / 1000
+        let rdy = (dx * s + dy * c) / 1000
+        let dx = rdx
+        let dy = rdy
+    }
+    let wx = cx + dx
+    let wy = cy + dy
+    return wx, wy
+}
+
+# ------------------------------------------------------------------------------
+# Low-Level Clipped & Blended Pixel / Span Rasterizer
+# ------------------------------------------------------------------------------
+fn ae_put_pixel_raw(x, y, color) {
+    let sx0 = load64 [_ae_ctx + 2560]
+    let sy0 = load64 [_ae_ctx + 2568]
+    let sw = load64 [_ae_ctx + 2576]
+    let sh = load64 [_ae_ctx + 2584]
+    if x < sx0 { return 0 }
+    if y < sy0 { return 0 }
+    if x >= sx0 + sw { return 0 }
+    if y >= sy0 + sh { return 0 }
+
+    let fbw = load64 [_ae_ctx + 552]
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let off = (y * fbw + x) * 4
+    let bmode = load64 [_ae_ctx + 2592]
+    let a = (color / 16777216) % 128
+    if bmode == 0 {
+        store32 [cbuf + off] color
+        return 1
+    }
+    if bmode == 1 {
+        if a >= 127 {
+            store32 [cbuf + off] color
+            return 1
+        }
+        if a <= 0 { return 0 }
+    }
+    let dst = load32 [cbuf + off]
+    let out_c = ae_blend_color(dst, color, bmode)
+    store32 [cbuf + off] out_c
+    return 1
+}
+
+fn ae_draw_hline_raw(x0, x1, y, color) {
+    let sx0 = load64 [_ae_ctx + 2560]
+    let sy0 = load64 [_ae_ctx + 2568]
+    let sw = load64 [_ae_ctx + 2576]
+    let sh = load64 [_ae_ctx + 2584]
+    if y < sy0 { return 0 }
+    if y >= sy0 + sh { return 0 }
+    if x0 > x1 {
+        let t = x0
+        let x0 = x1
+        let x1 = t
+    }
+    let sx1 = sx0 + sw - 1
+    if x1 < sx0 { return 0 }
+    if x0 > sx1 { return 0 }
+    if x0 < sx0 { let x0 = sx0 }
+    if x1 > sx1 { let x1 = sx1 }
+
+    let fbw = load64 [_ae_ctx + 552]
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let bmode = load64 [_ae_ctx + 2592]
+    let a = (color / 16777216) % 128
+    let row_off = y * fbw
+    let x = x0
+
+    if bmode == 0 {
+        while x <= x1 {
+            let off = (row_off + x) * 4
+            store32 [cbuf + off] color
+            let x = x + 1
+        }
+        return 1
+    }
+    if bmode == 1 {
+        if a >= 127 {
+            while x <= x1 {
+                let off = (row_off + x) * 4
+                store32 [cbuf + off] color
+                let x = x + 1
+            }
+            return 1
+        }
+        if a <= 0 { return 0 }
+    }
+    while x <= x1 {
+        let off = (row_off + x) * 4
+        let dst = load32 [cbuf + off]
+        let out_c = ae_blend_color(dst, color, bmode)
+        store32 [cbuf + off] out_c
+        let x = x + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 2D Primitives: Points, Lines, Thick Lines, Rects, Rounded Rects, Circles,
+#                Ellipses, Triangles, Polygons, Gradients
+# ------------------------------------------------------------------------------
+fn ae_draw_point(x, y, color) {
+    let sx, sy = ae_world_to_screen_2d(x, y)
+    ae_put_pixel_raw(sx, sy, color)
+    ae_perf_add_draw_2d(1)
+    return 1
+}
+
+fn ae_draw_pixel(x, y, color) {
+    let r = ae_draw_point(x, y, color)
+    return r
+}
+
+fn ae_draw_line_raw(x0, y0, x1, y1, color) {
+    let dx = ae_abs(x1 - x0)
+    let sx = 1
+    if x0 >= x1 { let sx = 0 - 1 }
+    let dy = 0 - ae_abs(y1 - y0)
+    let sy = 1
+    if y0 >= y1 { let sy = 0 - 1 }
+    let err = dx + dy
+    let cx = x0
+    let cy = y0
+    let steps = 0
+    while steps < 4096 {
+        ae_put_pixel_raw(cx, cy, color)
+        if cx == x1 {
+            if cy == y1 { break }
+        }
+        let e2 = err * 2
+        if e2 >= dy {
+            let err = err + dy
+            let cx = cx + sx
+        }
+        if e2 <= dx {
+            let err = err + dx
+            let cy = cy + sy
+        }
+        let steps = steps + 1
+    }
+    return 1
+}
+
+fn ae_draw_line(x0, y0, x1, y1, color) {
+    let sx0, sy0 = ae_world_to_screen_2d(x0, y0)
+    let sx1, sy1 = ae_world_to_screen_2d(x1, y1)
+    ae_draw_line_raw(sx0, sy0, sx1, sy1, color)
+    ae_perf_add_draw_2d(2)
+    return 1
+}
+
+fn ae_draw_line_thick(x0, y0, x1, y1, thickness, color) {
+    if thickness <= 1 {
+        let r = ae_draw_line(x0, y0, x1, y1, color)
+        return r
+    }
+    let sx0, sy0 = ae_world_to_screen_2d(x0, y0)
+    let sx1, sy1 = ae_world_to_screen_2d(x1, y1)
+    let dx = ae_abs(sx1 - sx0)
+    let dy = ae_abs(sy1 - sy0)
+    let half = thickness / 2
+    let i = 0 - half
+    while i <= half {
+        if dx >= dy {
+            ae_draw_line_raw(sx0, sy0 + i, sx1, sy1 + i, color)
+        } else {
+            ae_draw_line_raw(sx0 + i, sy0, sx1 + i, sy1, color)
+        }
+        let i = i + 1
+    }
+    ae_perf_add_draw_2d(4)
+    return 1
+}
+
+fn ae_fill_rect(x, y, w, h, color) {
+    if w <= 0 { return 0 }
+    if h <= 0 { return 0 }
+    let sx0, sy0 = ae_world_to_screen_2d(x, y)
+    let sx1, sy1 = ae_world_to_screen_2d(x + w, y + h)
+    if sx0 > sx1 {
+        let t = sx0
+        let sx0 = sx1
+        let sx1 = t
+    }
+    if sy0 > sy1 {
+        let t = sy0
+        let sy0 = sy1
+        let sy1 = t
+    }
+    let ry = sy0
+    while ry < sy1 {
+        ae_draw_hline_raw(sx0, sx1 - 1, ry, color)
+        let ry = ry + 1
+    }
+    ae_perf_add_draw_2d(4)
+    return 1
+}
+
+fn ae_draw_rect(x, y, w, h, color) {
+    let r = ae_fill_rect(x, y, w, h, color)
+    return r
+}
+
+fn ae_stroke_rect(x, y, w, h, thickness, color) {
+    if w <= 0 { return 0 }
+    if h <= 0 { return 0 }
+    if thickness <= 0 { let thickness = 1 }
+    ae_fill_rect(x, y, w, thickness, color)
+    ae_fill_rect(x, y + h - thickness, w, thickness, color)
+    ae_fill_rect(x, y + thickness, thickness, h - thickness * 2, color)
+    ae_fill_rect(x + w - thickness, y + thickness, thickness, h - thickness * 2, color)
+    return 1
+}
+
+fn ae_draw_rect_outline(x, y, w, h, color) {
+    let r = ae_stroke_rect(x, y, w, h, 1, color)
+    return r
+}
+
+fn ae_fill_gradient_v(x, y, w, h, top_color, bottom_color) {
+    if w <= 0 { return 0 }
+    if h <= 0 { return 0 }
+    let sx0, sy0 = ae_world_to_screen_2d(x, y)
+    let sx1, sy1 = ae_world_to_screen_2d(x + w, y + h)
+    let sh = sy1 - sy0
+    if sh <= 0 { return 0 }
+    let ry = 0
+    while ry < sh {
+        let t_fp = (ry * 1000) / sh
+        let c = ae_color_lerp(top_color, bottom_color, t_fp)
+        ae_draw_hline_raw(sx0, sx1 - 1, sy0 + ry, c)
+        let ry = ry + 1
+    }
+    ae_perf_add_draw_2d(4)
+    return 1
+}
+
+fn ae_fill_gradient_h(x, y, w, h, left_color, right_color) {
+    if w <= 0 { return 0 }
+    if h <= 0 { return 0 }
+    let sx0, sy0 = ae_world_to_screen_2d(x, y)
+    let sx1, sy1 = ae_world_to_screen_2d(x + w, y + h)
+    let sw = sx1 - sx0
+    if sw <= 0 { return 0 }
+    let rx = 0
+    while rx < sw {
+        let t_fp = (rx * 1000) / sw
+        let c = ae_color_lerp(left_color, right_color, t_fp)
+        let ry = sy0
+        while ry < sy1 {
+            ae_put_pixel_raw(sx0 + rx, ry, c)
+            let ry = ry + 1
+        }
+        let rx = rx + 1
+    }
+    ae_perf_add_draw_2d(4)
+    return 1
+}
+
+fn ae_fill_circle(cx, cy, radius, color) {
+    if radius <= 0 { return 0 }
+    let scx, scy = ae_world_to_screen_2d(cx, cy)
+    let active = load64 [_ae_ctx + 2608]
+    let r = radius
+    if active == 1 {
+        let cz = load64 [_ae_ctx + 2632]
+        let r = (radius * cz) / 1000
+    }
+    if r <= 0 { return 0 }
+    let r2 = r * r
+    let dy = 0 - r
+    while dy <= r {
+        let dx2 = r2 - dy * dy
+        let dx = ae_isqrt(dx2)
+        ae_draw_hline_raw(scx - dx, scx + dx, scy + dy, color)
+        let dy = dy + 1
+    }
+    ae_perf_add_draw_2d(16)
+    return 1
+}
+
+fn ae_draw_circle(cx, cy, radius, color) {
+    let r = ae_fill_circle(cx, cy, radius, color)
+    return r
+}
+
+fn ae_stroke_circle(cx, cy, radius, color) {
+    if radius <= 0 { return 0 }
+    let scx, scy = ae_world_to_screen_2d(cx, cy)
+    let x = radius
+    let y = 0
+    let err = 1 - x
+    while x >= y {
+        ae_put_pixel_raw(scx + x, scy + y, color)
+        ae_put_pixel_raw(scx + y, scy + x, color)
+        ae_put_pixel_raw(scx - y, scy + x, color)
+        ae_put_pixel_raw(scx - x, scy + y, color)
+        ae_put_pixel_raw(scx - x, scy - y, color)
+        ae_put_pixel_raw(scx - y, scy - x, color)
+        ae_put_pixel_raw(scx + y, scy - x, color)
+        ae_put_pixel_raw(scx + x, scy - y, color)
+        let y = y + 1
+        if err < 0 {
+            let err = err + 2 * y + 1
+        } else {
+            let x = x - 1
+            let err = err + 2 * (y - x) + 1
+        }
+    }
+    ae_perf_add_draw_2d(16)
+    return 1
+}
+
+fn ae_fill_rounded_rect(x, y, w, h, radius, color) {
+    if w <= 0 { return 0 }
+    if h <= 0 { return 0 }
+    let r = radius
+    if r * 2 > w { let r = w / 2 }
+    if r * 2 > h { let r = h / 2 }
+    if r <= 0 {
+        let res = ae_fill_rect(x, y, w, h, color)
+        return res
+    }
+    ae_fill_rect(x + r, y, w - r * 2, h, color)
+    ae_fill_rect(x, y + r, r, h - r * 2, color)
+    ae_fill_rect(x + w - r, y + r, r, h - r * 2, color)
+
+    let scx0, scy0 = ae_world_to_screen_2d(x + r, y + r)
+    let scx1, scy1 = ae_world_to_screen_2d(x + w - r - 1, y + h - r - 1)
+    let r2 = r * r
+    let dy = 0
+    while dy <= r {
+        let dx = ae_isqrt(r2 - dy * dy)
+        ae_draw_hline_raw(scx0 - dx, scx0, scy0 - dy, color)
+        ae_draw_hline_raw(scx1, scx1 + dx, scy0 - dy, color)
+        ae_draw_hline_raw(scx0 - dx, scx0, scy1 + dy, color)
+        ae_draw_hline_raw(scx1, scx1 + dx, scy1 + dy, color)
+        let dy = dy + 1
+    }
+    return 1
+}
+
+fn ae_fill_ellipse(cx, cy, rx, ry, color) {
+    if rx <= 0 { return 0 }
+    if ry <= 0 { return 0 }
+    let scx, scy = ae_world_to_screen_2d(cx, cy)
+    let ry2 = ry * ry
+    let dy = 0 - ry
+    while dy <= ry {
+        let rem = ry2 - dy * dy
+        let dx = (rx * ae_isqrt(rem * 100)) / (ry * 10)
+        ae_draw_hline_raw(scx - dx, scx + dx, scy + dy, color)
+        let dy = dy + 1
+    }
+    ae_perf_add_draw_2d(16)
+    return 1
+}
+
+fn ae_fill_triangle_raw(x0, y0, x1, y1, x2, y2, color) {
+    if y0 > y1 {
+        let tx = x0
+        let ty = y0
+        let x0 = x1
+        let y0 = y1
+        let x1 = tx
+        let y1 = ty
+    }
+    if y0 > y2 {
+        let tx = x0
+        let ty = y0
+        let x0 = x2
+        let y0 = y2
+        let x2 = tx
+        let y2 = ty
+    }
+    if y1 > y2 {
+        let tx = x1
+        let ty = y1
+        let x1 = x2
+        let y1 = y2
+        let x2 = tx
+        let y2 = ty
+    }
+    let total_h = y2 - y0
+    if total_h <= 0 { return 0 }
+    let y = y0
+    while y <= y2 {
+        let second_half = 0
+        if y > y1 { let second_half = 1 }
+        if y1 == y0 { let second_half = 1 }
+        let seg_h = y1 - y0
+        if second_half == 1 { let seg_h = y2 - y1 }
+        if seg_h <= 0 { let seg_h = 1 }
+        let alpha_fp = ((y - y0) * 1000) / total_h
+        let beta_num = y - y0
+        if second_half == 1 { let beta_num = y - y1 }
+        let beta_fp = (beta_num * 1000) / seg_h
+        let ax = x0 + ((x2 - x0) * alpha_fp) / 1000
+        let bx = x0 + ((x1 - x0) * beta_fp) / 1000
+        if second_half == 1 {
+            let bx = x1 + ((x2 - x1) * beta_fp) / 1000
+        }
+        ae_draw_hline_raw(ax, bx, y, color)
+        let y = y + 1
+    }
+    return 1
+}
+
+fn ae_fill_triangle(x0, y0, x1, y1, x2, y2, color) {
+    let sx0, sy0 = ae_world_to_screen_2d(x0, y0)
+    let sx1, sy1 = ae_world_to_screen_2d(x1, y1)
+    let sx2, sy2 = ae_world_to_screen_2d(x2, y2)
+    ae_fill_triangle_raw(sx0, sy0, sx1, sy1, sx2, sy2, color)
+    ae_perf_add_draw_2d(3)
+    return 1
+}
+
+fn ae_stroke_triangle(x0, y0, x1, y1, x2, y2, color) {
+    ae_draw_line(x0, y0, x1, y1, color)
+    ae_draw_line(x1, y1, x2, y2, color)
+    ae_draw_line(x2, y2, x0, y0, color)
+    return 1
+}
+
+fn ae_fill_polygon(pts_buf, count, color) {
+    if count < 3 { return 0 }
+    let x0 = load64 [pts_buf + 0]
+    let y0 = load64 [pts_buf + 8]
+    let i = 1
+    while i < count - 1 {
+        let off1 = i * 16
+        let off1y = off1 + 8
+        let i_next = i + 1
+        let off2 = i_next * 16
+        let off2y = off2 + 8
+        let x1 = load64 [pts_buf + off1]
+        let y1 = load64 [pts_buf + off1y]
+        let x2 = load64 [pts_buf + off2]
+        let y2 = load64 [pts_buf + off2y]
+        ae_fill_triangle(x0, y0, x1, y1, x2, y2, color)
+        let i = i + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Textures, Procedural Generators, PPM Image Loading, Filtering & Wrapping
+# ------------------------------------------------------------------------------
+fn ae_texture_create(width, height) {
+    if width <= 0 { return 0 }
+    if height <= 0 { return 0 }
+    let tex = alloc 40
+    let pbuf_sz = width * height * 4 + 16
+    let pbuf = alloc pbuf_sz
+    store64 [tex + 0] width
+    store64 [tex + 8] height
+    store64 [tex + 16] pbuf
+    store64 [tex + 24] AE_FILTER_NEAREST
+    store64 [tex + 32] AE_WRAP_REPEAT
+    return tex
+}
+
+fn ae_texture_set_filter(tex, filter_mode) {
+    if tex == 0 { return 0 }
+    store64 [tex + 24] filter_mode
+    return filter_mode
+}
+
+fn ae_texture_set_wrap(tex, wrap_mode) {
+    if tex == 0 { return 0 }
+    store64 [tex + 32] wrap_mode
+    return wrap_mode
+}
+
+fn ae_texture_set_pixel(tex, x, y, color) {
+    if tex == 0 { return 0 }
+    let w = load64 [tex + 0]
+    let h = load64 [tex + 8]
+    if x < 0 { return 0 }
+    if y < 0 { return 0 }
+    if x >= w { return 0 }
+    if y >= h { return 0 }
+    let pbuf = load64 [tex + 16]
+    let off = (y * w + x) * 4
+    store32 [pbuf + off] color
+    return 1
+}
+
+fn ae_texture_get_pixel(tex, x, y) {
+    if tex == 0 { return AE_COLOR_WHITE }
+    let w = load64 [tex + 0]
+    let h = load64 [tex + 8]
+    let wrap = load64 [tex + 32]
+    let pbuf = load64 [tex + 16]
+    if wrap == AE_WRAP_CLAMP {
+        let x = ae_clamp(x, 0, w - 1)
+        let y = ae_clamp(y, 0, h - 1)
+    } else if wrap == AE_WRAP_MIRROR {
+        let x = ae_abs(x)
+        let y = ae_abs(y)
+        let px = (x / w) % 2
+        let py = (y / h) % 2
+        let x = x % w
+        let y = y % h
+        if px == 1 { let x = w - 1 - x }
+        if py == 1 { let y = h - 1 - y }
+    } else {
+        let x = ((x % w) + w) % w
+        let y = ((y % h) + h) % h
+    }
+    let off = (y * w + x) * 4
+    let col = load32 [pbuf + off]
+    return col
+}
+
+fn ae_texture_sample(tex, u_fp, v_fp) {
+    if tex == 0 { return AE_COLOR_WHITE }
+    let w = load64 [tex + 0]
+    let h = load64 [tex + 8]
+    let filt = load64 [tex + 24]
+    if filt == AE_FILTER_NEAREST {
+        let tx = (u_fp * w) / 1000
+        let ty = (v_fp * h) / 1000
+        let c = ae_texture_get_pixel(tex, tx, ty)
+        return c
+    }
+    let fx_fp = u_fp * w
+    let fy_fp = v_fp * h
+    let x0 = fx_fp / 1000
+    let y0 = fy_fp / 1000
+    let tx_fp = fx_fp % 1000
+    let ty_fp = fy_fp % 1000
+    if tx_fp < 0 { let tx_fp = tx_fp + 1000 }
+    if ty_fp < 0 { let ty_fp = ty_fp + 1000 }
+    let c00 = ae_texture_get_pixel(tex, x0, y0)
+    let c10 = ae_texture_get_pixel(tex, x0 + 1, y0)
+    let c01 = ae_texture_get_pixel(tex, x0, y0 + 1)
+    let c11 = ae_texture_get_pixel(tex, x0 + 1, y0 + 1)
+    let top = ae_color_lerp(c00, c10, tx_fp)
+    let bot = ae_color_lerp(c01, c11, tx_fp)
+    let res = ae_color_lerp(top, bot, ty_fp)
+    return res
+}
+
+fn ae_texture_checkerboard(width, height, cell_size, color_a, color_b) {
+    let tex = ae_texture_create(width, height)
+    if cell_size <= 0 { let cell_size = 8 }
+    let y = 0
+    while y < height {
+        let x = 0
+        while x < width {
+            let cx = x / cell_size
+            let cy = y / cell_size
+            let c = color_a
+            if (cx + cy) % 2 == 1 { let c = color_b }
+            ae_texture_set_pixel(tex, x, y, c)
+            let x = x + 1
+        }
+        let y = y + 1
+    }
+    return tex
+}
+
+fn ae_texture_gradient(width, height, c_tl, c_tr, c_bl, c_br) {
+    let tex = ae_texture_create(width, height)
+    let y = 0
+    while y < height {
+        let vf = (y * 1000) / height
+        let left_c = ae_color_lerp(c_tl, c_bl, vf)
+        let right_c = ae_color_lerp(c_tr, c_br, vf)
+        let x = 0
+        while x < width {
+            let uf = (x * 1000) / width
+            let c = ae_color_lerp(left_c, right_c, uf)
+            ae_texture_set_pixel(tex, x, y, c)
+            let x = x + 1
+        }
+        let y = y + 1
+    }
+    return tex
+}
+
+# Loads a binary P6 PPM image file into an AeTexture (returns fallback if missing)
+fn ae_texture_load_ppm(path) {
+    ae_ensure_ctx()
+    let fd = file_open path 0
+    if fd < 0 {
+        ae_set_error(AE_ERR_ASSET_NOT_FOUND, "Texture file not found")
+        let fb = ae_texture_checkerboard(16, 16, 4, AE_COLOR_MAGENTA, AE_COLOR_BLACK)
+        return fb
+    }
+    let raw = alloc 2097152
+    let nread = file_read fd raw 2097152
+    file_close fd
+    if nread < 12 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Invalid PPM header in file")
+        let fb = ae_texture_checkerboard(16, 16, 4, AE_COLOR_MAGENTA, AE_COLOR_BLACK)
+        return fb
+    }
+    let b0 = load [raw + 0]
+    let b1 = load [raw + 1]
+    if b0 != 80 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "PPM missing P6 magic")
+        let fb = ae_texture_checkerboard(16, 16, 4, AE_COLOR_MAGENTA, AE_COLOR_BLACK)
+        return fb
+    }
+    if b1 != 54 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "PPM must be binary P6 format")
+        let fb = ae_texture_checkerboard(16, 16, 4, AE_COLOR_MAGENTA, AE_COLOR_BLACK)
+        return fb
+    }
+    let idx = 2
+    while idx < nread {
+        let ch = load [raw + idx]
+        if ch >= 48 {
+            if ch <= 57 { break }
+        }
+        let idx = idx + 1
+    }
+    let w = 0
+    while idx < nread {
+        let ch = load [raw + idx]
+        if ch < 48 { break }
+        if ch > 57 { break }
+        let w = w * 10 + (ch - 48)
+        let idx = idx + 1
+    }
+    while idx < nread {
+        let ch = load [raw + idx]
+        if ch >= 48 {
+            if ch <= 57 { break }
+        }
+        let idx = idx + 1
+    }
+    let h = 0
+    while idx < nread {
+        let ch = load [raw + idx]
+        if ch < 48 { break }
+        if ch > 57 { break }
+        let h = h * 10 + (ch - 48)
+        let idx = idx + 1
+    }
+    while idx < nread {
+        let ch = load [raw + idx]
+        if ch >= 48 {
+            if ch <= 57 { break }
+        }
+        let idx = idx + 1
+    }
+    let maxv = 0
+    while idx < nread {
+        let ch = load [raw + idx]
+        if ch < 48 { break }
+        if ch > 57 { break }
+        let maxv = maxv * 10 + (ch - 48)
+        let idx = idx + 1
+    }
+    let idx = idx + 1
+    if w <= 0 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Invalid PPM dimensions")
+        return 0
+    }
+    let tex = ae_texture_create(w, h)
+    let pbuf = load64 [tex + 16]
+    let total = w * h
+    let pi = 0
+    while pi < total {
+        if idx + 2 >= nread { break }
+        let idx1 = idx + 1
+        let idx2 = idx + 2
+        let r = load [raw + idx]
+        let g = load [raw + idx1]
+        let b = load [raw + idx2]
+        let c = 2130706432 + r * 65536 + g * 256 + b
+        let off = pi * 4
+        store32 [pbuf + off] c
+        let idx = idx + 3
+        let pi = pi + 1
+    }
+    return tex
+}
+
+# ------------------------------------------------------------------------------
+# Textured Blitting, Sprites, SpriteSheets & Frame-Based Animator
+# ------------------------------------------------------------------------------
+fn ae_draw_texture_ex(tex, x, y, dst_w, dst_h, u0_fp, v0_fp, u1_fp, v1_fp, rot_deg, tint) {
+    if tex == 0 { return 0 }
+    if dst_w <= 0 { return 0 }
+    if dst_h <= 0 { return 0 }
+    let sx0, sy0 = ae_world_to_screen_2d(x, y)
+    let sx1, sy1 = ae_world_to_screen_2d(x + dst_w, y + dst_h)
+    let sw = sx1 - sx0
+    let sh = sy1 - sy0
+    if sw <= 0 { return 0 }
+    if sh <= 0 { return 0 }
+
+    if rot_deg == 0 {
+        let ry = 0
+        while ry < sh {
+            let vf = v0_fp + ((v1_fp - v0_fp) * ry) / sh
+            let rx = 0
+            while rx < sw {
+                let uf = u0_fp + ((u1_fp - u0_fp) * rx) / sw
+                let sc = ae_texture_sample(tex, uf, vf)
+                let a = (sc / 16777216) % 128
+                if a > 0 {
+                    if tint != AE_COLOR_WHITE {
+                        let sc = ae_color_modulate(sc, tint)
+                    }
+                    ae_put_pixel_raw(sx0 + rx, sy0 + ry, sc)
+                }
+                let rx = rx + 1
+            }
+            let ry = ry + 1
+        }
+        ae_perf_add_draw_2d(4)
+        return 1
+    }
+
+    # Rotated sprite blit around center
+    let cx = sx0 + sw / 2
+    let cy = sy0 + sh / 2
+    let neg_r = 0 - rot_deg
+    let cos_a = ae_cos_deg(neg_r)
+    let sin_a = ae_sin_deg(neg_r)
+    let max_dim = sw
+    if sh > max_dim { let max_dim = sh }
+    let rad = (max_dim * 750) / 1000 + 2
+    let dy = 0 - rad
+    while dy <= rad {
+        let dx = 0 - rad
+        while dx <= rad {
+            let lx = (dx * cos_a - dy * sin_a) / 1000 + sw / 2
+            let ly = (dx * sin_a + dy * cos_a) / 1000 + sh / 2
+            if lx >= 0 {
+                if lx < sw {
+                    if ly >= 0 {
+                        if ly < sh {
+                            let uf = u0_fp + ((u1_fp - u0_fp) * lx) / sw
+                            let vf = v0_fp + ((v1_fp - v0_fp) * ly) / sh
+                            let sc = ae_texture_sample(tex, uf, vf)
+                            let a = (sc / 16777216) % 128
+                            if a > 0 {
+                                if tint != AE_COLOR_WHITE {
+                                    let sc = ae_color_modulate(sc, tint)
+                                }
+                                ae_put_pixel_raw(cx + dx, cy + dy, sc)
+                            }
+                        }
+                    }
+                }
+            }
+            let dx = dx + 1
+        }
+        let dy = dy + 1
+    }
+    ae_perf_add_draw_2d(4)
+    return 1
+}
+
+fn ae_draw_texture(tex, x, y, tint = 2147483647) {
+    if tex == 0 { return 0 }
+    let w = load64 [tex + 0]
+    let h = load64 [tex + 8]
+    let r = ae_draw_texture_ex(tex, x, y, w, h, 0, 0, 1000, 1000, 0, tint)
+    return r
+}
+
+fn ae_sprite_new(tex, u0_fp = 0, v0_fp = 0, u1_fp = 1000, v1_fp = 1000) {
+    let sp = alloc 64
+    store64 [sp + 0] tex
+    store64 [sp + 8] u0_fp
+    store64 [sp + 16] v0_fp
+    store64 [sp + 24] u1_fp
+    store64 [sp + 32] v1_fp
+    store64 [sp + 40] 0
+    store64 [sp + 48] 0
+    store64 [sp + 56] AE_COLOR_WHITE
+    return sp
+}
+
+fn ae_draw_sprite(sp, x, y, scale_x_fp = 1000, scale_y_fp = 1000, rot_deg = 0, tint = 2147483647) {
+    if sp == 0 { return 0 }
+    let tex = load64 [sp + 0]
+    if tex == 0 { return 0 }
+    let u0 = load64 [sp + 8]
+    let v0 = load64 [sp + 16]
+    let u1 = load64 [sp + 24]
+    let v1 = load64 [sp + 32]
+    let tw = load64 [tex + 0]
+    let th = load64 [tex + 8]
+    let sub_w = (tw * (u1 - u0)) / 1000
+    let sub_h = (th * (v1 - v0)) / 1000
+    let dw = (sub_w * scale_x_fp) / 1000
+    let dh = (sub_h * scale_y_fp) / 1000
+    let r = ae_draw_texture_ex(tex, x, y, dw, dh, u0, v0, u1, v1, rot_deg, tint)
+    return r
+}
+
+fn ae_spritesheet_new(tex, cell_w, cell_h) {
+    if tex == 0 { return 0 }
+    let tw = load64 [tex + 0]
+    let th = load64 [tex + 8]
+    if cell_w <= 0 { let cell_w = tw }
+    if cell_h <= 0 { let cell_h = th }
+    let cols = tw / cell_w
+    let rows = th / cell_h
+    if cols <= 0 { let cols = 1 }
+    if rows <= 0 { let rows = 1 }
+    let sheet = alloc 48
+    store64 [sheet + 0] tex
+    store64 [sheet + 8] cell_w
+    store64 [sheet + 16] cell_h
+    store64 [sheet + 24] cols
+    store64 [sheet + 32] rows
+    store64 [sheet + 40] cols * rows
+    return sheet
+}
+
+fn ae_spritesheet_draw_frame(sheet, frame_idx, x, y, scale_fp = 1000, flip_x = 0, tint = 2147483647) {
+    if sheet == 0 { return 0 }
+    let tex = load64 [sheet + 0]
+    let cw = load64 [sheet + 8]
+    let ch = load64 [sheet + 16]
+    let cols = load64 [sheet + 24]
+    let rows = load64 [sheet + 32]
+    let total = load64 [sheet + 40]
+    if total <= 0 { return 0 }
+    let f = ((frame_idx % total) + total) % total
+    let col = f % cols
+    let row = f / cols
+    let col_next = col + 1
+    let row_next = row + 1
+    let u0 = (col * 1000) / cols
+    let v0 = (row * 1000) / rows
+    let u1 = (col_next * 1000) / cols
+    let v1 = (row_next * 1000) / rows
+    if flip_x == 1 {
+        let tmp = u0
+        let u0 = u1
+        let u1 = tmp
+    }
+    let dw = (cw * scale_fp) / 1000
+    let dh = (ch * scale_fp) / 1000
+    let r = ae_draw_texture_ex(tex, x, y, dw, dh, u0, v0, u1, v1, 0, tint)
+    return r
+}
+
+fn ae_animator_new(sheet, start_frame, frame_count, fps = 12, looping = 1) {
+    let anim = alloc 64
+    store64 [anim + 0] sheet
+    store64 [anim + 8] start_frame
+    store64 [anim + 16] frame_count
+    store64 [anim + 24] fps
+    store64 [anim + 32] looping
+    store64 [anim + 40] 0
+    store64 [anim + 48] 0
+    store64 [anim + 56] 1
+    return anim
+}
+
+fn ae_animator_update(anim, dt_ms) {
+    if anim == 0 { return 0 }
+    let playing = load64 [anim + 56]
+    if playing == 0 {
+        let cur = load64 [anim + 40]
+        return cur
+    }
+    let fps = load64 [anim + 24]
+    if fps <= 0 { let fps = 12 }
+    let frame_dur = 1000 / fps
+    if frame_dur <= 0 { let frame_dur = 1 }
+    let acc = load64 [anim + 48] + dt_ms
+    let fcount = load64 [anim + 16]
+    let looping = load64 [anim + 32]
+    let cur = load64 [anim + 40]
+    while acc >= frame_dur {
+        let acc = acc - frame_dur
+        let cur = cur + 1
+        if cur >= fcount {
+            if looping == 1 {
+                let cur = 0
+            } else {
+                let cur = fcount - 1
+                store64 [anim + 56] 0
+            }
+        }
+    }
+    store64 [anim + 40] cur
+    store64 [anim + 48] acc
+    return cur
+}
+
+fn ae_animator_draw(anim, x, y, scale_fp = 1000, flip_x = 0, tint = 2147483647) {
+    if anim == 0 { return 0 }
+    let sheet = load64 [anim + 0]
+    let start_f = load64 [anim + 8]
+    let cur_f = load64 [anim + 40]
+    let r = ae_spritesheet_draw_frame(sheet, start_f + cur_f, x, y, scale_fp, flip_x, tint)
+    return r
+}
+
+# ------------------------------------------------------------------------------
+# 2D Command Batcher (Deferred Sortable Quad/Rect Batching)
+# ------------------------------------------------------------------------------
+fn ae_batch_begin() {
+    ae_ensure_ctx()
+    let bbuf = load64 [_ae_ctx + 2664]
+    if bbuf == 0 {
+        let bbuf = alloc 65536
+        store64 [_ae_ctx + 2664] bbuf
+    }
+    store64 [_ae_ctx + 2672] 0
+    return 1
+}
+
+fn ae_batch_rect(x, y, w, h, color) {
+    let bbuf = load64 [_ae_ctx + 2664]
+    if bbuf == 0 {
+        ae_batch_begin()
+        let bbuf = load64 [_ae_ctx + 2664]
+    }
+    let cnt = load64 [_ae_ctx + 2672]
+    if cnt >= 1024 {
+        ae_batch_flush()
+        let cnt = 0
+    }
+    let off = cnt * 48
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    store64 [bbuf + off] 1
+    store64 [bbuf + off1] x
+    store64 [bbuf + off2] y
+    store64 [bbuf + off3] w
+    store64 [bbuf + off4] h
+    store64 [bbuf + off5] color
+    store64 [_ae_ctx + 2672] cnt + 1
+    return cnt + 1
+}
+
+fn ae_batch_flush() {
+    let bbuf = load64 [_ae_ctx + 2664]
+    let cnt = load64 [_ae_ctx + 2672]
+    if bbuf == 0 { return 0 }
+    if cnt <= 0 { return 0 }
+    let i = 0
+    while i < cnt {
+        let off = i * 48
+        let off1 = off + 8
+        let off2 = off + 16
+        let off3 = off + 24
+        let off4 = off + 32
+        let off5 = off + 40
+        let x = load64 [bbuf + off1]
+        let y = load64 [bbuf + off2]
+        let w = load64 [bbuf + off3]
+        let h = load64 [bbuf + off4]
+        let c = load64 [bbuf + off5]
+        ae_fill_rect(x, y, w, h, c)
+        let i = i + 1
+    }
+    store64 [_ae_ctx + 2672] 0
+    let bcnt = load64 [_ae_ctx + 176]
+    store64 [_ae_ctx + 176] bcnt + 1
+    return cnt
+}
+
+# ------------------------------------------------------------------------------
+# Font & Text Rendering (8x8 Embedded Bitmap + Scaled + Alignment + Multiline)
+# ------------------------------------------------------------------------------
+fn ae_text_width(text, scale = 1) {
+    if scale <= 0 { let scale = 1 }
+    let slen = len text
+    let max_w = 0
+    let cur_w = 0
+    let i = 0
+    while i < slen {
+        let ch = load [text + i]
+        if ch == 10 {
+            if cur_w > max_w { let max_w = cur_w }
+            let cur_w = 0
+        } else {
+            let cur_w = cur_w + 8 * scale
+        }
+        let i = i + 1
+    }
+    if cur_w > max_w { let max_w = cur_w }
+    return max_w
+}
+
+fn ae_text_height(text, scale = 1, line_spacing = 2) {
+    if scale <= 0 { let scale = 1 }
+    let slen = len text
+    if slen <= 0 { return 0 }
+    let lines = 1
+    let i = 0
+    while i < slen {
+        let ch = load [text + i]
+        if ch == 10 { let lines = lines + 1 }
+        let i = i + 1
+    }
+    let lines_m1 = lines - 1
+    let h = lines * 8 * scale + lines_m1 * line_spacing * scale
+    return h
+}
+
+fn ae_font_ensure_init() {
+    let fptr = load64 [_ae_ctx + 2680]
+    if fptr != 0 { return fptr }
+    let fptr = alloc 1024
+    store64 [_ae_ctx + 2680] fptr
+    let hex_font = "0000000000000000183c3c1818001800363600000000000036367f367f3636000c3e031e301f0c00006333180c6663001c361c6e3b336e000606030000000000180c0606060c1800060c1818180c060000663cff3c660000000c0c3f0c0c000000000000000c0c060000003f0000000000000000000c0c006030180c060301003e63737b6f673e000c0e0c0c0c0c3f001e33301c06333f001e33301c30331e00383c36337f3078003f031f3030331e001c06031f33331e003f3330180c0c0c001e33331e33331e001e33333e30180e00000c0c00000c0c00000c0c00000c0c06180c0603060c180000003f00003f0000060c1830180c06001e3330180c000c003e637b7b7b031e000c1e33333f3333003f66663e66663f003c66030303663c001f36666666361f007f46161e16467f007f46161e16060f003c66030373667c003333333f333333001e0c0c0c0c0c1e007830303033331e006766361e366667000f06060646667f0063777f7f6b63630063676f7b736363001c36636363361c003f66663e06060f001e3333333b1e38003f66663e366667001e33070e38331e003f2d0c0c0c0c1e003333333333333f0033333333331e0c006363636b7f7763006363361c1c3663003333331e0c0c1e007f6331184c667f001e06060606061e0003060c18306040001e18181818181e00081c36630000000000000000000000ff0c0c18000000000000001e303e336e000706063e66663b0000001e3303331e003830303e33336e0000001e333f031e001c36060f06060f0000006e33333e301f0706366e666667000c000e0c0c0c1e00300030303033331e070666361e3667000e0c0c0c0c0c1e000000337f7f6b630000001f333333330000001e3333331e0000003b66663e060f00006e33333e307800003b6e66060f0000003e031e301f00080c3e0c0c2c18000000333333336e0000003333331e0c000000636b7f7f3600000063361c36630000003333333e301f00003f190c263f00380c0c070c0c38001818180018181800070c0c380c0c07006e3b0000000000000000000000000000"
+    let f_hi = 0
+    let f_out = 0
+    while f_hi < 1536 {
+        let c1 = load [hex_font + f_hi]
+        let n1 = c1 - 48
+        if c1 >= 97 { let n1 = c1 - 87 }
+        let f_lo = f_hi + 1
+        let c2 = load [hex_font + f_lo]
+        let n2 = c2 - 48
+        if c2 >= 97 { let n2 = c2 - 87 }
+        let f_byte = n1 * 16 + n2
+        store [fptr + f_out] f_byte
+        let f_hi = f_hi + 2
+        let f_out = f_out + 1
+    }
+    return fptr
+}
+
+fn ae_draw_char(x, y, ch, scale, color) {
+    let fptr = ae_font_ensure_init()
+    if ch < 33 { return 0 }
+    if ch > 126 { return 0 }
+    let ch_off = ch - 32
+    let glyph_base = fptr + ch_off * 8
+    let row = 0
+    while row < 8 {
+        let bits = load [glyph_base + row]
+        if bits > 0 {
+            let col = 0
+            let mask = 1
+            while col < 8 {
+                let bit_on = (bits / mask) % 2
+                if bit_on == 1 {
+                    if scale <= 1 {
+                        ae_put_pixel_raw(x + col, y + row, color)
+                    } else {
+                        let sy = 0
+                        while sy < scale {
+                            let gx0 = x + col * scale
+                            let gx1 = gx0 + scale - 1
+                            let gy = y + row * scale + sy
+                            ae_draw_hline_raw(gx0, gx1, gy, color)
+                            let sy = sy + 1
+                        }
+                    }
+                }
+                let mask = mask * 2
+                let col = col + 1
+            }
+        }
+        let row = row + 1
+    }
+    return 1
+}
+
+fn ae_draw_text(text, x, y, scale = 1, color = 2147483647) {
+    if scale <= 0 { let scale = 1 }
+    let slen = len text
+    let cx = x
+    let cy = y
+    let adv = 8 * scale
+    let line_h = 10 * scale
+    let i = 0
+    while i < slen {
+        let ch = load [text + i]
+        if ch == 10 {
+            let cx = x
+            let cy = cy + line_h
+        } else {
+            ae_draw_char(cx, cy, ch, scale, color)
+            let cx = cx + adv
+        }
+        let i = i + 1
+    }
+    ae_perf_add_draw_2d(slen * 4)
+    return slen
+}
+
+fn ae_draw_text_aligned(text, x, y, scale, color, align) {
+    let w = ae_text_width(text, scale)
+    let draw_x = x
+    if align == AE_ALIGN_CENTER {
+        let draw_x = x - w / 2
+    } else if align == AE_ALIGN_RIGHT {
+        let draw_x = x - w
+    }
+    let r = ae_draw_text(text, draw_x, y, scale, color)
+    return r
+}
+
+fn ae_draw_text_shadow(text, x, y, scale, color, shadow_color) {
+    ae_draw_text(text, x + scale, y + scale, scale, shadow_color)
+    let r = ae_draw_text(text, x, y, scale, color)
+    return r
+}

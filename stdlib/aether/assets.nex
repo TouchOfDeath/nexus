@@ -1,0 +1,271 @@
+# ==============================================================================
+#  AETHER RESOURCE & ASSET MANAGER (stdlib/aether/assets.nex)
+#  Centralized Reference-Counted Asset Cache for Textures, 3D Meshes & Sounds,
+#  Duplicate Load Deduplication, Missing-Asset Fallbacks & Lifetime Tracking
+# ==============================================================================
+
+include "stdlib/aether/gfx3d.nex"
+include "stdlib/aether/audio.nex"
+
+const AE_ASSET_TEXTURE = 1
+const AE_ASSET_MESH    = 2
+const AE_ASSET_SOUND   = 3
+const AE_MAX_ASSETS    = 64
+
+# Asset entry layout (48 bytes per entry in table at [_ae_ctx + 4608]):
+#   +0:  in_use (0 or 1)
+#   +8:  asset_type (1=Texture, 2=Mesh, 3=Sound)
+#   +16: path_str
+#   +24: handle_ptr
+#   +32: ref_count
+#   +40: is_fallback (0 or 1)
+
+fn ae_assets_init() {
+    ae_ensure_ctx()
+    let init_flag = load64 [_ae_ctx + 4600]
+    if init_flag == 1 { return 1 }
+    let atable = alloc 3072
+    store64 [_ae_ctx + 4600] 1
+    store64 [_ae_ctx + 4608] atable
+    store64 [_ae_ctx + 4616] 0              # total_loaded
+    store64 [_ae_ctx + 4624] 0              # cache_hits
+    store64 [_ae_ctx + 4632] 0              # fallback_count
+    return 1
+}
+
+fn ae_str_eq(a, b) {
+    if a == 0 { return 0 }
+    if b == 0 { return 0 }
+    let idx = 0
+    while idx < 512 {
+        let ca = load [a + idx]
+        let cb = load [b + idx]
+        if ca != cb { return 0 }
+        if ca == 0 { return 1 }
+        let idx = idx + 1
+    }
+    return 1
+}
+
+fn ae_asset_find_cached(asset_type, path) {
+    ae_assets_init()
+    let atable = load64 [_ae_ctx + 4608]
+    let i = 0
+    while i < AE_MAX_ASSETS {
+        let off = i * 48
+        let in_use = load64 [atable + off]
+        if in_use == 1 {
+            let off1 = off + 8
+            let off2 = off + 16
+            let t = load64 [atable + off1]
+            if t == asset_type {
+                let p = load64 [atable + off2]
+                let eq = ae_str_eq(p, path)
+                if eq == 1 {
+                    return i
+                }
+            }
+        }
+        let i = i + 1
+    }
+    return 0 - 1
+}
+
+fn ae_asset_alloc_slot() {
+    ae_assets_init()
+    let atable = load64 [_ae_ctx + 4608]
+    let i = 0
+    while i < AE_MAX_ASSETS {
+        let off = i * 48
+        let in_use = load64 [atable + off]
+        if in_use == 0 { return i }
+        let i = i + 1
+    }
+    return 0
+}
+
+fn ae_asset_load_texture(path) {
+    ae_assets_init()
+    let atable = load64 [_ae_ctx + 4608]
+    let slot = ae_asset_find_cached(AE_ASSET_TEXTURE, path)
+    if slot >= 0 {
+        let off3 = slot * 48 + 24
+        let off4 = slot * 48 + 32
+        let rc = load64 [atable + off4] + 1
+        store64 [atable + off4] rc
+        let hits = load64 [_ae_ctx + 4624] + 1
+        store64 [_ae_ctx + 4624] hits
+        let h = load64 [atable + off3]
+        return h
+    }
+    ae_clear_error()
+    let tex = ae_texture_load_ppm(path)
+    let is_fb = 0
+    if ae_get_error() != AE_OK {
+        let is_fb = 1
+        let fbc = load64 [_ae_ctx + 4632] + 1
+        store64 [_ae_ctx + 4632] fbc
+    }
+    let ns = ae_asset_alloc_slot()
+    let off = ns * 48
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    store64 [atable + off] 1
+    store64 [atable + off1] AE_ASSET_TEXTURE
+    store64 [atable + off2] path
+    store64 [atable + off3] tex
+    store64 [atable + off4] 1
+    store64 [atable + off5] is_fb
+    let tot = load64 [_ae_ctx + 4616] + 1
+    store64 [_ae_ctx + 4616] tot
+    return tex
+}
+
+fn ae_asset_load_mesh(path) {
+    ae_assets_init()
+    let atable = load64 [_ae_ctx + 4608]
+    let slot = ae_asset_find_cached(AE_ASSET_MESH, path)
+    if slot >= 0 {
+        let off3 = slot * 48 + 24
+        let off4 = slot * 48 + 32
+        let rc = load64 [atable + off4] + 1
+        store64 [atable + off4] rc
+        let hits = load64 [_ae_ctx + 4624] + 1
+        store64 [_ae_ctx + 4624] hits
+        let h = load64 [atable + off3]
+        return h
+    }
+    ae_clear_error()
+    let mesh = ae_mesh_load_obj(path)
+    let is_fb = 0
+    if mesh == 0 {
+        let mesh = ae_mesh_create_cube(1000)
+        let is_fb = 1
+        let fbc = load64 [_ae_ctx + 4632] + 1
+        store64 [_ae_ctx + 4632] fbc
+    }
+    let ns = ae_asset_alloc_slot()
+    let off = ns * 48
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    store64 [atable + off] 1
+    store64 [atable + off1] AE_ASSET_MESH
+    store64 [atable + off2] path
+    store64 [atable + off3] mesh
+    store64 [atable + off4] 1
+    store64 [atable + off5] is_fb
+    let tot = load64 [_ae_ctx + 4616] + 1
+    store64 [_ae_ctx + 4616] tot
+    return mesh
+}
+
+fn ae_asset_load_sound(path) {
+    ae_assets_init()
+    let atable = load64 [_ae_ctx + 4608]
+    let slot = ae_asset_find_cached(AE_ASSET_SOUND, path)
+    if slot >= 0 {
+        let off3 = slot * 48 + 24
+        let off4 = slot * 48 + 32
+        let rc = load64 [atable + off4] + 1
+        store64 [atable + off4] rc
+        let hits = load64 [_ae_ctx + 4624] + 1
+        store64 [_ae_ctx + 4624] hits
+        let h = load64 [atable + off3]
+        return h
+    }
+    ae_clear_error()
+    let snd = ae_sound_load_wav(path)
+    let is_fb = 0
+    if snd == 0 {
+        let snd = ae_sound_synth_tone(AE_WAVE_SINE, 440, 80, 500)
+        let is_fb = 1
+        let fbc = load64 [_ae_ctx + 4632] + 1
+        store64 [_ae_ctx + 4632] fbc
+    }
+    let ns = ae_asset_alloc_slot()
+    let off = ns * 48
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    store64 [atable + off] 1
+    store64 [atable + off1] AE_ASSET_SOUND
+    store64 [atable + off2] path
+    store64 [atable + off3] snd
+    store64 [atable + off4] 1
+    store64 [atable + off5] is_fb
+    let tot = load64 [_ae_ctx + 4616] + 1
+    store64 [_ae_ctx + 4616] tot
+    return snd
+}
+
+fn ae_asset_release(handle) {
+    ae_assets_init()
+    if handle == 0 { return 0 }
+    let atable = load64 [_ae_ctx + 4608]
+    let i = 0
+    while i < AE_MAX_ASSETS {
+        let off = i * 48
+        let in_use = load64 [atable + off]
+        if in_use == 1 {
+            let off3 = off + 24
+            let h = load64 [atable + off3]
+            if h == handle {
+                let off4 = off + 32
+                let rc = load64 [atable + off4] - 1
+                if rc <= 0 {
+                    store64 [atable + off] 0
+                    store64 [atable + off4] 0
+                    let tot = load64 [_ae_ctx + 4616] - 1
+                    store64 [_ae_ctx + 4616] tot
+                    return 0
+                }
+                store64 [atable + off4] rc
+                return rc
+            }
+        }
+        let i = i + 1
+    }
+    return 0
+}
+
+fn ae_asset_ref_count(handle) {
+    ae_assets_init()
+    if handle == 0 { return 0 }
+    let atable = load64 [_ae_ctx + 4608]
+    let i = 0
+    while i < AE_MAX_ASSETS {
+        let off = i * 48
+        let in_use = load64 [atable + off]
+        if in_use == 1 {
+            let off3 = off + 24
+            let h = load64 [atable + off3]
+            if h == handle {
+                let off4 = off + 32
+                let rc = load64 [atable + off4]
+                return rc
+            }
+        }
+        let i = i + 1
+    }
+    return 0
+}
+
+fn ae_asset_cache_hits() {
+    ae_assets_init()
+    let h = load64 [_ae_ctx + 4624]
+    return h
+}
+
+fn ae_asset_loaded_count() {
+    ae_assets_init()
+    let c = load64 [_ae_ctx + 4616]
+    return c
+}

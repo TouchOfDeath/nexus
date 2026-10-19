@@ -1,0 +1,46 @@
+# ==============================================================================
+#  AETHER EXAMPLE 05: 2D Camera Pan, Zoom & Picking (examples/aether_05_camera2d.nex)
+#  Demonstrates AeCamera2D world-space rendering, pan/zoom/rotation, and
+#  bidirectional world <-> screen coordinate conversion.
+# ==============================================================================
+
+import aether
+
+let win = ae_window_create("Aether 05 - 2D Camera Pan & Zoom", 480, 320)
+ae_set_max_frames(4)
+
+let cam = ae_camera2d_new(0, 0, 1000, 0)
+let zoom_fp = 1000
+let cam_x = 0
+
+while ae_begin_frame() {
+    ae_clear(AE_COLOR_NAVY)
+
+    store64 [cam + 0] cam_x
+    store64 [cam + 16] zoom_fp
+    ae_camera2d_begin(cam)
+
+    # Render world-space landmarks around origin (0, 0)
+    let gx = -200
+    while gx <= 200 {
+        ae_draw_line(gx, -150, gx, 150, AE_COLOR_SLATE)
+        let gx = gx + 50
+    }
+    ae_fill_rect(-60, -40, 120, 80, AE_COLOR_BLUE)
+    ae_stroke_rect(-60, -40, 120, 80, 2, AE_COLOR_CYAN)
+    ae_fill_circle(0, 0, 18, AE_COLOR_GOLD)
+    ae_fill_circle(90, -50, 14, AE_COLOR_GREEN)
+
+    let sx, sy = ae_world_to_screen_2d(90, -50)
+    let wx, wy = ae_screen_to_world_2d(sx, sy)
+    ae_camera2d_end()
+
+    # Screen-space HUD overlay
+    ae_draw_text("CAMERA2D WORLD VIEW | PICKED X:" + str(wx) + " Y:" + str(wy), 16, 16, 1, AE_COLOR_WHITE)
+    let cam_x = cam_x + 15
+    let zoom_fp = zoom_fp + 120
+    ae_end_frame()
+}
+
+print "AETHER_05_CAMERA2D_OK"
+ae_shutdown()

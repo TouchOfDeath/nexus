@@ -1,0 +1,511 @@
+# ==============================================================================
+#                  AETHER GRAPHICS ENGINE FOR NEXUS: CORE MODULE
+#                       stdlib/aether/core.nex
+#   Initialization, Context Memory, Colors, Blending, Logging, Timing & Errors
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+# Single global engine context pointer (allocated on demand, 65,536 bytes)
+let _ae_ctx = alloc 65536
+
+# Fixed-Point Scale (1.000 = 1000)
+const AE_ONE = 1000
+const AE_HALF = 500
+const AE_PI = 3142
+const AE_TWO_PI = 6283
+const AE_HALF_PI = 1571
+
+# Backend Identifiers
+const AE_BACKEND_AUTO = 0
+const AE_BACKEND_X11 = 1
+const AE_BACKEND_WIN32 = 2
+const AE_BACKEND_MACOS = 3
+const AE_BACKEND_HEADLESS = 4
+
+# Error Codes
+const AE_OK = 0
+const AE_ERR_INIT = 1
+const AE_ERR_WINDOW = 2
+const AE_ERR_ASSET_NOT_FOUND = 3
+const AE_ERR_INVALID_FORMAT = 4
+const AE_ERR_SHADER_COMPILE = 5
+const AE_ERR_OUT_OF_MEMORY = 6
+const AE_ERR_AUDIO_DEVICE = 7
+const AE_ERR_INVALID_HANDLE = 8
+
+# Log Levels
+const AE_LOG_DEBUG = 0
+const AE_LOG_INFO = 1
+const AE_LOG_WARN = 2
+const AE_LOG_ERROR = 3
+const AE_LOG_NONE = 4
+
+# Blend Modes
+const AE_BLEND_OPAQUE = 0
+const AE_BLEND_ALPHA = 1
+const AE_BLEND_ADDITIVE = 2
+const AE_BLEND_MULTIPLY = 3
+
+# Standard 32-Bit ARGB Color Constants (0xAARRGGBB)
+const AE_COLOR_TRANSPARENT = 0 # 0x00000000
+const AE_COLOR_BLACK = 2130706432 # 0xFF000000
+const AE_COLOR_WHITE = 2147483647 # 0xFFFFFFFF
+const AE_COLOR_RED = 2146387012 # 0xFFEF4444
+const AE_COLOR_GREEN = 2132985182 # 0xFF22C55E
+const AE_COLOR_BLUE = 2134606582 # 0xFF3B82F6
+const AE_COLOR_CYAN = 2131146452 # 0xFF06B6D4
+const AE_COLOR_MAGENTA = 2144945903 # 0xFFD946EF
+const AE_COLOR_YELLOW = 2146087688 # 0xFFEAB308
+const AE_COLOR_ORANGE = 2147054358 # 0xFFF97316
+const AE_COLOR_PURPLE = 2141738487 # 0xFFA855F7
+const AE_COLOR_GOLD = 2147142677 # 0xFFFACC15
+const AE_COLOR_GRAY = 2137289867 # 0xFF64748B
+const AE_COLOR_DARK_GRAY = 2132683067 # 0xFF1E293B
+const AE_COLOR_LIGHT_GRAY = 2144064993 # 0xFFCBD5E1
+const AE_COLOR_NAVY = 2131695402 # 0xFF0F172A
+const AE_COLOR_SLATE = 2134065493 # 0xFF334155
+const AE_COLOR_CRIMSON = 2145134118 # 0xFFDC2626
+const AE_COLOR_LIME = 2139409430 # 0xFF84CC16
+const AE_COLOR_SKY = 2134425080 # 0xFF38BDF8
+const AE_COLOR_CORAL = 2147185029 # 0xFFFB7185
+
+# Short aliases
+const AE_BLACK      = 0xFF000000
+const AE_WHITE      = 0xFFFFFFFF
+const AE_RED        = 0xFFEF4444
+const AE_GREEN      = 0xFF22C55E
+const AE_BLUE       = 0xFF3B82F6
+const AE_CYAN       = 0xFF06B6D4
+const AE_MAGENTA    = 0xFFD946EF
+const AE_YELLOW     = 0xFFEAB308
+const AE_ORANGE     = 0xFFF97316
+const AE_PURPLE     = 0xFFA855F7
+const AE_GOLD       = 0xFFFACC15
+const AE_GRAY       = 0xFF64748B
+const AE_DARK_GRAY  = 0xFF1E293B
+const AE_LIGHT_GRAY = 0xFFCBD5E1
+const AE_NAVY       = 0xFF0F172A
+const AE_SLATE      = 0xFF334155
+const AE_SKY        = 0xFF38BDF8
+
+# ------------------------------------------------------------------------------
+# ae_ensure_ctx: Lazily allocates and initializes the 64 KB Aether context block
+# ------------------------------------------------------------------------------
+fn ae_ensure_ctx() {
+    let is_init = load64 [_ae_ctx + 0]
+    if is_init != 0 {
+        return _ae_ctx
+    }
+    store64 [_ae_ctx + 0] 1                 # initialized = 1
+    let empty_err = ""
+    store64 [_ae_ctx + 24] empty_err        # error_msg_ptr
+    store64 [_ae_ctx + 32] AE_LOG_WARN      # default log_level
+    store64 [_ae_ctx + 48] 60               # target_fps = 60
+    store64 [_ae_ctx + 56] 1                # vsync_enabled = 1
+    store64 [_ae_ctx + 64] 16               # delta_time_ms = 16
+    store64 [_ae_ctx + 72] 16667            # delta_time_us = 16667
+    store64 [_ae_ctx + 88] 60               # fps_current = 60
+    store64 [_ae_ctx + 96] 16               # fixed_dt_ms = 16
+    store64 [_ae_ctx + 112] 13374242        # rng_state seed
+    let ts_buf = alloc 64
+    store64 [_ae_ctx + 136] ts_buf
+    # Record initial monotonic timestamp via sys_clock_gettime(CLOCK_MONOTONIC=1, ts_buf)
+    let rc = syscall2 228, 1, ts_buf
+    let sec0 = load64 [ts_buf + 0]
+    let nsec0 = load64 [ts_buf + 8]
+    store64 [_ae_ctx + 120] sec0
+    store64 [_ae_ctx + 128] nsec0
+
+    # Default display info
+    store64 [_ae_ctx + 568] 1000            # dpi_scale = 1.0x
+    store64 [_ae_ctx + 688] 1920            # monitor_width
+    store64 [_ae_ctx + 696] 1080            # monitor_height
+    store64 [_ae_ctx + 704] 60              # monitor_refresh_hz
+    return _ae_ctx
+}
+
+fn ae_init() {
+    ae_ensure_ctx()
+    return 1
+}
+
+fn ae_is_initialized() {
+    if _ae_ctx == 0 {
+        return 0
+    }
+    let init_flag = load64 [_ae_ctx + 0]
+    return init_flag
+}
+
+# ------------------------------------------------------------------------------
+# Error Handling & Diagnostics
+# ------------------------------------------------------------------------------
+fn ae_set_error(code, msg) {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 16] code
+    store64 [_ae_ctx + 24] msg
+    let lvl = load64 [_ae_ctx + 32]
+    if lvl <= AE_LOG_ERROR {
+        print_raw "[AETHER ERROR] "
+        print_str msg
+    }
+    return code
+}
+
+fn ae_get_error() {
+    if _ae_ctx == 0 {
+        return 0
+    }
+    let c = load64 [_ae_ctx + 16]
+    return c
+}
+
+fn ae_get_error_message() {
+    if _ae_ctx == 0 {
+        return ""
+    }
+    let m = load64 [_ae_ctx + 24]
+    return m
+}
+
+fn ae_clear_error() {
+    if _ae_ctx != 0 {
+        store64 [_ae_ctx + 16] 0
+        let empty_err = ""
+        store64 [_ae_ctx + 24] empty_err
+    }
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Logging System
+# ------------------------------------------------------------------------------
+fn ae_log_set_level(level) {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 32] level
+    return level
+}
+
+fn ae_log_info(msg) {
+    ae_ensure_ctx()
+    let lvl = load64 [_ae_ctx + 32]
+    if lvl <= AE_LOG_INFO {
+        print_raw "[AETHER INFO] "
+        print_str msg
+    }
+}
+
+fn ae_log_warn(msg) {
+    ae_ensure_ctx()
+    let lvl = load64 [_ae_ctx + 32]
+    if lvl <= AE_LOG_WARN {
+        print_raw "[AETHER WARN] "
+        print_str msg
+    }
+}
+
+fn ae_log_error(msg) {
+    ae_ensure_ctx()
+    let lvl = load64 [_ae_ctx + 32]
+    if lvl <= AE_LOG_ERROR {
+        print_raw "[AETHER ERROR] "
+        print_str msg
+    }
+}
+
+# ------------------------------------------------------------------------------
+# Timing & Performance Telemetry
+# ------------------------------------------------------------------------------
+fn ae_time_now_ms() {
+    ae_ensure_ctx()
+    let ts_buf = load64 [_ae_ctx + 136]
+    let rc = syscall2 228, 1, ts_buf
+    let sec0 = load64 [_ae_ctx + 120]
+    let nsec0 = load64 [_ae_ctx + 128]
+    let sec1 = load64 [ts_buf + 0]
+    let nsec1 = load64 [ts_buf + 8]
+    let dsec = sec1 - sec0
+    let dnsec = nsec1 - nsec0
+    let ms = dsec * 1000 + dnsec / 1000000
+    if ms < 0 {
+        let ms = 0
+    }
+    return ms
+}
+
+fn ae_time_now_us() {
+    ae_ensure_ctx()
+    let ts_buf = load64 [_ae_ctx + 136]
+    let rc = syscall2 228, 1, ts_buf
+    let sec0 = load64 [_ae_ctx + 120]
+    let nsec0 = load64 [_ae_ctx + 128]
+    let sec1 = load64 [ts_buf + 0]
+    let nsec1 = load64 [ts_buf + 8]
+    let dsec = sec1 - sec0
+    let dnsec = nsec1 - nsec0
+    let us = dsec * 1000000 + dnsec / 1000
+    if us < 0 {
+        let us = 0
+    }
+    return us
+}
+
+fn ae_sleep_ms(ms) {
+    if ms <= 0 {
+        return 0
+    }
+    ae_ensure_ctx()
+    let ts_buf = load64 [_ae_ctx + 136]
+    let sec = ms / 1000
+    let rem_ms = ms % 1000
+    let nsec = rem_ms * 1000000
+    store64 [ts_buf + 0] sec
+    store64 [ts_buf + 8] nsec
+    let rc = syscall2 35, ts_buf, 0
+    return 1
+}
+
+fn ae_delta_time_ms() {
+    ae_ensure_ctx()
+    let dt = load64 [_ae_ctx + 64]
+    return dt
+}
+
+fn ae_delta_time() {
+    # Returns fixed-point seconds (1000 = 1.0s, so 16ms = 16)
+    ae_ensure_ctx()
+    let dt = load64 [_ae_ctx + 64]
+    return dt
+}
+
+fn ae_total_time_ms() {
+    ae_ensure_ctx()
+    let t = load64 [_ae_ctx + 80]
+    return t
+}
+
+fn ae_fps() {
+    ae_ensure_ctx()
+    let f = load64 [_ae_ctx + 88]
+    return f
+}
+
+fn ae_frame_count() {
+    ae_ensure_ctx()
+    let fc = load64 [_ae_ctx + 40]
+    return fc
+}
+
+fn ae_perf_reset() {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 144] 0
+    store64 [_ae_ctx + 152] 0
+    store64 [_ae_ctx + 160] 0
+    store64 [_ae_ctx + 168] 0
+    store64 [_ae_ctx + 176] 0
+}
+
+fn ae_perf_draw_calls() {
+    ae_ensure_ctx()
+    let v = load64 [_ae_ctx + 144]
+    return v
+}
+
+fn ae_perf_vertices() {
+    ae_ensure_ctx()
+    let v = load64 [_ae_ctx + 152]
+    return v
+}
+
+fn ae_perf_triangles() {
+    ae_ensure_ctx()
+    let v = load64 [_ae_ctx + 160]
+    return v
+}
+
+fn ae_perf_batches() {
+    ae_ensure_ctx()
+    let v = load64 [_ae_ctx + 168]
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# Color Packing, Unpacking, Interpolation & Alpha Blending (0xAARRGGBB)
+# ------------------------------------------------------------------------------
+fn ae_rgba(r, g, b, a = 255) {
+    let rc = r
+    let gc = g
+    let bc = b
+    let ac = a
+    if rc < 0 { let rc = 0 }
+    if rc > 255 { let rc = 255 }
+    if gc < 0 { let gc = 0 }
+    if gc > 255 { let gc = 255 }
+    if bc < 0 { let bc = 0 }
+    if bc > 255 { let bc = 255 }
+    if ac < 0 { let ac = 0 }
+    if ac > 255 { let ac = 255 }
+    let a7 = (ac * 127) / 255
+    let res = a7 * 16777216 + rc * 65536 + gc * 256 + bc
+    return res
+}
+
+fn ae_rgb(r, g, b) {
+    let c = ae_rgba(r, g, b, 255)
+    return c
+}
+
+fn ae_color_a(c) {
+    let a7 = (c / 16777216) % 128
+    let a = (a7 * 255 + 63) / 127
+    return a
+}
+
+fn ae_color_r(c) {
+    let r = (c / 65536) % 256
+    return r
+}
+
+fn ae_color_g(c) {
+    let g = (c / 256) % 256
+    return g
+}
+
+fn ae_color_b(c) {
+    let b = c % 256
+    return b
+}
+
+fn ae_color_with_alpha(c, a) {
+    let r = (c / 65536) % 256
+    let g = (c / 256) % 256
+    let b = c % 256
+    let res = ae_rgba(r, g, b, a)
+    return res
+}
+
+fn ae_color_lerp(c1, c2, t_fp) {
+    let t = t_fp
+    if t < 0 { let t = 0 }
+    if t > 1000 { let t = 1000 }
+    let inv = 1000 - t
+    let a = (ae_color_a(c1) * inv + ae_color_a(c2) * t) / 1000
+    let r = (((c1 / 65536) % 256) * inv + ((c2 / 65536) % 256) * t) / 1000
+    let g = (((c1 / 256) % 256) * inv + ((c2 / 256) % 256) * t) / 1000
+    let b = ((c1 % 256) * inv + (c2 % 256) * t) / 1000
+    let res = ae_rgba(r, g, b, a)
+    return res
+}
+
+fn ae_color_from_hsv(h_deg, s_pct, v_pct) {
+    let h = h_deg % 360
+    if h < 0 { let h = h + 360 }
+    let s = s_pct
+    if s < 0 { let s = 0 }
+    if s > 100 { let s = 100 }
+    let v = v_pct
+    if v < 0 { let v = 0 }
+    if v > 100 { let v = 100 }
+    let c = (v * s * 255) / 10000
+    let m = (v * 255) / 100 - c
+    let h_mod = (h % 120) - 60
+    if h_mod < 0 { let h_mod = 0 - h_mod }
+    let x = (c * (60 - h_mod)) / 60
+    let r = 0
+    let g = 0
+    let b = 0
+    let region = h / 60
+    if region == 0 {
+        let r = c
+        let g = x
+    }
+    if region == 1 {
+        let r = x
+        let g = c
+    }
+    if region == 2 {
+        let g = c
+        let b = x
+    }
+    if region == 3 {
+        let g = x
+        let b = c
+    }
+    if region == 4 {
+        let r = x
+        let b = c
+    }
+    if region >= 5 {
+        let r = c
+        let b = x
+    }
+    let res = ae_rgb(r + m, g + m, b + m)
+    return res
+}
+
+fn ae_blend_color(dst, src, mode = 1) {
+    if mode == AE_BLEND_OPAQUE { return src }
+    let sa7 = (src / 16777216) % 128
+    if sa7 <= 0 { return dst }
+    let sr = (src / 65536) % 256
+    let sg = (src / 256) % 256
+    let sb = src % 256
+    let dr = (dst / 65536) % 256
+    let dg = (dst / 256) % 256
+    let db = dst % 256
+    let r = sr
+    let g = sg
+    let b = sb
+    if mode == AE_BLEND_ALPHA {
+        if sa7 >= 127 { return src }
+        let inv7 = 127 - sa7
+        let r = (sr * sa7 + dr * inv7) / 127
+        let g = (sg * sa7 + dg * inv7) / 127
+        let b = (sb * sa7 + db * inv7) / 127
+    } else if mode == AE_BLEND_ADDITIVE {
+        let r = dr + (sr * sa7) / 127
+        let g = dg + (sg * sa7) / 127
+        let b = db + (sb * sa7) / 127
+        if r > 255 { let r = 255 }
+        if g > 255 { let g = 255 }
+        if b > 255 { let b = 255 }
+    } else if mode == AE_BLEND_MULTIPLY {
+        let r = (dr * sr) / 255
+        let g = (dg * sg) / 255
+        let b = (db * sb) / 255
+    }
+    let res = 2130706432 + r * 65536 + g * 256 + b
+    return res
+}
+
+fn ae_perf_add_draw_2d(verts) {
+    let dc0 = load64 [_ae_ctx + 144]
+    let vt0 = load64 [_ae_ctx + 152]
+    let dc = dc0 + 1
+    let vt = vt0 + verts
+    store64 [_ae_ctx + 144] dc
+    store64 [_ae_ctx + 152] vt
+    return dc
+}
+
+fn ae_perf_add_state_change() {
+    let b0 = load64 [_ae_ctx + 168]
+    let b = b0 + 1
+    store64 [_ae_ctx + 168] b
+    return b
+}
+
+fn ae_color_blend(src, dst, mode = 1) {
+    let c = ae_blend_color(dst, src, mode)
+    return c
+}
+
+fn ae_color_modulate(c1, c2) {
+    let a7 = (((c1 / 16777216) % 128) * ((c2 / 16777216) % 128)) / 127
+    let r = (((c1 / 65536) % 256) * ((c2 / 65536) % 256)) / 255
+    let g = (((c1 / 256) % 256) * ((c2 / 256) % 256)) / 255
+    let b = ((c1 % 256) * (c2 % 256)) / 255
+    let res = a7 * 16777216 + r * 65536 + g * 256 + b
+    return res
+}

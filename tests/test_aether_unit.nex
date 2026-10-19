@@ -1,0 +1,143 @@
+# ==============================================================================
+#  AETHER AUTOMATED UNIT & SUBSYSTEM TEST SUITE (tests/test_aether_unit.nex)
+#  Covers: Math (Vec2/3/4, Mat4, Quat, AABB, Ray), Input & Event Queue,
+#          Audio Synthesis/Mixing/Spatial/WAV, Asset Cache, Clock & Collisions
+# ==============================================================================
+
+import aether
+include "stdlib/assert.nex"
+
+ae_set_backend(AE_BACKEND_HEADLESS)
+let win = ae_window_create("Aether Unit Suite", 320, 240)
+assert_ne win, 0
+
+# 1. Fixed-Point & Float Bridges, Trig & Easing
+assert_eq ae_clamp(150, 0, 100), 100
+assert_eq ae_clamp(-20, 0, 100), 0
+assert_eq ae_lerp(100, 200, 500), 150
+assert_eq ae_sin_deg(0), 0
+assert_eq ae_sin_deg(90), 1000
+assert_eq ae_cos_deg(0), 1000
+assert_eq ae_cos_deg(180), -1000
+assert_eq ae_ease_in_quad(500), 250
+assert_eq ae_ease_out_quad(500), 750
+
+# 2. Vec2, Vec3, Vec4, Quat, Mat4, AABB & Ray
+let v2a = ae_vec2(3000, 4000)
+assert_eq ae_vec2_len(v2a), 5000
+
+let v3a = ae_vec3(1000, 0, 0)
+let v3b = ae_vec3(0, 1000, 0)
+let v3c = ae_vec3_cross(v3a, v3b)
+assert_eq load64 [v3c + 16], 1000
+assert_eq ae_vec3_dot(v3a, v3b), 0
+
+let q = ae_quat_from_axis_angle(0, 1000, 0, 90)
+let vrot = ae_quat_rotate_vec3(q, v3a)
+assert_eq load64 [vrot + 0], 0
+assert_eq load64 [vrot + 16], -1000
+
+let m = ae_mat4_new()
+ae_mat4_translation(m, 500, -300, 1200)
+let tx, ty, tz = ae_mat4_transform_point(m, 100, 200, 300)
+assert_eq tx, 600
+assert_eq ty, -100
+assert_eq tz, 1500
+
+let box1 = ae_aabb_new(-1000, -1000, -1000, 1000, 1000, 1000)
+let box2 = ae_aabb_new(500, 500, 500, 2000, 2000, 2000)
+assert_eq ae_aabb_contains_point(box1, 0, 0, 0), 1
+assert_eq ae_aabb_intersects(box1, box2), 1
+
+let ray = ae_ray_new(0, 0, 5000, 0, 0, -1000)
+let hit_s = ae_ray_intersect_sphere(ray, 0, 0, 0, 1000)
+assert_eq hit_s, 4000
+let hit_b = ae_ray_intersect_aabb(ray, box1)
+assert_eq hit_b, 4000
+
+# 3. Unified Input, Text Input Queue, Focus Loss & Action Mapping
+ae_input_begin_frame()
+ae_input_inject_key(AE_KEY_SPACE, 1, 0)
+ae_inject_text_char(65)
+ae_inject_text_char(66)
+ae_input_inject_mouse_move(120, 85)
+ae_input_inject_mouse_button(AE_MOUSE_LEFT, 1)
+ae_input_inject_mouse_wheel(0, 3)
+ae_input_inject_gamepad(AE_PAD_A, 600, -400, 0, 0)
+
+assert_eq ae_key_down(AE_KEY_SPACE), 1
+assert_eq ae_key_pressed(AE_KEY_SPACE), 1
+assert_eq ae_text_input_count(), 2
+assert_eq ae_text_input_char(0), 65
+assert_eq ae_text_input_char(1), 66
+assert_eq ae_mouse_x(), 120
+assert_eq ae_mouse_y(), 85
+assert_eq ae_mouse_down(AE_MOUSE_LEFT), 1
+assert_eq ae_mouse_pressed(AE_MOUSE_LEFT), 1
+assert_eq ae_mouse_wheel_y(), 3
+assert_eq ae_gamepad_down(AE_PAD_A), 1
+assert_eq ae_gamepad_axis(AE_AXIS_LEFT_X), 600
+
+ae_action_bind(1, AE_KEY_SPACE, AE_KEY_W, AE_MOUSE_LEFT, AE_PAD_A)
+assert_eq ae_action_down(1), 1
+assert_eq ae_action_pressed(1), 1
+
+# Next frame transitions & focus-loss release
+ae_input_begin_frame()
+assert_eq ae_key_down(AE_KEY_SPACE), 1
+assert_eq ae_key_pressed(AE_KEY_SPACE), 0
+assert_eq ae_text_input_count(), 0
+ae_input_on_focus_lost()
+assert_eq ae_key_down(AE_KEY_SPACE), 0
+assert_eq ae_key_released(AE_KEY_SPACE), 1
+
+# 4. Audio Engine, WAV Export/Import, Multi-Voice Mixing & Spatial 3D
+let tone = ae_sound_synth_tone(AE_WAVE_SINE, 440, 100, 800)
+assert_ne tone, 0
+assert_eq ae_sound_save_wav(tone, "/tmp/ae_unit_test.wav"), 1
+let wav_snd = ae_sound_load_wav("/tmp/ae_unit_test.wav")
+assert_ne wav_snd, 0
+
+ae_audio_set_listener(0, 0, 0, 1000, 0, 0)
+let v_right = ae_sound_play_spatial(wav_snd, 4000, 0, 0, 10000, 1000)
+assert_eq ae_voice_is_playing(v_right), 1
+ae_voice_pause(v_right)
+assert_eq ae_voice_is_playing(v_right), 0
+ae_voice_resume(v_right)
+assert_eq ae_voice_is_playing(v_right), 1
+let mixed = ae_audio_update(25)
+assert_ne mixed, 0
+assert_eq ae_audio_peak_left(), 0
+assert_ne ae_audio_peak_right(), 0
+
+# 5. Asset Manager Caching & Reference Counting
+let a1 = ae_asset_load_sound("/tmp/ae_unit_test.wav")
+let a2 = ae_asset_load_sound("/tmp/ae_unit_test.wav")
+assert_eq a1, a2
+assert_eq ae_asset_ref_count(a1), 2
+assert_eq ae_asset_cache_hits(), 1
+ae_asset_release(a1)
+assert_eq ae_asset_ref_count(a1), 1
+
+# 6. Game Clock, Timers & 2D/3D Collision Detection
+let clk = ae_clock_create(16)
+ae_clock_accumulate(clk, 36)
+assert_eq ae_clock_consume_step(clk), 1
+assert_eq ae_clock_consume_step(clk), 1
+assert_eq ae_clock_consume_step(clk), 0
+assert_eq ae_clock_alpha_fp(clk), 250
+
+let tmr = ae_timer_create(100, 0)
+assert_eq ae_timer_update(tmr, 40), 0
+assert_eq ae_timer_progress_fp(tmr), 400
+assert_eq ae_timer_update(tmr, 70), 1
+assert_eq ae_timer_is_finished(tmr), 1
+
+assert_eq ae_collide_rect_rect(0, 0, 50, 50, 25, 25, 50, 50), 1
+assert_eq ae_collide_circle_circle(0, 0, 15, 20, 0, 10), 1
+assert_eq ae_collide_circle_rect(50, 50, 12, 55, 45, 20, 20), 1
+assert_eq ae_collide_sphere_sphere(0, 0, 0, 1000, 1500, 0, 0, 800), 1
+
+ae_shutdown()
+print "AETHER_UNIT_TEST_PASS"
+call nx_assert_summary

@@ -1,0 +1,53 @@
+# ==============================================================================
+#  AETHER EXAMPLE 01: Hello Window & 2D Shapes (examples/aether_01_shapes.nex)
+#  Demonstrates window creation, gradients, lines, thick lines, rectangles,
+#  rounded rectangles, circles, ellipses, triangles, polygons & alpha blending.
+# ==============================================================================
+
+import aether
+
+let win = ae_window_create("Aether 01 - Hello Window & 2D Shapes", 640, 360)
+ae_set_max_frames(3)
+
+let poly = alloc 96
+store64 [poly + 0] 520
+store64 [poly + 8] 180
+store64 [poly + 16] 560
+store64 [poly + 24] 150
+store64 [poly + 32] 605
+store64 [poly + 40] 175
+store64 [poly + 48] 590
+store64 [poly + 56] 230
+store64 [poly + 64] 535
+store64 [poly + 72] 230
+
+while ae_begin_frame() {
+    ae_fill_gradient_v(0, 0, 640, 360, AE_COLOR_NAVY, AE_COLOR_DARK_GRAY)
+
+    # Filled and outlined rectangles + rounded rectangle
+    ae_fill_rect(30, 50, 110, 75, AE_COLOR_CRIMSON)
+    ae_stroke_rect(30, 50, 110, 75, 2, AE_COLOR_WHITE)
+    ae_fill_rounded_rect(165, 50, 130, 75, 16, AE_COLOR_BLUE)
+
+    # Circles and ellipses
+    ae_fill_circle(375, 88, 40, AE_COLOR_GREEN)
+    ae_stroke_circle(375, 88, 44, AE_COLOR_WHITE)
+    ae_fill_ellipse(520, 88, 65, 36, AE_COLOR_PURPLE)
+
+    # Lines, thick lines, triangles, and convex polygon
+    ae_draw_line(30, 160, 140, 235, AE_COLOR_CYAN)
+    ae_draw_line_thick(30, 235, 140, 160, 5, AE_COLOR_ORANGE)
+    ae_fill_triangle(230, 150, 175, 235, 285, 235, AE_COLOR_GOLD)
+    ae_stroke_triangle(230, 150, 175, 235, 285, 235, AE_COLOR_WHITE)
+    ae_fill_polygon(poly, 5, AE_COLOR_MAGENTA)
+
+    # Translucent alpha-blended overlay banner
+    ae_set_blend_mode(AE_BLEND_ALPHA)
+    ae_fill_rounded_rect(180, 265, 280, 55, 10, ae_rgba(6, 182, 212, 160))
+    ae_draw_text_aligned("AETHER 2D PRIMITIVES", 320, 285, 2, AE_COLOR_WHITE, AE_ALIGN_CENTER)
+
+    ae_end_frame()
+}
+
+print "AETHER_01_SHAPES_OK"
+ae_shutdown()

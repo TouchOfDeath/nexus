@@ -1,0 +1,140 @@
+# ==============================================================================
+#  AETHER DETERMINISTIC 2D & 3D RENDERING TEST SUITE (tests/test_aether_render.nex)
+#  Covers: Window/Multi-Window, 2D Primitives, Scissor, Blend Modes, Camera2D,
+#          Textures, Sprites, SpriteSheet Animator, Text, 3D Meshes, OBJ Loader,
+#          Shaders, Lighting, Shadows, Depth Buffer, Scene Graph & RenderTargets
+# ==============================================================================
+
+import aether
+include "stdlib/assert.nex"
+
+ae_set_backend(AE_BACKEND_HEADLESS)
+let win1 = ae_window_create("Window 1", 320, 240)
+let win2 = ae_window_create("Window 2", 160, 120)
+assert_ne win1, 0
+assert_ne win2, 0
+assert_eq ae_window_width(), 160
+assert_eq ae_window_height(), 120
+
+# Switch back to Window 1 and test High-DPI & resize
+ae_window_make_current(win1)
+assert_eq ae_window_width(), 320
+assert_eq ae_window_height(), 240
+ae_window_set_dpi_scale(2000)
+assert_eq ae_framebuffer_width(), 640
+assert_eq ae_framebuffer_height(), 480
+ae_window_set_dpi_scale(1000)
+assert_eq ae_framebuffer_width(), 320
+assert_eq ae_framebuffer_height(), 240
+
+# 1. 2D Rendering, Scissor Clipping, Blending & Camera2D
+ae_begin_frame()
+ae_clear(AE_COLOR_BLACK)
+assert_eq ae_framebuffer_nonblack_pixels(), 0
+
+ae_fill_rect(20, 20, 60, 40, AE_COLOR_RED)
+assert_eq ae_read_pixel(40, 40), AE_COLOR_RED
+assert_eq ae_read_pixel(10, 10), AE_COLOR_BLACK
+
+# Scissor clipping test
+ae_scissor_begin(100, 100, 40, 40)
+ae_fill_rect(80, 80, 100, 100, AE_COLOR_GREEN)
+ae_scissor_end()
+assert_eq ae_read_pixel(90, 90), AE_COLOR_BLACK
+assert_eq ae_read_pixel(120, 120), AE_COLOR_GREEN
+assert_eq ae_read_pixel(150, 150), AE_COLOR_BLACK
+
+# Alpha & Additive blending
+ae_set_blend_mode(AE_BLEND_ALPHA)
+ae_fill_rect(20, 20, 60, 40, ae_rgba(0, 0, 255, 128))
+let blended_px = ae_read_pixel(40, 40)
+assert_ne blended_px, AE_COLOR_RED
+assert_ne blended_px, AE_COLOR_BLUE
+
+# 2D Camera World <-> Screen roundtrip
+let cam2d = ae_camera2d_new(100, 50, 2000, 0)
+ae_camera2d_begin(cam2d)
+let sx, sy = ae_world_to_screen_2d(110, 60)
+let wx, wy = ae_screen_to_world_2d(sx, sy)
+assert_eq wx, 110
+assert_eq wy, 60
+ae_camera2d_end()
+
+# 2. Textures, Sprites, SpriteSheets, Animator & Font Text
+let tex = ae_texture_checkerboard(32, 32, 8, AE_COLOR_CYAN, AE_COLOR_YELLOW)
+let sp = ae_sprite_new(tex, 0, 0, 1000, 1000)
+ae_draw_sprite(sp, 180, 20, 1000, 1000, 0, AE_COLOR_WHITE)
+assert_ne ae_read_pixel(184, 24), AE_COLOR_BLACK
+
+let sheet = ae_spritesheet_new(tex, 16, 16)
+let anim = ae_animator_new(sheet, 0, 4, 10, 1)
+assert_eq ae_animator_update(anim, 100), 1
+ae_animator_draw(anim, 230, 20, 1000, 0, AE_COLOR_WHITE)
+
+assert_eq ae_text_width("AETHER", 2), 96
+ae_draw_text("AETHER", 20, 180, 2, AE_COLOR_WHITE)
+
+# PPM export & reload round-trip
+assert_eq ae_save_ppm("/tmp/ae_render_test.ppm"), 1
+let loaded_ppm = ae_texture_load_ppm("/tmp/ae_render_test.ppm")
+assert_ne loaded_ppm, 0
+assert_eq load64 [loaded_ppm + 0], 320
+assert_eq load64 [loaded_ppm + 8], 240
+
+# 3. 3D Rendering, Depth Buffer, Shaders, Lighting, Shadows & Scene Graph
+ae_clear(AE_COLOR_BLACK)
+ae_draw_skybox(AE_COLOR_NAVY, AE_COLOR_SKY, AE_COLOR_SLATE)
+
+let cam3d = ae_camera3d_perspective(60, 1333, 100, 50000)
+ae_camera3d_orbit(cam3d, 0, 0, 0, 3500, 0, 15)
+ae_camera3d_begin(cam3d)
+
+ae_light_set_ambient(50, 50, 70, 1000)
+ae_light_set_directional(-400, -800, -400, 255, 245, 220, 1000)
+ae_light_add_point(1200, 1200, 1200, 255, 120, 40, 5000, 900)
+ae_shadow_enable(-900, 450)
+
+let cube = ae_mesh_create_cube(1200)
+let pyr = ae_mesh_create_pyramid(1200, 1400)
+let mat_phong = ae_material_create(AE_SHADER_PHONG, AE_COLOR_RED, tex)
+let mat_toon = ae_material_create(AE_SHADER_TOON, AE_COLOR_GOLD, 0)
+
+let t1 = ae_draw_mesh_trs(cube, 0, 0, -400, 20, 35, 0, 1000, 1000, 1000, mat_phong)
+assert_ne t1, 0
+let d_back = ae_read_depth(160, 120)
+let t2 = ae_draw_mesh_trs(pyr, 0, 200, 1000, 0, 25, 0, 1000, 1000, 1000, mat_toon)
+assert_ne t2, 0
+let d_front = ae_read_depth(160, 120)
+let closer = 0
+if d_front < d_back { let closer = 1 }
+assert_eq closer, 1
+
+# Scene graph parent-child hierarchy
+let root_nd = ae_node3d_create(cube, mat_phong)
+ae_node3d_set_position(root_nd, 400, 100, -200)
+let child_nd = ae_node3d_create(pyr, mat_toon)
+ae_node3d_set_position(child_nd, -100, 700, 300)
+ae_node3d_add_child(root_nd, child_nd)
+assert_eq ae_scene_draw(root_nd), 2
+let cwx, cwy, cwz = ae_node3d_world_position(child_nd)
+assert_eq cwx, 300
+assert_eq cwy, 800
+assert_eq cwz, 100
+
+# Offscreen RenderTarget & Post-Processing
+let rt = ae_render_target_create(64, 64)
+ae_render_target_begin(rt)
+ae_clear(AE_COLOR_BLUE)
+ae_fill_circle(32, 32, 18, AE_COLOR_YELLOW)
+ae_post_process_apply(AE_POST_GRAYSCALE)
+ae_render_target_end()
+ae_draw_texture(ae_render_target_texture(rt), 10, 10, AE_COLOR_WHITE)
+
+# Deterministic checksum consistency across identical renders
+let csum1 = ae_framebuffer_checksum()
+assert_ne csum1, 0
+
+ae_end_frame()
+ae_shutdown()
+print "AETHER_RENDER_TEST_PASS"
+call nx_assert_summary

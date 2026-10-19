@@ -104,11 +104,12 @@ int main(int argc, char** argv) {
     long in_size = ftell(fin);
     fseek(fin, 0, SEEK_SET);
 
-    if (in_size != 49152) {
-        fprintf(stderr, "[-] Error: Input binary '%s' has invalid size (%ld bytes, expected exactly 49152 bytes)\n", in_path, in_size);
+    if (in_size != 49152 && in_size != 245760) {
+        fprintf(stderr, "[-] Error: Input binary '%s' has invalid size (%ld bytes)\n", in_path, in_size);
         fclose(fin);
         return 1;
     }
+    uint32_t shift = (uint32_t)(in_size - 49152);
 
     uint8_t* pe_data = (uint8_t*)malloc(in_size);
     if (fread(pe_data, 1, in_size, fin) != (size_t)in_size) {
@@ -126,15 +127,23 @@ int main(int argc, char** argv) {
     }
 
     size_t stubs_len = sizeof(g_stubs);
-    size_t elf_size = 0xE000 + stubs_len;
+    size_t stubs_off = 0xE000 + shift;
+    size_t elf_size = stubs_off + stubs_len;
     uint8_t* elf_data = (uint8_t*)calloc(1, elf_size);
 
     // 1. Copy original binary data
     memcpy(elf_data, pe_data, in_size);
     free(pe_data);
 
-    // 2. Append syscall bridge stubs at 0x9000 (RVA 0x409000)
-    memcpy(elf_data + 0xE000, g_stubs, stubs_len);
+    // 2. Append syscall bridge stubs (patching section offsets when shift > 0)
+    memcpy(elf_data + stubs_off, g_stubs, stubs_len);
+    if (shift > 0) {
+        static const int patch_offs[] = { 3, 10, 27, 34, 41, 60, 75, 90, 105, 120, 135, 150 };
+        for (int pi = 0; pi < 12; pi++) {
+            uint32_t *p32 = (uint32_t*)(elf_data + stubs_off + patch_offs[pi]);
+            *p32 += shift;
+        }
+    }
 
     // 3. Construct ELF64 Header at offset 0x0000
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)elf_data;
@@ -149,7 +158,7 @@ int main(int argc, char** argv) {
     ehdr->e_type = 2;     // ET_EXEC
     ehdr->e_machine = 0x3E; // EM_X86_64
     ehdr->e_version = 1;
-    ehdr->e_entry = 0x40E000; // Entry point: syscall stubs bootstrap
+    ehdr->e_entry = 0x40E000 + shift; // Entry point: syscall stubs bootstrap
     ehdr->e_phoff = 64;   // Program header immediately follows ELF header
     ehdr->e_shoff = 0;    // No section header table needed
     ehdr->e_flags = 0;

@@ -49,6 +49,23 @@ static int exists(const char *p) {
     return stat(p, &st) == 0;
 }
 
+static int needs_xl_compiler(const char *code_path) {
+    FILE *f = fopen(code_path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return 0; }
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return 0; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[rd] = '\0';
+    int use_xl = (strstr(buf, "_ae_") != NULL || sz > 48000);
+    free(buf);
+    return use_xl;
+}
+
 /* run a command: returns exit code; stdout captured into out (malloc'd), stderr inherited */
 static char *run_capture(char *const argv[], int *rc) {
     int pipefd[2];
@@ -124,7 +141,11 @@ static int run_test(const char *path) {
     /* 2. compile (from the compiler dir: it reads code.nex in cwd) */
     if (chdir(compiler_dir) != 0) { perror("[-] compiler dir"); return 0; }
     char *cargv[3];
-    if (exists("nexc.elf")) {
+    int use_xl = needs_xl_compiler("code.nex") && exists("nexc_xl.elf");
+    if (use_xl) {
+        cargv[0] = (char *)"./nexc_xl.elf";
+        cargv[1] = NULL;
+    } else if (exists("nexc.elf")) {
         cargv[0] = (char *)"./nexc.elf";
         cargv[1] = NULL;
     } else {
@@ -135,6 +156,11 @@ static int run_test(const char *path) {
     int crc;
     char *cout = run_capture(cargv, &crc);
     free(cout);
+    if (!exists("app.elf") && exists("app.exe")) {
+        char *eargv[] = { (char *)"../bin/nexelf", (char *)"app.exe", (char *)"app.elf", NULL };
+        int erc_elf;
+        free(run_capture(eargv, &erc_elf));
+    }
     if (!exists("app.elf")) {
         printf("[-] %-40s FAIL (compile, output gated)\n", path);
         chdir(root);

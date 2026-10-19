@@ -1,0 +1,978 @@
+# ==============================================================================
+#                 AETHER GRAPHICS ENGINE FOR NEXUS: WINDOW MODULE
+#                       stdlib/aether/window.nex
+#   Cross-Platform Window & Application Lifecycle, Multi-Window, High-DPI,
+#   VSync, Frame Timing, X11 Wire Protocol + Headless Offscreen Framebuffer,
+#   and Deterministic PPM/BMP Image Export
+# ==============================================================================
+
+include "stdlib/aether/core.nex"
+include "stdlib/aether/input.nex"
+
+# Window Mode Flags
+const AE_WINDOW_WINDOWED            = 0
+const AE_WINDOW_FULLSCREEN          = 1
+const AE_WINDOW_BORDERLESS          = 2
+const AE_WINDOW_RESIZABLE           = 4
+const AE_WINDOW_HIDDEN              = 8
+const AE_WINDOW_HIGHDPI             = 16
+
+struct AeWindow {
+    id: int,
+    width: int,
+    height: int
+}
+
+# ------------------------------------------------------------------------------
+# Internal X11 Socket & Wire Protocol Backend (with automatic Headless fallback)
+# ------------------------------------------------------------------------------
+fn ae_x11_set_title(title) {
+    ae_ensure_ctx()
+    let fd = load64 [_ae_ctx + 648]
+    if fd <= 0 { return 0 }
+    let io_buf = load64 [_ae_ctx + 680]
+    let win_id = load64 [_ae_ctx + 656]
+    let tlen = len title
+    if tlen > 120 { let tlen = 120 }
+    let padded = ((tlen + 3) / 4) * 4
+    let req_quads = 6 + padded / 4
+    let req_bytes = req_quads * 4
+
+    store [io_buf + 0] 18
+    store [io_buf + 1] 0
+    store16 [io_buf + 2] req_quads
+    store32 [io_buf + 4] win_id
+    store32 [io_buf + 8] 39
+    store32 [io_buf + 12] 31
+    store [io_buf + 16] 8
+    store [io_buf + 17] 0
+    store [io_buf + 18] 0
+    store [io_buf + 19] 0
+    store32 [io_buf + 20] tlen
+
+    let i = 0
+    while i < padded {
+        let ch = 0
+        if i < tlen {
+            let ch = load [title + i]
+        }
+        let dst_off = 24 + i
+        store [io_buf + dst_off] ch
+        let i = i + 1
+    }
+    let wr = syscall3 1, fd, io_buf, req_bytes
+    return 1
+}
+
+fn ae_x11_connect(w, h, title) {
+    ae_ensure_ctx()
+    let io_buf = load64 [_ae_ctx + 680]
+    if io_buf == 0 {
+        let io_buf = alloc 32768
+        store64 [_ae_ctx + 680] io_buf
+    }
+
+    # Check if forced headless mode
+    let cur_backend = load64 [_ae_ctx + 8]
+    if cur_backend == AE_BACKEND_HEADLESS {
+        store64 [_ae_ctx + 648] 0
+        return 0
+    }
+
+    # 1. Open non-blocking UNIX domain socket: socket(AF_UNIX=1, SOCK_STREAM=1, 0)
+    let fd = syscall3 41, 1, 1, 0
+    if fd < 0 {
+        store64 [_ae_ctx + 8] AE_BACKEND_HEADLESS
+        store64 [_ae_ctx + 648] 0
+        return 0
+    }
+
+    # 2. Build sockaddr_un for "/tmp/.X11-unix/X0"
+    store16 [io_buf + 0] 1
+    let spath = "/tmp/.X11-unix/X0"
+    let si = 0
+    while si < 18 {
+        let sc = load [spath + si]
+        let soff = si + 2
+        store [io_buf + soff] sc
+        let si = si + 1
+    }
+
+    let conn = syscall3 42, fd, io_buf, 110
+    if conn < 0 {
+        let cl = syscall1 3, fd
+        store64 [_ae_ctx + 8] AE_BACKEND_HEADLESS
+        store64 [_ae_ctx + 648] 0
+        return 0
+    }
+
+    # 3. X11 12-byte Setup Request
+    store [io_buf + 0] 108
+    store [io_buf + 1] 0
+    store16 [io_buf + 2] 11
+    store16 [io_buf + 4] 0
+    store16 [io_buf + 6] 0
+    store16 [io_buf + 8] 0
+    store16 [io_buf + 10] 0
+    let wr = syscall3 1, fd, io_buf, 12
+
+    let rd = syscall3 0, fd, io_buf, 8
+    if rd < 8 {
+        let cl = syscall1 3, fd
+        store64 [_ae_ctx + 8] AE_BACKEND_HEADLESS
+        store64 [_ae_ctx + 648] 0
+        return 0
+    }
+    let hstatus = load [io_buf + 0]
+    if hstatus != 1 {
+        let cl = syscall1 3, fd
+        store64 [_ae_ctx + 8] AE_BACKEND_HEADLESS
+        store64 [_ae_ctx + 648] 0
+        return 0
+    }
+
+    let add_quads = load16 [io_buf + 6]
+    let add_bytes = add_quads * 4
+    let cur_read = 0
+    while cur_read < add_bytes {
+        let rem = add_bytes - cur_read
+        let rptr = io_buf + cur_read
+        let n = syscall3 0, fd, rptr, rem
+        if n <= 0 {
+            let cl = syscall1 3, fd
+            store64 [_ae_ctx + 8] AE_BACKEND_HEADLESS
+            store64 [_ae_ctx + 648] 0
+            return 0
+        }
+        let cur_read = cur_read + n
+    }
+
+    let r_base = load32 [io_buf + 4]
+    let v_len = load16 [io_buf + 16]
+    let n_fmts = load [io_buf + 21]
+    let v_pad = ((v_len + 3) / 4) * 4
+    let scr_offset = 32 + v_pad + n_fmts * 8
+    let root_win = load32 [io_buf + scr_offset]
+    let scr_w_off = scr_offset + 20
+    let scr_h_off = scr_offset + 22
+    let mon_w = load16 [io_buf + scr_w_off]
+    let mon_h = load16 [io_buf + scr_h_off]
+    if mon_w > 0 { store64 [_ae_ctx + 688] mon_w }
+    if mon_h > 0 { store64 [_ae_ctx + 696] mon_h }
+
+    let win_id = r_base + 1
+    let gc_id = r_base + 2
+
+    store64 [_ae_ctx + 8] AE_BACKEND_X11
+    store64 [_ae_ctx + 648] fd
+    store64 [_ae_ctx + 656] win_id
+    store64 [_ae_ctx + 664] gc_id
+    store64 [_ae_ctx + 672] root_win
+
+    # 4. CreateWindow (Opcode 1, 40 bytes) with Key/Button/Motion/Exposure/StructureNotify
+    store [io_buf + 0] 1
+    store [io_buf + 1] 0
+    store16 [io_buf + 2] 10
+    store32 [io_buf + 4] win_id
+    store32 [io_buf + 8] root_win
+    store16 [io_buf + 12] 80
+    store16 [io_buf + 14] 60
+    store16 [io_buf + 16] w
+    store16 [io_buf + 18] h
+    store16 [io_buf + 20] 0
+    store16 [io_buf + 22] 0
+    store32 [io_buf + 24] 0
+    store32 [io_buf + 28] 2050
+    store32 [io_buf + 32] 989738
+    store32 [io_buf + 36] 2261071
+    let wr = syscall3 1, fd, io_buf, 40
+
+    # 5. CreateGC (Opcode 55, 16 bytes)
+    store [io_buf + 0] 55
+    store [io_buf + 1] 0
+    store16 [io_buf + 2] 4
+    store32 [io_buf + 4] gc_id
+    store32 [io_buf + 8] win_id
+    store32 [io_buf + 12] 0
+    let wr = syscall3 1, fd, io_buf, 16
+
+    # 6. MapWindow (Opcode 8, 8 bytes)
+    store [io_buf + 0] 8
+    store [io_buf + 1] 0
+    store16 [io_buf + 2] 2
+    store32 [io_buf + 4] win_id
+    let wr = syscall3 1, fd, io_buf, 8
+
+    ae_x11_set_title(title)
+    return 1
+}
+
+fn ae_window_resize(new_w, new_h) {
+    ae_ensure_ctx()
+    if new_w <= 0 { return 0 }
+    if new_h <= 0 {
+        ae_set_error(AE_ERR_WINDOW, "Invalid resize dimensions")
+        return 0
+    }
+    let dpi = load64 [_ae_ctx + 568]
+    let fbw = (new_w * dpi) / 1000
+    let fbh = (new_h * dpi) / 1000
+    if fbw < 1 { let fbw = 1 }
+    if fbh < 1 { let fbh = 1 }
+
+    let total_pixels = fbw * fbh
+    let buf_bytes = total_pixels * 4
+    let cbuf = alloc buf_bytes
+    let dbuf = alloc buf_bytes
+    let di = 0
+    while di < total_pixels {
+        let doff = di * 4
+        store32 [dbuf + doff] 1000000000
+        let di = di + 1
+    }
+
+    store64 [_ae_ctx + 536] new_w
+    store64 [_ae_ctx + 544] new_h
+    store64 [_ae_ctx + 552] fbw
+    store64 [_ae_ctx + 560] fbh
+    store64 [_ae_ctx + 632] cbuf
+    store64 [_ae_ctx + 640] dbuf
+    store64 [_ae_ctx + 2560] 0
+    store64 [_ae_ctx + 2568] 0
+    store64 [_ae_ctx + 2576] fbw
+    store64 [_ae_ctx + 2584] fbh
+    store64 [_ae_ctx + 3824] 0
+    store64 [_ae_ctx + 3832] 0
+    store64 [_ae_ctx + 3840] fbw
+    store64 [_ae_ctx + 3848] fbh
+
+    let wid = load64 [_ae_ctx + 520]
+    let wtable = load64 [_ae_ctx + 528]
+    if wid > 0 {
+        let wptr = wtable + (wid - 1) * 128
+        store64 [wptr + 8]  new_w
+        store64 [wptr + 16] new_h
+        store64 [wptr + 24] fbw
+        store64 [wptr + 32] fbh
+        store64 [wptr + 40] cbuf
+        store64 [wptr + 48] dbuf
+    }
+
+    ae_push_event(AE_EVENT_RESIZE, new_w, new_h, 0)
+    return 1
+}
+
+# Maps Linux X11 hardware keycode (evdev+8) to Aether AE_KEY_* and optional ASCII char
+fn ae_x11_translate_keycode(kc) {
+    if kc == 9 { return AE_KEY_ESCAPE, 0 }
+    if kc == 65 { return AE_KEY_SPACE, 32 }
+    if kc == 36 { return AE_KEY_ENTER, 10 }
+    if kc == 111 { return AE_KEY_UP, 0 }
+    if kc == 116 { return AE_KEY_DOWN, 0 }
+    if kc == 113 { return AE_KEY_LEFT, 0 }
+    if kc == 114 { return AE_KEY_RIGHT, 0 }
+    if kc >= 10 {
+        if kc <= 58 {
+            let kmap = "1234567890----QWERTYUIOP----ASDFGHJKL-----ZXCVBNM"
+            let idx = kc - 10
+            let ch = load [kmap + idx]
+            if ch != 45 {
+                let asc = ch
+                if ch >= 65 { let asc = ch + 32 }
+                return ch, asc
+            }
+        }
+    }
+    return 0, 0
+}
+
+fn ae_x11_poll_events() {
+    let fd = load64 [_ae_ctx + 648]
+    if fd <= 0 { return 0 }
+    let io_buf = load64 [_ae_ctx + 680]
+    let kd_buf = load64 [_ae_ctx + 1536]
+    let kp_buf = load64 [_ae_ctx + 1544]
+    let kr_buf = load64 [_ae_ctx + 1552]
+    let polling = 1
+    while polling == 1 {
+        let n = syscall6 45, fd, io_buf, 32, 64, 0, 0
+        if n < 32 {
+            let polling = 0
+        } else {
+            let ev_code = load [io_buf + 0]
+            if ev_code > 127 { let ev_code = ev_code - 128 }
+            if ev_code == 2 {
+                let kc = load [io_buf + 1]
+                let akey, achar = ae_x11_translate_keycode(kc)
+                if akey > 0 {
+                    store [kd_buf + akey] 1
+                    store [kp_buf + akey] 1
+                    store64 [_ae_ctx + 1576] akey
+                }
+            }
+            if ev_code == 3 {
+                let kc = load [io_buf + 1]
+                let akey, achar = ae_x11_translate_keycode(kc)
+                if akey > 0 {
+                    store [kd_buf + akey] 0
+                    store [kr_buf + akey] 1
+                }
+            }
+            if ev_code == 4 {
+                let btn = load [io_buf + 1]
+                if btn == 1 {
+                    store64 [_ae_ctx + 1664] 1
+                    store64 [_ae_ctx + 1672] 1
+                }
+            }
+            if ev_code == 5 {
+                let btn = load [io_buf + 1]
+                if btn == 1 {
+                    store64 [_ae_ctx + 1664] 0
+                    store64 [_ae_ctx + 1680] 1
+                }
+            }
+            if ev_code == 6 {
+                let mx = load16 [io_buf + 24]
+                let my = load16 [io_buf + 26]
+                store64 [_ae_ctx + 1600] mx
+                store64 [_ae_ctx + 1608] my
+            }
+            if ev_code == 17 { store64 [_ae_ctx + 576] 0 }
+            if ev_code == 33 { store64 [_ae_ctx + 576] 0 }
+        }
+    }
+    return 1
+}
+
+fn ae_x11_present_framebuffer() {
+    let fd = load64 [_ae_ctx + 648]
+    if fd <= 0 { return 0 }
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let win_id = load64 [_ae_ctx + 656]
+    let gc_id = load64 [_ae_ctx + 664]
+    let io_buf = load64 [_ae_ctx + 680]
+
+    store [io_buf + 0] 72
+    store [io_buf + 1] 2
+    store32 [io_buf + 4] win_id
+    store32 [io_buf + 8] gc_id
+    store16 [io_buf + 12] fbw
+    store16 [io_buf + 16] 0
+    store [io_buf + 20] 0
+    store [io_buf + 21] 24
+    store16 [io_buf + 22] 0
+
+    let sy = 0
+    while sy < fbh {
+        let cur_h = 16
+        let rem_h = fbh - sy
+        if cur_h > rem_h { let cur_h = rem_h }
+        let req_quads = fbw * cur_h + 6
+        store16 [io_buf + 2] req_quads
+        store16 [io_buf + 14] cur_h
+        store16 [io_buf + 18] sy
+        let wr1 = syscall3 1, fd, io_buf, 24
+
+        let pix_off = sy * fbw * 4
+        let strip_bytes = fbw * cur_h * 4
+        let pix_ptr = cbuf + pix_off
+        let wr2 = syscall3 1, fd, pix_ptr, strip_bytes
+        let sy = sy + cur_h
+    }
+    return 1
+}
+
+fn ae_set_backend(backend_type) {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 8] backend_type
+    return backend_type
+}
+
+fn ae_get_backend() {
+    let b = load64 [_ae_ctx + 8]
+    return b
+}
+
+fn ae_window_create_ex(title, width, height, flags = 0) {
+    ae_ensure_ctx()
+    ae_input_init()
+    if width <= 0 {
+        ae_set_error(AE_ERR_WINDOW, "Invalid window width")
+        return 0
+    }
+    if height <= 0 {
+        ae_set_error(AE_ERR_WINDOW, "Invalid window height")
+        return 0
+    }
+    let wtable = load64 [_ae_ctx + 528]
+    if wtable == 0 {
+        let wtable = alloc 2048
+        store64 [_ae_ctx + 528] wtable
+    }
+    let wcount = load64 [_ae_ctx + 512]
+    if wcount >= 8 {
+        ae_set_error(AE_ERR_WINDOW, "Maximum window count exceeded")
+        return 0
+    }
+    let wid = wcount + 1
+    store64 [_ae_ctx + 512] wid
+    store64 [_ae_ctx + 520] wid
+    store64 [_ae_ctx + 576] 1
+    store64 [_ae_ctx + 584] 1
+    store64 [_ae_ctx + 592] 1
+    store64 [_ae_ctx + 600] 0
+    store64 [_ae_ctx + 608] 0
+    store64 [_ae_ctx + 616] 1
+    store64 [_ae_ctx + 624] title
+
+    let woff = (wid - 1) * 128
+    let woff7 = woff + 56
+    let woff8 = woff + 64
+    store64 [wtable + woff] wid
+    store64 [wtable + woff7] title
+    store64 [wtable + woff8] 1
+
+    ae_window_resize(width, height)
+    ae_x11_connect(width, height, title)
+
+    let cbuf = load64 [_ae_ctx + 632]
+    let dbuf = load64 [_ae_ctx + 640]
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+
+    let win = alloc 48
+    store64 [win + 0] wid
+    store64 [win + 8] width
+    store64 [win + 16] height
+    store64 [win + 24] cbuf
+    store64 [win + 32] dbuf
+    store64 [win + 40] 1
+    return win
+}
+
+fn ae_window_create(title, width, height) {
+    let win = ae_window_create_ex(title, width, height, AE_WINDOW_RESIZABLE)
+    return win
+}
+
+fn ae_create_window(title, width, height) {
+    let win = ae_window_create_ex(title, width, height, AE_WINDOW_RESIZABLE)
+    return win
+}
+
+fn ae_window_make_current(win) {
+    ae_ensure_ctx()
+    if win == 0 { return 0 }
+    let wid = load64 [win + 0]
+    let max_wid = load64 [_ae_ctx + 512]
+    if wid <= 0 { return 0 }
+    if wid > max_wid {
+        ae_set_error(AE_ERR_INVALID_HANDLE, "Invalid window handle in ae_window_make_current")
+        return 0
+    }
+    let wtable = load64 [_ae_ctx + 528]
+    let woff = (wid - 1) * 128
+    let woff1 = woff + 8
+    let woff2 = woff + 16
+    let woff3 = woff + 24
+    let woff4 = woff + 32
+    let woff5 = woff + 40
+    let woff6 = woff + 48
+    let woff7 = woff + 56
+    let w = load64 [wtable + woff1]
+    let h = load64 [wtable + woff2]
+    let fbw = load64 [wtable + woff3]
+    let fbh = load64 [wtable + woff4]
+    let cbuf = load64 [wtable + woff5]
+    let dbuf = load64 [wtable + woff6]
+    let title = load64 [wtable + woff7]
+
+    store64 [_ae_ctx + 520] wid
+    store64 [_ae_ctx + 536] w
+    store64 [_ae_ctx + 544] h
+    store64 [_ae_ctx + 552] fbw
+    store64 [_ae_ctx + 560] fbh
+    store64 [_ae_ctx + 624] title
+    store64 [_ae_ctx + 632] cbuf
+    store64 [_ae_ctx + 640] dbuf
+    store64 [_ae_ctx + 2560] 0
+    store64 [_ae_ctx + 2568] 0
+    store64 [_ae_ctx + 2576] fbw
+    store64 [_ae_ctx + 2584] fbh
+    store64 [_ae_ctx + 3824] 0
+    store64 [_ae_ctx + 3832] 0
+    store64 [_ae_ctx + 3840] fbw
+    store64 [_ae_ctx + 3848] fbh
+    return wid
+}
+
+fn ae_window_is_open(win = 0) {
+    let open = load64 [_ae_ctx + 576]
+    if open == 0 { return 0 }
+    let max_f = load64 [_ae_ctx + 184]
+    if max_f > 0 {
+        let cur_f = load64 [_ae_ctx + 40]
+        if cur_f >= max_f {
+            store64 [_ae_ctx + 576] 0
+            return 0
+        }
+    }
+    return 1
+}
+
+fn ae_is_open() {
+    let r = ae_window_is_open(0)
+    return r
+}
+
+fn ae_window_close(win = 0) {
+    store64 [_ae_ctx + 576] 0
+    ae_push_event(AE_EVENT_QUIT, 0, 0, 0)
+    return 1
+}
+
+fn ae_window_destroy(win = 0) {
+    ae_window_close(win)
+    let fd = load64 [_ae_ctx + 648]
+    if fd > 0 {
+        let cl = syscall1 3, fd
+        store64 [_ae_ctx + 648] 0
+    }
+    return 1
+}
+
+fn ae_shutdown() {
+    ae_window_destroy(0)
+    store64 [_ae_ctx + 0] 0
+    return 1
+}
+
+fn ae_window_set_title(title) {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 624] title
+    ae_x11_set_title(title)
+    return 1
+}
+
+fn ae_window_get_title() {
+    let t = load64 [_ae_ctx + 624]
+    return t
+}
+
+fn ae_window_width() {
+    let w = load64 [_ae_ctx + 536]
+    return w
+}
+
+fn ae_window_height() {
+    let h = load64 [_ae_ctx + 544]
+    return h
+}
+
+fn ae_framebuffer_width() {
+    let w = load64 [_ae_ctx + 552]
+    return w
+}
+
+fn ae_framebuffer_height() {
+    let h = load64 [_ae_ctx + 560]
+    return h
+}
+
+fn ae_window_set_dpi_scale(scale_fp) {
+    ae_ensure_ctx()
+    if scale_fp < 500 { let scale_fp = 500 }
+    if scale_fp > 4000 { let scale_fp = 4000 }
+    store64 [_ae_ctx + 568] scale_fp
+    let w = load64 [_ae_ctx + 536]
+    let h = load64 [_ae_ctx + 544]
+    if w > 0 {
+        ae_window_resize(w, h)
+    }
+    return scale_fp
+}
+
+fn ae_window_get_dpi_scale() {
+    let s = load64 [_ae_ctx + 568]
+    return s
+}
+
+fn ae_window_set_fullscreen(mode) {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 608] mode
+    if mode > 0 {
+        let mw = load64 [_ae_ctx + 688]
+        let mh = load64 [_ae_ctx + 696]
+        ae_window_resize(mw, mh)
+    }
+    return mode
+}
+
+fn ae_window_get_fullscreen() {
+    let m = load64 [_ae_ctx + 608]
+    return m
+}
+
+fn ae_window_minimize() {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 600] 1
+    store64 [_ae_ctx + 592] 0
+    ae_push_event(AE_EVENT_MINIMIZED, 0, 0, 0)
+    return 1
+}
+
+fn ae_window_restore() {
+    ae_ensure_ctx()
+    store64 [_ae_ctx + 600] 0
+    store64 [_ae_ctx + 592] 1
+    ae_push_event(AE_EVENT_RESTORED, 0, 0, 0)
+    return 1
+}
+
+fn ae_window_is_minimized() {
+    let m = load64 [_ae_ctx + 600]
+    return m
+}
+
+fn ae_window_is_focused() {
+    let f = load64 [_ae_ctx + 584]
+    return f
+}
+
+fn ae_window_is_visible() {
+    let v = load64 [_ae_ctx + 592]
+    return v
+}
+
+fn ae_monitor_width() {
+    let w = load64 [_ae_ctx + 688]
+    return w
+}
+
+fn ae_monitor_height() {
+    let h = load64 [_ae_ctx + 696]
+    return h
+}
+
+fn ae_monitor_refresh_rate() {
+    let r = load64 [_ae_ctx + 704]
+    return r
+}
+
+fn ae_set_vsync(enabled) {
+    store64 [_ae_ctx + 56] enabled
+    return enabled
+}
+
+fn ae_get_vsync() {
+    let v = load64 [_ae_ctx + 56]
+    return v
+}
+
+fn ae_set_target_fps(fps) {
+    if fps <= 0 { let fps = 60 }
+    store64 [_ae_ctx + 48] fps
+    return fps
+}
+
+fn ae_set_max_frames(max_f) {
+    store64 [_ae_ctx + 184] max_f
+    return max_f
+}
+
+# ------------------------------------------------------------------------------
+# Frame Lifecycle: ae_begin_frame & ae_end_frame
+# ------------------------------------------------------------------------------
+fn ae_begin_frame() {
+    ae_ensure_ctx()
+    let is_op = ae_window_is_open(0)
+    if is_op == 0 { return 0 }
+    let now_ms = ae_time_now_ms()
+    let prev_total = load64 [_ae_ctx + 80]
+    let dt = now_ms - prev_total
+    if dt <= 0 { let dt = 16 }
+    if dt > 250 {
+        let tgt = load64 [_ae_ctx + 48]
+        if tgt <= 0 { let tgt = 60 }
+        let dt = 1000 / tgt
+        if dt < 1 { let dt = 1 }
+    }
+    let dt_us = dt * 1000
+    let new_total = prev_total + dt
+    store64 [_ae_ctx + 64] dt
+    store64 [_ae_ctx + 72] dt_us
+    store64 [_ae_ctx + 80] new_total
+    if dt > 0 {
+        let cur_fps = 1000 / dt
+        store64 [_ae_ctx + 88] cur_fps
+    }
+
+    ae_input_begin_frame()
+    ae_x11_poll_events()
+
+    if ae_key_pressed(AE_KEY_ESCAPE) == 1 {
+        store64 [_ae_ctx + 576] 0
+    }
+
+    ae_perf_reset()
+    return 1
+}
+
+fn ae_end_frame() {
+    ae_ensure_ctx()
+    let prev_fc = load64 [_ae_ctx + 40]
+    let fc = prev_fc + 1
+    store64 [_ae_ctx + 40] fc
+
+    let backend = load64 [_ae_ctx + 8]
+    if backend == AE_BACKEND_X11 {
+        ae_x11_present_framebuffer()
+        let vsync = load64 [_ae_ctx + 56]
+        if vsync == 1 {
+            let tgt = load64 [_ae_ctx + 48]
+            if tgt <= 0 { let tgt = 60 }
+            let frame_ms = 1000 / tgt
+            ae_sleep_ms(frame_ms)
+        }
+    }
+    return fc
+}
+
+# ------------------------------------------------------------------------------
+# Framebuffer Clear, Pixel Readback, Checksum & Deterministic Image Export
+# ------------------------------------------------------------------------------
+fn ae_clear(color = 2130706432) {
+    let cbuf = load64 [_ae_ctx + 632]
+    let dbuf = load64 [_ae_ctx + 640]
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    if cbuf == 0 { return 0 }
+    let total = fbw * fbh
+    let i = 0
+    while i < total {
+        let off = i * 4
+        store32 [cbuf + off] color
+        if dbuf != 0 {
+            store32 [dbuf + off] 1000000000
+        }
+        let i = i + 1
+    }
+    return 1
+}
+
+fn ae_clear_depth() {
+    let dbuf = load64 [_ae_ctx + 640]
+    if dbuf == 0 { return 0 }
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let total = fbw * fbh
+    let i = 0
+    while i < total {
+        let off = i * 4
+        store32 [dbuf + off] 1000000000
+        let i = i + 1
+    }
+    return 1
+}
+
+fn ae_read_pixel(x, y) {
+    ae_ensure_ctx()
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    if x < 0 { return 0 }
+    if y < 0 { return 0 }
+    if x >= fbw { return 0 }
+    if y >= fbh { return 0 }
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let off = (y * fbw + x) * 4
+    let col = load32 [cbuf + off]
+    return col
+}
+
+fn ae_get_pixel(x, y) {
+    let c = ae_read_pixel(x, y)
+    return c
+}
+
+fn ae_read_depth(x, y) {
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    if x < 0 { return 1000000000 }
+    if y < 0 { return 1000000000 }
+    if x >= fbw { return 1000000000 }
+    if y >= fbh { return 1000000000 }
+    let dbuf = load64 [_ae_ctx + 640]
+    if dbuf == 0 { return 1000000000 }
+    let off = (y * fbw + x) * 4
+    let d = load32 [dbuf + off]
+    return d
+}
+
+fn ae_framebuffer_checksum() {
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let total = fbw * fbh
+    let hash = 2166136261
+    let i = 0
+    while i < total {
+        let off = i * 4
+        let px = load32 [cbuf + off]
+        let hash = (hash ^ px) * 16777619
+        let hash = hash & 0x7FFFFFFF
+        let i = i + 1
+    }
+    return hash
+}
+
+fn ae_framebuffer_nonblack_pixels() {
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let total = fbw * fbh
+    let count = 0
+    let i = 0
+    while i < total {
+        let off = i * 4
+        let raw_px = load32 [cbuf + off]
+        let px = raw_px & 0x00FFFFFF
+        if px != 0 {
+            let count = count + 1
+        }
+        let i = i + 1
+    }
+    return count
+}
+
+# Saves active framebuffer as a binary P6 PPM image file
+fn ae_save_ppm(path) {
+    ae_ensure_ctx()
+    let cbuf = load64 [_ae_ctx + 632]
+    if cbuf == 0 { return 0 }
+    let fbw = load64 [_ae_ctx + 552]
+    let fbh = load64 [_ae_ctx + 560]
+    let hdr = "P6\n" + str(fbw) + " " + str(fbh) + "\n255\n"
+    let hlen = len hdr
+    let pix_bytes = fbw * fbh * 3
+    let total_bytes = hlen + pix_bytes
+    let out_buf = alloc total_bytes
+
+    let i = 0
+    while i < hlen {
+        let ch = load [hdr + i]
+        store [out_buf + i] ch
+        let i = i + 1
+    }
+
+    let p_count = fbw * fbh
+    let pi = 0
+    let dst = hlen
+    while pi < p_count {
+        let off = pi * 4
+        let col = load32 [cbuf + off]
+        let r = (col / 65536) % 256
+        let g = (col / 256) % 256
+        let b = col % 256
+        let dst1 = dst + 1
+        let dst2 = dst + 2
+        store [out_buf + dst] r
+        store [out_buf + dst1] g
+        store [out_buf + dst2] b
+        let dst = dst + 3
+        let pi = pi + 1
+    }
+
+    let fd = file_create path
+    if fd < 0 {
+        ae_set_error(AE_ERR_ASSET_NOT_FOUND, "Failed to open output file for PPM screenshot")
+        return 0
+    }
+    file_write fd out_buf total_bytes
+    file_close fd
+    return 1
+}
+
+struct AeApplication {
+    id
+}
+
+impl AeApplication {
+    fn create() {
+        ae_init()
+        let app = alloc 8
+        store64 [app + 0] 1
+        return app
+    }
+    fn create_window(&mut self, title, w, h) {
+        let win = ae_create_window(title, w, h)
+        return win
+    }
+    fn set_target_fps(&mut self, fps) {
+        let r = ae_set_target_fps(fps)
+        return r
+    }
+    fn shutdown(&mut self) {
+        let r = ae_shutdown()
+        return r
+    }
+}
+
+impl AeWindow {
+    fn create(title, w, h) {
+        let win = ae_create_window(title, w, h)
+        return win
+    }
+    fn is_open(&mut self) {
+        let r = ae_window_is_open(self)
+        return r
+    }
+    fn close(&mut self) {
+        let r = ae_window_close(self)
+        return r
+    }
+    fn set_title(&mut self, title) {
+        let r = ae_window_set_title(title)
+        return r
+    }
+    fn resize(&mut self, w, h) {
+        store64 [self + 8] w
+        store64 [self + 16] h
+        let r = ae_window_resize(w, h)
+        return r
+    }
+    fn make_current(&mut self) {
+        let r = ae_window_make_current(self)
+        return r
+    }
+    fn begin_frame(&mut self) {
+        let r = ae_begin_frame()
+        return r
+    }
+    fn end_frame(&mut self) {
+        let r = ae_end_frame()
+        return r
+    }
+    fn clear(&mut self, color) {
+        let r = ae_clear(color)
+        return r
+    }
+    fn width(&mut self) {
+        let r = ae_window_width()
+        return r
+    }
+    fn height(&mut self) {
+        let r = ae_window_height()
+        return r
+    }
+    fn save_ppm(&mut self, path) {
+        let r = ae_save_ppm(path)
+        return r
+    }
+}

@@ -1,0 +1,50 @@
+# ==============================================================================
+#  AETHER EXAMPLE 10: OBJ Model & 3D Scene Graph (examples/aether_10_scene_graph.nex)
+#  Demonstrates Wavefront .OBJ mesh parsing and a 3-tier parent-child scene graph
+#  (Sun -> Orbiting Planet -> Orbiting Moon + OBJ Spacecraft).
+# ==============================================================================
+
+import aether
+
+let win = ae_window_create("Aether 10 - OBJ Loader & 3D Scene Graph", 360, 240)
+ae_set_max_frames(4)
+
+let cam = ae_camera3d_perspective(60, 1500, 100, 50000)
+ae_camera3d_orbit(cam, 0, 0, 0, 4400, 20, 25)
+
+# Parse a custom tetrahedron/dart spacecraft from Wavefront OBJ text
+let ship_obj = "v 0.0 0.6 0.0\nv -0.6 -0.4 0.5\nv 0.6 -0.4 0.5\nv 0.0 -0.4 -0.7\nf 1 2 3\nf 1 3 4\nf 1 4 2\nf 2 4 3\n"
+let ship_mesh = ae_mesh_from_obj_str(ship_obj)
+let sun_mesh = ae_mesh_create_cube(900)
+let planet_mesh = ae_mesh_create_pyramid(600, 700)
+
+let mat_sun = ae_material_create(AE_SHADER_PHONG, AE_COLOR_GOLD, 0)
+let mat_planet = ae_material_create(AE_SHADER_TOON, AE_COLOR_CYAN, 0)
+let mat_ship = ae_material_create(AE_SHADER_PHONG, AE_COLOR_CORAL, 0)
+
+let sun_node = ae_node3d_create(sun_mesh, mat_sun)
+let planet_node = ae_node3d_create(planet_mesh, mat_planet)
+ae_node3d_set_position(planet_node, 1500, 0, 0)
+ae_node3d_add_child(sun_node, planet_node)
+
+let ship_node = ae_node3d_create(ship_mesh, mat_ship)
+ae_node3d_set_position(ship_node, 0, 800, 0)
+ae_node3d_add_child(planet_node, ship_node)
+
+let rot = 0
+while ae_begin_frame() {
+    ae_draw_skybox(AE_COLOR_BLACK, AE_COLOR_NAVY, AE_COLOR_DARK_GRAY)
+    ae_camera3d_begin(cam)
+
+    ae_node3d_set_rotation(sun_node, 0, rot, 0)
+    ae_node3d_set_rotation(planet_node, 0, rot * 2, 0)
+    ae_scene_draw(sun_node)
+
+    let swx, swy, swz = ae_node3d_world_position(ship_node)
+    ae_draw_text("SCENE GRAPH | SHIP WORLD X:" + str(swx), 12, 12, 1, AE_COLOR_GOLD)
+    let rot = rot + 20
+    ae_end_frame()
+}
+
+print "AETHER_10_SCENE_GRAPH_OK"
+ae_shutdown()

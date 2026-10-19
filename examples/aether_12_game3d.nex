@@ -1,0 +1,85 @@
+# ==============================================================================
+#  AETHER EXAMPLE 12: Playable 3D Game — Starfighter 3D (examples/aether_12_game3d.nex)
+#  Complete 3D Space Runner & Asteroid Defender combining 3D perspective camera,
+#  hierarchical starfighter scene graph, asteroid field, 3D sphere collision,
+#  offscreen RenderTarget radar with post-processing, spatial audio & HUD.
+# ==============================================================================
+
+import aether
+
+let win = ae_window_create("Aether 12 - Starfighter 3D", 360, 240)
+ae_set_max_frames(4)
+
+let cam = ae_camera3d_perspective(60, 1500, 100, 50000)
+ae_camera3d_set_position(cam, 0, 1600, 3800)
+ae_camera3d_set_target(cam, 0, 200, -1000)
+
+ae_light_set_ambient(45, 55, 75, 1000)
+ae_light_set_directional(-300, -800, -500, 255, 245, 220, 1000)
+ae_shadow_enable(-800, 400)
+
+let ship_mesh = ae_mesh_create_pyramid(900, 1200)
+let wing_mesh = ae_mesh_create_cube(500)
+let ast_mesh = ae_mesh_create_cube(950)
+
+let mat_hull = ae_material_create(AE_SHADER_PHONG, AE_COLOR_CYAN, 0)
+let mat_wing = ae_material_create(AE_SHADER_TOON, AE_COLOR_BLUE, 0)
+let mat_ast = ae_material_create(AE_SHADER_PHONG, AE_COLOR_ORANGE, 0)
+
+let ship_root = ae_node3d_create(ship_mesh, mat_hull)
+let wing_l = ae_node3d_create(wing_mesh, mat_wing)
+let wing_r = ae_node3d_create(wing_mesh, mat_wing)
+ae_node3d_set_position(wing_l, -650, -100, 0)
+ae_node3d_set_position(wing_r, 650, -100, 0)
+ae_node3d_add_child(ship_root, wing_l)
+ae_node3d_add_child(ship_root, wing_r)
+
+let radar_rt = ae_render_target_create(56, 56)
+let sfx_laser = ae_sound_synth_sweep(AE_WAVE_SQUARE, 900, 300, 90, 700)
+
+let ship_x = 0
+let ast_z = -2800
+let score = 0
+
+while ae_begin_frame() {
+    # 1. Update offscreen tactical radar RenderTarget
+    ae_render_target_begin(radar_rt)
+    ae_clear(AE_COLOR_NAVY)
+    ae_stroke_rect(0, 0, 56, 56, 1, AE_COLOR_GREEN)
+    ae_fill_circle(28 + ship_x / 80, 46, 3, AE_COLOR_CYAN)
+    ae_fill_circle(28, 28 + ast_z / 150, 4, AE_COLOR_RED)
+    ae_post_process_apply(AE_POST_SCANLINES)
+    ae_render_target_end()
+
+    # 2. Step gameplay & 3D collision check
+    let ship_x = ship_x + 120
+    let ast_z = ast_z + 600
+    if ae_collide_sphere_sphere(ship_x, 0, 800, 600, 0, 0, ast_z, 600) {
+        let score = score + 250
+    } else {
+        let score = score + 100
+    }
+    ae_sound_play_spatial(sfx_laser, ship_x, 0, 800, 10000, 750)
+    ae_audio_update(16)
+
+    # 3. Render 3D scene
+    ae_draw_skybox(AE_COLOR_BLACK, AE_COLOR_NAVY, AE_COLOR_SLATE)
+    ae_camera3d_begin(cam)
+
+    ae_node3d_set_position(ship_root, ship_x, 0, 800)
+    ae_node3d_set_rotation(ship_root, -20, 0, -10)
+    ae_scene_draw(ship_root)
+
+    ae_draw_mesh_trs(ast_mesh, -900, 200, ast_z, 25, 40, 10, 1000, 1000, 1000, mat_ast)
+    ae_draw_mesh_trs(ast_mesh, 950, 100, ast_z - 600, 45, 20, 0, 1000, 1000, 1000, mat_ast)
+
+    # 4. Composite radar RenderTarget & HUD
+    ae_draw_texture(ae_render_target_texture(radar_rt), 292, 12, AE_COLOR_WHITE)
+    ae_debug_draw_hud(8, 8)
+    ae_draw_text("STARFIGHTER 3D | SCORE: " + str(score), 8, 220, 1, AE_COLOR_GOLD)
+
+    ae_end_frame()
+}
+
+print "AETHER_12_GAME3D_OK"
+ae_shutdown()

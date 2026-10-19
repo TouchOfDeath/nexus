@@ -473,29 +473,13 @@ static int assert_line(const char *raw, FILE *out) {
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "let _as_r = %s", rhs);
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "let _as_ok = 0");
-    emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "if _as_l %s _as_r {", is_eq ? "==" : "!=");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    let _as_ok = 1");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "}");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "if _as_ok == 1 {");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "    let nx_assert_passes = nx_assert_passes + 1");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "} else {");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "    let nx_assert_fails = nx_assert_fails + 1");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    print \"[FAIL] assert %s: got\"", is_eq ? "eq" : "ne");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    print _as_l");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    print \"[FAIL] expected %s\"", is_eq ? "equal" : "different");
-    emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    print _as_r");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "}");
     emit_line(linebuf, out);
@@ -664,21 +648,45 @@ static int resolve_include_path(const char *curdir, const char *rel, char *out_c
     return 1;
 }
 
-static int try_include(char *line, const char *curdir, FILE *out) {
-    char *p = line;
+static int extract_include_rel(const char *line, char *rel, size_t cap) {
+    const char *p = line;
     while (*p == ' ' || *p == '\t') p++;
     int kwlen = 0;
     if (!strncmp(p, "include", 7) && (p[7] == ' ' || p[7] == '\t')) kwlen = 7;
-    if (!strncmp(p, "import", 6) && (p[6] == ' ' || p[6] == '\t')) kwlen = 6;
+    else if (!strncmp(p, "import", 6) && (p[6] == ' ' || p[6] == '\t')) kwlen = 6;
     if (!kwlen) return 0;
     p += kwlen;
     while (*p == ' ' || *p == '\t') p++;
-    if (*p != '"') return 0;
-    char rel[MAXLINE]; int r = 0;
-    p++;
-    while (*p && *p != '"' && r < MAXLINE - 1) rel[r++] = *p++;
-    rel[r] = '\0';
-    if (*p != '"') return 0;
+    if (*p == '"') {
+        size_t r = 0;
+        p++;
+        while (*p && *p != '"' && r + 1 < cap) rel[r++] = *p++;
+        rel[r] = '\0';
+        return (*p == '"') ? 1 : 0;
+    }
+    if (is_ident0((unsigned char)*p)) {
+        char mod[256];
+        size_t m = 0;
+        while (*p && (is_ident1((unsigned char)*p) || *p == '.' || *p == '/') && m + 1 < sizeof(mod)) {
+            mod[m++] = (*p == '.') ? '/' : *p;
+            p++;
+        }
+        mod[m] = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '\0' && *p != '\n' && *p != '\r' && *p != '#' && *p != ';') return 0;
+        if (!strncmp(mod, "stdlib/", 7)) {
+            snprintf(rel, cap, "%s.nex", mod);
+        } else {
+            snprintf(rel, cap, "stdlib/%s.nex", mod);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int try_include(char *line, const char *curdir, FILE *out) {
+    char rel[MAXLINE];
+    if (!extract_include_rel(line, rel, sizeof rel)) return 0;
 
     /* resolution order:
        1. relative to the INCLUDING file's directory
@@ -748,7 +756,7 @@ static int fn_block_depth = 0;
  * populated when we process 'fn name(p1, p2, ...) {' declarations
  * used for: named argument reordering, multi-return destructuring
  * -------------------------------------------------------------------------- */
-#define MAXFNS      2048
+#define MAXFNS      4096
 #define MAXFNPARAMS  32
 
 static int split_args(const char *arg_str, char args[][512], int max_args);
@@ -785,7 +793,8 @@ static void fn_registry_add_ex(const char *name, char raw_params[][512], int npa
     }
 
     fn_registry[idx].is_subroutine = is_subroutine;
-    if (is_subroutine && (!strncmp(name, "nx_", 3) || !strncmp(name, "x11_", 4))) {
+    if ((is_subroutine && (!strncmp(name, "nx_", 3) || !strncmp(name, "x11_", 4))) ||
+        !strncmp(name, "ae_", 3) || (!strncmp(name, "Ae", 2) && strstr(name, "__") != NULL)) {
         fn_registry[idx].uses_nx_abi = 1;
     }
     fn_registry[idx].nparams = nparams < MAXFNPARAMS ? nparams : MAXFNPARAMS;
@@ -943,17 +952,11 @@ static void scan_signatures_in_file(const char *path) {
         }
         if (!strncmp(p, "include ", 8) || !strncmp(p, "include\t", 8) ||
             !strncmp(p, "import ", 7) || !strncmp(p, "import\t", 7)) {
-            char *quote1 = strchr(p, '"');
-            if (quote1) {
-                char *quote2 = strchr(quote1 + 1, '"');
-                if (quote2) {
-                    int ilen = (int)(quote2 - quote1 - 1);
-                    char sub[MAXLINE];
-                    snprintf(sub, sizeof sub, "%.*s", ilen, quote1 + 1);
-                    char canon_inc[MAXLINE * 2];
-                    if (resolve_include_path(curdir, sub, canon_inc, sizeof canon_inc)) {
-                        scan_signatures_in_file(canon_inc);
-                    }
+            char sub[MAXLINE];
+            if (extract_include_rel(p, sub, sizeof sub)) {
+                char canon_inc[MAXLINE * 2];
+                if (resolve_include_path(curdir, sub, canon_inc, sizeof canon_inc)) {
+                    scan_signatures_in_file(canon_inc);
                 }
             }
         } else if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3)) {
@@ -1054,8 +1057,16 @@ static void ls_init(void) {
     ls_fn_depth = 0;
 }
 
+static int is_aether_fn_name(const char *name) {
+    if (!name || !*name) return 0;
+    if (!strncmp(name, "ae_", 3)) return 1;
+    if (!strncmp(name, "Ae", 2) && strstr(name, "__") != NULL) return 1;
+    return 0;
+}
+
 static const char *ls_lookup(const char *name) {
-    for (int d = ls_depth - 1; d >= 0; d--) {
+    int min_d = (ls_in_fn && is_aether_fn_name(cur_fn_name)) ? 1 : 0;
+    for (int d = ls_depth - 1; d >= min_d; d--) {
         for (int i = 0; i < ls_stack[d].nvars; i++) {
             if (!strcmp(ls_stack[d].vars[i].orig, name)) {
                 return ls_stack[d].vars[i].scoped;
@@ -1067,7 +1078,8 @@ static const char *ls_lookup(const char *name) {
 
 static int ls_exists_in_enclosing(const char *name) {
     if (ls_depth <= 1) return 0;
-    for (int d = ls_depth - 2; d >= 0; d--) {
+    int min_d = (ls_in_fn && is_aether_fn_name(cur_fn_name)) ? 1 : 0;
+    for (int d = ls_depth - 2; d >= min_d; d--) {
         for (int i = 0; i < ls_stack[d].nvars; i++) {
             if (!strcmp(ls_stack[d].vars[i].orig, name)) {
                 return 1;
@@ -1088,17 +1100,20 @@ static int ls_exists_in_current(const char *name) {
 
 static const char *ls_declare(const char *name, int is_explicit_local) {
     if (ls_depth < 1) return name;
-    if (name[0] == '_' || !strncmp(name, "nx_", 3)) return name;
+    if (name[0] == '_' || !strncmp(name, "nx_", 3) || !strncmp(name, "AE_", 3)) return name;
 
+    int in_ae = (ls_in_fn && is_aether_fn_name(cur_fn_name));
     int should_rename = 0;
     if (is_explicit_local) {
+        should_rename = 1;
+    } else if (in_ae && ls_depth >= 2) {
         should_rename = 1;
     } else if (ls_in_fn && ls_depth >= 3) {
         /* Nested block inside a function */
         should_rename = 1;
     }
 
-    LSScopeFrame *f = should_rename ? &ls_stack[ls_depth - 1] : &ls_stack[0];
+    LSScopeFrame *f = should_rename ? &ls_stack[in_ae ? 1 : (ls_depth - 1)] : &ls_stack[0];
 
     /* Check if already in this exact frame */
     for (int i = 0; i < f->nvars; i++) {
@@ -1377,8 +1392,8 @@ static int ls_apply(const char *raw, char *dst, size_t cap) {
             if (eq && *(eq + 1) != '=') {
                 char rhs_sub[MAXLINE];
                 if (ls_substitute(eq + 1, rhs_sub, sizeof rhs_sub)) {
-                    int dlen = (int)(eq - clean) + 1;
-                    snprintf(dst, cap, "%.*s%s\n", dlen, clean, rhs_sub);
+                    int dlen = (int)(eq - body) + 1;
+                    snprintf(dst, cap, "%s%.*s%s\n", indent, dlen, body, rhs_sub);
                     return 1;
                 }
             }
@@ -1458,7 +1473,7 @@ typedef struct {
     int nparams;
 } FnSigEntry;
 
-#define MAX_FN_SIGS 2048
+#define MAX_FN_SIGS 4096
 static FnSigEntry FNSIGS[MAX_FN_SIGS];
 static int num_fnsigs = 0;
 
@@ -1874,7 +1889,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
                 strncat(tokens[i].text, ".0", sizeof(tokens[i].text) - strlen(tokens[i].text) - 1);
             } else if (get_operand_type(cur_fn_name, tokens[i].text) == TY_INT) {
                 char prom[128];
-                snprintf(prom, sizeof prom, "_f_prom_%d", ftmp_counter++);
+                snprintf(prom, sizeof prom, "_f_prom_%d", (ftmp_counter++) % 16);
                 char line[MAXLINE];
                 snprintf(line, sizeof line, "%slet %s = itof %s\n", indent, prom, tokens[i].text);
                 strncat(out, line, cap - strlen(out) - 1);
@@ -1907,7 +1922,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
                 strcpy(l, val_stack[--val_top]);
 
                 char tmp[128];
-                snprintf(tmp, sizeof tmp, "_f_tmp_%d", ftmp_counter++);
+                snprintf(tmp, sizeof tmp, "_f_tmp_%d", (ftmp_counter++) % 16);
                 char line[MAXLINE];
                 snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, tmp, get_fop(op), l, r);
                 strncat(out, line, cap - strlen(out) - 1);
@@ -1931,7 +1946,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
                 strcpy(l, val_stack[--val_top]);
 
                 char tmp[128];
-                snprintf(tmp, sizeof tmp, "_f_tmp_%d", ftmp_counter++);
+                snprintf(tmp, sizeof tmp, "_f_tmp_%d", (ftmp_counter++) % 16);
                 char line[MAXLINE];
                 snprintf(line, sizeof line, "%slet %s = %s %s %s\n", indent, tmp, get_fop(op), l, r);
                 strncat(out, line, cap - strlen(out) - 1);
@@ -1956,7 +1971,7 @@ static int desugar_float_expr(const char *indent, const char *dest, const char *
         if (is_final) {
             strcpy(target, dest);
         } else {
-            snprintf(target, sizeof target, "_f_tmp_%d", ftmp_counter++);
+            snprintf(target, sizeof target, "_f_tmp_%d", (ftmp_counter++) % 16);
         }
 
         char line[MAXLINE];
@@ -2085,7 +2100,7 @@ static int desugar_float(const char *in, char *out, size_t cap) {
                     /* Promote left if int variable */
                     if (!left_f && get_operand_type(cur_fn_name, left) == TY_INT) {
                         char prom[128];
-                        snprintf(prom, sizeof prom, "_f_prom_%d", ftmp_counter++);
+                        snprintf(prom, sizeof prom, "_f_prom_%d", (ftmp_counter++) % 16);
                         char line[MAXLINE];
                         snprintf(line, sizeof line, "%slet %s = itof %s\n", indent, prom, left);
                         strncat(out, line, cap - strlen(out) - 1);
@@ -2098,7 +2113,7 @@ static int desugar_float(const char *in, char *out, size_t cap) {
                     /* Promote right if int variable */
                     if (!right_f && get_operand_type(cur_fn_name, right) == TY_INT) {
                         char prom[128];
-                        snprintf(prom, sizeof prom, "_f_prom_%d", ftmp_counter++);
+                        snprintf(prom, sizeof prom, "_f_prom_%d", (ftmp_counter++) % 16);
                         char line[MAXLINE];
                         snprintf(line, sizeof line, "%slet %s = itof %s\n", indent, prom, right);
                         strncat(out, line, cap - strlen(out) - 1);
@@ -2390,45 +2405,51 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         }
     }
 
+    int reg_idx = fn_registry_find(fn_name);
+    int is_sub = (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine);
+    int uses_nx = (reg_idx >= 0 && fn_registry[reg_idx].uses_nx_abi) || is_aether_fn_name(fn_name);
+    int direct_nx = uses_nx;
+    if (direct_nx) {
+        for (int i = 1; i < nargs; i++) {
+            if (strstr(args[i], "nx_i")) { direct_nx = 0; break; }
+        }
+    }
+
     /* 1. Evaluate arguments to temporaries before saving caller frame */
     for (int i = 0; i < nargs; i++) {
         arg_tmp_indices[i] = i;
-        snprintf(line_buf, sizeof line_buf, "%slet _c_arg_%d = %s\n",
-                 indent, arg_tmp_indices[i], args[i]);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-    }
-
-    /* 2. Save stack frame activation record:
-     *    [_nx_sp + 0] = caller _nx_fp (previous frame pointer link)
-     *    [_nx_sp + 8] = frame depth / metadata
-     *    [_nx_sp + 16 + i * 8] = caller local variables (cur_fn_locals[i])
-     */
-    int frame_size = 16 + cur_fn_nlocals * 8;
-    if (cur_fn_is_scoped) {
-        snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + 0] _nx_fp\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-        for (int i = 0; i < cur_fn_nlocals; i++) {
-            snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + %d] %s\n",
-                     indent, 16 + i * 8, cur_fn_locals[i]);
+        if (!direct_nx) {
+            snprintf(line_buf, sizeof line_buf, "%slet _c_arg_%d = %s\n",
+                     indent, arg_tmp_indices[i], args[i]);
             strncat(out, line_buf, cap - strlen(out) - 1);
         }
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = _nx_sp\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + %d\n",
-                 indent, frame_size);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-    } else {
-        snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + 0] _nx_fp\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = _nx_sp\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + 16\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    int reg_idx = fn_registry_find(fn_name);
-    int is_sub = (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine);
-    int uses_nx = (reg_idx >= 0 && fn_registry[reg_idx].uses_nx_abi);
+    /* 2. Save stack frame activation record (skipped for non-recursive uses_nx ABI calls) */
+    int frame_size = 16 + cur_fn_nlocals * 8;
+    if (!uses_nx) {
+        if (cur_fn_is_scoped) {
+            snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + 0] _nx_fp\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            for (int i = 0; i < cur_fn_nlocals; i++) {
+                snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + %d] %s\n",
+                         indent, 16 + i * 8, cur_fn_locals[i]);
+                strncat(out, line_buf, cap - strlen(out) - 1);
+            }
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = _nx_sp\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + %d\n",
+                     indent, frame_size);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+        } else {
+            snprintf(line_buf, sizeof line_buf, "%sstore64 [_nx_sp + 0] _nx_fp\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = _nx_sp\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_sp + 16\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+        }
+    }
 
     /* Propagate argument types to callee parameters */
     FnSigEntry *sig = find_or_create_fn_sig(fn_name);
@@ -2445,11 +2466,16 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         }
     }
 
-    /* 3. Pass evaluated arguments to callee argument slots (or nx_i0..nx_i7 for subroutines) */
+    /* 3. Pass evaluated arguments to callee argument slots (or nx_i0..nx_i9 for uses_nx) */
     for (int i = 0; i < nargs; i++) {
-        if (is_sub) {
-            snprintf(line_buf, sizeof line_buf, "%slet nx_i%d = _c_arg_%d\n",
-                     indent, i, arg_tmp_indices[i]);
+        if (uses_nx || is_sub) {
+            if (direct_nx) {
+                snprintf(line_buf, sizeof line_buf, "%slet nx_i%d = %s\n",
+                         indent, i, args[i]);
+            } else {
+                snprintf(line_buf, sizeof line_buf, "%slet nx_i%d = _c_arg_%d\n",
+                         indent, i, arg_tmp_indices[i]);
+            }
         } else {
             snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = _c_arg_%d\n",
                      indent, fn_name, i, arg_tmp_indices[i]);
@@ -2462,24 +2488,26 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
     strncat(out, line_buf, cap - strlen(out) - 1);
 
     /* 5. Restore caller frame and caller locals from _nx_fp */
-    if (cur_fn_is_scoped) {
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-        for (int i = 0; i < cur_fn_nlocals; i++) {
-            snprintf(line_buf, sizeof line_buf, "%slet %s = load64 [_nx_fp + %d]\n",
-                     indent, cur_fn_locals[i], 16 + i * 8);
+    if (!uses_nx) {
+        if (cur_fn_is_scoped) {
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            for (int i = 0; i < cur_fn_nlocals; i++) {
+                snprintf(line_buf, sizeof line_buf, "%slet %s = load64 [_nx_fp + %d]\n",
+                         indent, cur_fn_locals[i], 16 + i * 8);
+                strncat(out, line_buf, cap - strlen(out) - 1);
+            }
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = load64 [_nx_fp + 0]\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+        } else {
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
+            strncat(out, line_buf, cap - strlen(out) - 1);
+            snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = load64 [_nx_fp + 0]\n", indent);
             strncat(out, line_buf, cap - strlen(out) - 1);
         }
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = load64 [_nx_fp + 0]\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-    } else {
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_sp = _nx_fp\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
-        snprintf(line_buf, sizeof line_buf, "%slet _nx_fp = load64 [_nx_fp + 0]\n", indent);
-        strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    /* 6. Assign destination variable directly from _ret_<fn> (or nx_r0 for stdlib subroutines) */
+    /* 6. Assign destination variable directly from _ret_<fn> (or nx_r0 for uses_nx) */
     if (dest && dest[0]) {
         NexType rt = get_fn_ret_type(fn_name);
         if (is_known_str_fn(fn_name)) rt = TY_STR;
@@ -2488,7 +2516,7 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
             const char *base_d = strip_ls_prefix(dest);
             if (base_d != dest) set_var_type(cur_fn_name, base_d, rt);
         }
-        if (is_sub && (uses_nx || nargs > 0)) {
+        if (uses_nx || (is_sub && nargs > 0)) {
             snprintf(line_buf, sizeof line_buf, "%slet %s = nx_r0\n",
                      indent, dest);
         } else {
@@ -2856,8 +2884,13 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     strncat(out, line_buf, cap - strlen(out) - 1);
 
                     for (int i = 0; i < nparams; i++) {
-                        snprintf(line_buf, sizeof line_buf, "%s    let %s = _arg_%s_%d\n",
-                                 indent, fn_registry[reg_idx].params[i], fn_name, i);
+                        if (is_aether_fn_name(fn_name)) {
+                            snprintf(line_buf, sizeof line_buf, "%s    let %s = nx_i%d\n",
+                                     indent, fn_registry[reg_idx].params[i], i);
+                        } else {
+                            snprintf(line_buf, sizeof line_buf, "%s    let %s = _arg_%s_%d\n",
+                                     indent, fn_registry[reg_idx].params[i], fn_name, i);
+                        }
                         strncat(out, line_buf, cap - strlen(out) - 1);
                     }
                     return 1;
@@ -2924,14 +2957,19 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     out[0] = '\0';
                     char line_buf[MAXLINE];
                     for (int i = 0; i < nret; i++) {
-                        snprintf(line_buf, sizeof line_buf, "%slet _ret_%s_%d = %s\n",
-                                 indent, target_fn, i, ret_vals[i]);
+                        if (is_aether_fn_name(target_fn)) {
+                            snprintf(line_buf, sizeof line_buf, "%slet nx_r%d = %s\n",
+                                     indent, i, ret_vals[i]);
+                        } else {
+                            snprintf(line_buf, sizeof line_buf, "%slet _ret_%s_%d = %s\n",
+                                     indent, target_fn, i, ret_vals[i]);
+                        }
                         strncat(out, line_buf, cap - strlen(out) - 1);
                     }
                     snprintf(line_buf, sizeof line_buf, "%sreturn\n", indent);
                     strncat(out, line_buf, cap - strlen(out) - 1);
                 } else {
-                    /* Single return value: backward-compatible _ret_fn */
+                    /* Single return value: backward-compatible _ret_fn or nx_r0 for aether */
                     NexType rt = get_operand_type(target_fn, ret_expr);
                     if (rt != TY_UNKNOWN) {
                         set_fn_ret_type(target_fn, rt);
@@ -2941,9 +2979,15 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                         set_var_type("", rslot, rt);
                     }
                     int r_idx = fn_registry_find(target_fn);
-                    if (r_idx >= 0) fn_registry[r_idx].uses_nx_abi = 0;
-                    snprintf(out, cap, "%slet _ret_%s = %s\n%sreturn\n",
-                             indent, target_fn, ret_expr, indent);
+                    if (is_aether_fn_name(target_fn)) {
+                        if (r_idx >= 0) fn_registry[r_idx].uses_nx_abi = 1;
+                        snprintf(out, cap, "%slet nx_r0 = %s\n%sreturn\n",
+                                 indent, ret_expr, indent);
+                    } else {
+                        if (r_idx >= 0) fn_registry[r_idx].uses_nx_abi = 0;
+                        snprintf(out, cap, "%slet _ret_%s = %s\n%sreturn\n",
+                                 indent, target_fn, ret_expr, indent);
+                    }
                 }
                 return 1;
             }
@@ -3078,6 +3122,10 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                         out[0] = '\0';
                         emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
                         return 1;
+                    } else if (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine) {
+                        out[0] = '\0';
+                        emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
+                        return 1;
                     } else if (g_lambda_count > 0 && nargs <= 4) {
                                 /* Closure call via _nx_dispatch_closure_N */
                                 g_dispatch_needed[nargs] = 1;
@@ -3137,7 +3185,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                                 out[0] = '\0';
                                 emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
                                 char line_buf[MAXLINE];
-                                int is_sub_mr = (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine && fn_registry[reg_idx].uses_nx_abi);
+                                int is_sub_mr = (reg_idx >= 0 && fn_registry[reg_idx].uses_nx_abi) || is_aether_fn_name(fn_name);
                                 for (int i = 0; i < ndest; i++) {
                                     if (is_sub_mr) {
                                         snprintf(line_buf, sizeof line_buf, "%slet %s = nx_r%d\n",
@@ -4111,17 +4159,19 @@ static int desugar_bitwise_binop(const char *in, char *out, size_t cap) {
     int lhs_len = (int)(lhs_end - rhs);
     if (lhs_len <= 0) return 0;  /* no LHS */
     snprintf(lhs_expr, sizeof lhs_expr, "%.*s", lhs_len, rhs);
+    trim_outer_parens(lhs_expr);
 
     char bit_rhs[MAXLINE];
     int bit_rhs_len = (int)(rhs_end - rhs_start);
     if (bit_rhs_len <= 0) return 0;  /* no RHS */
     snprintf(bit_rhs, sizeof bit_rhs, "%.*s", bit_rhs_len, rhs_start);
+    trim_outer_parens(bit_rhs);
 
     /* Remainder after the bitwise RHS */
     char remainder[MAXLINE];
     snprintf(remainder, sizeof remainder, "%s", rhs_end);
 
-    int prefix_len = (int)(rhs - clean);
+    int prefix_len = (int)(eq - clean);
 
     /* HYDRON Turbine: Compile-time constant folding & shift strength reduction */
     if (hydron_opt_enabled) {
@@ -5391,7 +5441,7 @@ static int prec_rewrite(const char *indent, const char *dest, int is_let,
             t_end += 2;
         }
 
-        char term_repr[256];
+        char term_repr[512];
         if (t_start == t_end) {
             /* Single operand term */
             snprintf(term_repr, sizeof term_repr, "%s", tk[t_start].tok);
@@ -5403,24 +5453,30 @@ static int prec_rewrite(const char *indent, const char *dest, int is_let,
                 if (k > t_start) strcat(term_sub, " ");
                 strcat(term_sub, tk[k].tok);
             }
-            int64_t tres = 0;
-            const char *tend = NULL;
-            int folded_term = 0;
-            if (eval_int_chain(term_sub, &tend, &tres)) {
-                while (*tend == ' ' || *tend == '\t') tend++;
-                if (*tend == '\0' && tres >= 0 && tres <= 2147483647LL) {
-                    snprintf(term_repr, sizeof term_repr, "%lld", (long long)tres);
-                    folded_term = 1;
+            if (t_start == 0) {
+                /* First term in chain is evaluated left-to-right first by nexc anyway! */
+                snprintf(term_repr, sizeof term_repr, "%s", term_sub);
+            } else
+            {
+                int64_t tres = 0;
+                const char *tend = NULL;
+                int folded_term = 0;
+                if (eval_int_chain(term_sub, &tend, &tres)) {
+                    while (*tend == ' ' || *tend == '\t') tend++;
+                    if (*tend == '\0' && tres >= 0 && tres <= 2147483647LL) {
+                        snprintf(term_repr, sizeof term_repr, "%lld", (long long)tres);
+                        folded_term = 1;
+                    }
                 }
-            }
-            if (!folded_term) {
-                prec_tmp_counter++;
-                int id = prec_tmp_counter;
-                char line[768];
-                snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, term_sub);
-                if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
-                strcat(buf, line);
-                snprintf(term_repr, sizeof term_repr, "_prec_%d", id);
+                if (!folded_term) {
+                    prec_tmp_counter++;
+                    int id = prec_tmp_counter % 16;
+                    char line[768];
+                    snprintf(line, sizeof line, "%slet _prec_%d = %s\n", indent, id, term_sub);
+                    if (strlen(buf) + strlen(line) + 1 >= sizeof buf) return 0;
+                    strcat(buf, line);
+                    snprintf(term_repr, sizeof term_repr, "_prec_%d", id);
+                }
             }
         }
 
@@ -5489,8 +5545,8 @@ static int desugar_precedence(const char *in, char *out, size_t cap) {
     p++;
     while (*p == ' ' || *p == '\t') p++;
 
-    /* Skip already decomposed Horner expressions */
-    if (strstr(p, "* 65536")) return 0;
+    /* Skip already decomposed Horner constant expressions (starts with digit) */
+    if (isdigit((unsigned char)*p) && strstr(p, "* 65536")) return 0;
 
     /* Preserve canonical HYDRON recurrence shape: let D = D + V * 2 / 4 */
     {
@@ -6122,7 +6178,7 @@ static void emit_runtime_helpers(FILE *out) {
 /* --------------------------------------------------------------------------
  * Feature #37: Compile-Time Constants (const NAME = <val>)
  * -------------------------------------------------------------------------- */
-#define MAX_USER_CONSTS 512
+#define MAX_USER_CONSTS 4096
 typedef struct {
     char name[64];
     char val[256];
@@ -6143,6 +6199,7 @@ static int find_user_const(const char *name) {
 }
 
 static void substitute_user_consts(char *line);
+static void add_user_const_kv(const char *name, const char *val);
 static void normalize_char_literals(char *line);
 static void normalize_bool_literals(char *line);
 
@@ -6230,6 +6287,20 @@ static int register_user_const(const char *line, char *out, size_t cap) {
         n_user_consts++;
     }
 
+    if (!strncmp(name, "AE_", 3) && name[3] != '\0') {
+        char alias1[128], alias2[128];
+        snprintf(alias1, sizeof alias1, "aether.%s", name + 3);
+        add_user_const_kv(alias1, expr);
+        snprintf(alias2, sizeof alias2, "ae.%s", name + 3);
+        add_user_const_kv(alias2, expr);
+        if (!strncmp(name, "AE_COLOR_", 9)) {
+            char calias[128];
+            snprintf(calias, sizeof calias, "Color.%s", name + 9);
+            add_user_const_kv(calias, expr);
+            snprintf(calias, sizeof calias, "AeColor.%s", name + 9);
+            add_user_const_kv(calias, expr);
+        }
+    }
     /* Emit declaration as commented-out line so nexc ignores it */
     snprintf(out, cap, "%s# const %s = %s\n", indent, name, expr);
     return 1;
@@ -6862,7 +6933,7 @@ static int desugar_int_parens(const char *in, char *out, size_t cap) {
     }
 
     /* Case 3: hoist inner sub-expression to _paren_K temporary */
-    int id = ++prec_tmp_counter;
+    int id = (++prec_tmp_counter) % 16;
     char tmp_name[64];
     snprintf(tmp_name, sizeof tmp_name, "_paren_%d", id);
     if (cur_fn_is_scoped) fn_add_local(tmp_name);
@@ -7334,6 +7405,19 @@ static int desugar_method_calls(const char *in, char *out, size_t cap) {
                     changed = 1;
                     pass_changed = 1;
                     break;
+                } else if (!strcmp(id1, "aether") || !strcmp(id1, "ae") || !strcmp(id1, "graphics")) {
+                    char cand_ae[260];
+                    if (!strncmp(id2, "ae_", 3)) snprintf(cand_ae, sizeof cand_ae, "%s", id2);
+                    else snprintf(cand_ae, sizeof cand_ae, "ae_%s", id2);
+                    if (fn_registry_find(cand_ae) >= 0) {
+                        char next_buf[MAXLINE * 2];
+                        snprintf(next_buf, sizeof next_buf, "%.*s%s%s",
+                                 s1, buf, cand_ae, buf + p);
+                        snprintf(buf, sizeof buf, "%s", next_buf);
+                        changed = 1;
+                        pass_changed = 1;
+                        break;
+                    }
                 }
             }
         }
@@ -8520,29 +8604,142 @@ static int desugar_bool_and_complex_cond(const char *in, char *out, size_t cap) 
                 }
                 return 1;
             }
-            int tid = (g_rt_tmp_counter++) % 16;
             int is_fl = is_operand_float(cur_fn_name, lhs_e) || is_operand_float(cur_fn_name, rhs_e);
             const char *if_kw = is_fl ? "if_f" : "if";
-            snprintf(out, cap,
-                     "%slet _rel_l_%d = %s\n"
-                     "%slet _rel_r_%d = %s\n"
-                     "%slet %s = 0\n"
-                     "%s%s _rel_l_%d %s _rel_r_%d {\n"
-                     "%s    let %s = 1\n"
-                     "%s}\n",
-                     indent, tid, lhs_e,
-                     indent, tid, rhs_e,
-                     indent, dest,
-                     indent, if_kw, tid, rop, tid,
-                     indent, dest,
-                     indent);
+            if (!is_fl && is_canonical_cond_lhs(lhs_e) && is_canonical_cond_rhs(rhs_e)) {
+                snprintf(out, cap,
+                         "%slet %s = 0\n"
+                         "%sif %s %s %s {\n"
+                         "%s    let %s = 1\n"
+                         "%s}\n",
+                         indent, dest,
+                         indent, lhs_e, rop, rhs_e,
+                         indent, dest,
+                         indent);
+            } else {
+                int tid = (g_rt_tmp_counter++) % 16;
+                snprintf(out, cap,
+                         "%slet _rel_l_%d = %s\n"
+                         "%slet _rel_r_%d = %s\n"
+                         "%slet %s = 0\n"
+                         "%s%s _rel_l_%d %s _rel_r_%d {\n"
+                         "%s    let %s = 1\n"
+                         "%s}\n",
+                         indent, tid, lhs_e,
+                         indent, tid, rhs_e,
+                         indent, dest,
+                         indent, if_kw, tid, rop, tid,
+                         indent, dest,
+                         indent);
+            }
             return 1;
         }
     }
     return 0;
 }
 
+
+static int desugar_complex_store_and_load(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    /* Strip trailing comment outside strings */
+    {
+        int in_s = 0;
+        for (int i = 0; p[i]; i++) {
+            if (in_s && p[i] == '\\' && p[i+1]) { i++; continue; }
+            if (p[i] == '"') { in_s = !in_s; continue; }
+            if (!in_s && (p[i] == '#' || p[i] == ';')) {
+                p[i] = '\0';
+                break;
+            }
+        }
+    }
+    trim_ws(p);
+
+    /* 1. Check store / store16 / store32 / store64 [addr] val */
+    if (!strncmp(p, "store", 5) && (p[5] == ' ' || p[5] == '\t' || p[5] == '[' ||
+        !strncmp(p + 5, "16", 2) || !strncmp(p + 5, "32", 2) || !strncmp(p + 5, "64", 2))) {
+        char *br_open = strchr(p, '[');
+        char *br_close = br_open ? strchr(br_open, ']') : NULL;
+        if (br_open && br_close) {
+            char *val = br_close + 1;
+            while (*val == ' ' || *val == '\t') val++;
+            if (*val) {
+                /* Simple valid nexc store value: positive integer literal, float literal (handled by desugar_store_float), or single identifier */
+                int is_pos_int = 1;
+                for (char *q = val; *q; q++) {
+                    if (!isdigit((unsigned char)*q)) { is_pos_int = 0; break; }
+                }
+                int is_single_id = is_ident0((unsigned char)val[0]);
+                for (char *q = val + 1; is_single_id && *q; q++) {
+                    if (!is_ident1((unsigned char)*q)) is_single_id = 0;
+                }
+                int is_fl_lit = is_float_literal(val);
+                if (!is_pos_int && !is_single_id && !is_fl_lit) {
+                    int tid = (g_rt_tmp_counter++) % 16;
+                    int pre_len = (int)(br_close - p) + 1;
+                    snprintf(out, cap, "%slet _st_tmp_%d = %s\n%s%.*s _st_tmp_%d\n",
+                             indent, tid, val, indent, pre_len, p, tid);
+                    return 1;
+                }
+            }
+        }
+    }
+
+    /* 2. Check let DEST = load / load16 / load32 / load64 [addr] <extra_op_rhs> */
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        char *eq = strchr(p, '=');
+        if (eq && eq[1] != '=') {
+            char *rhs = eq + 1;
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+            if (!strncmp(rhs, "load", 4) && (rhs[4] == ' ' || rhs[4] == '\t' || rhs[4] == '[' ||
+                !strncmp(rhs + 4, "16", 2) || !strncmp(rhs + 4, "32", 2) || !strncmp(rhs + 4, "64", 2))) {
+                char *br_close = strchr(rhs, ']');
+                if (br_close) {
+                    char *after = br_close + 1;
+                    while (*after == ' ' || *after == '\t') after++;
+                    if (*after != '\0') {
+                        int tid = (g_rt_tmp_counter++) % 16;
+                        int ld_len = (int)(br_close - rhs) + 1;
+                        int dest_len = (int)(eq - (p + 4));
+                        char dest[128];
+                        snprintf(dest, sizeof dest, "%.*s", dest_len, p + 4);
+                        trim_ws(dest);
+                        snprintf(out, cap, "%slet _ld_tmp_%d = %.*s\n%slet %s = _ld_tmp_%d %s\n",
+                                 indent, tid, ld_len, rhs, indent, dest, tid, after);
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static void emit_line(const char *raw, FILE *out) {
+    char csl_buf[MAXLINE * 2];
+    if (desugar_complex_store_and_load(raw, csl_buf, sizeof csl_buf)) {
+        char *sp = csl_buf;
+        while (*sp) {
+            char *nx = strchr(sp, '\n');
+            if (nx) *nx = '\0';
+            if (*sp) emit_line(sp, out);
+            if (!nx) break;
+            sp = nx + 1;
+        }
+        return;
+    }
     char slb_buf[MAXLINE * 3];
     if (desugar_single_line_block(raw, slb_buf, sizeof slb_buf)) {
         char *sp = slb_buf;
@@ -8821,6 +9018,19 @@ static void emit_line(const char *raw, FILE *out) {
         return;
     }
 
+    char iparen_early[MAXLINE * 4];
+    if (desugar_int_parens(u_buf, iparen_early, sizeof iparen_early)) {
+        char *p = iparen_early;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
     char c_desugared[MAXLINE];
     if (desugar_compound(raw, c_desugared, sizeof c_desugared)) {
         char *p = c_desugared;
@@ -9048,7 +9258,7 @@ static void emit_line(const char *raw, FILE *out) {
             }
         } else {
             /* general expression: emit through emit_line so negative/64-bit/string/call RHS works */
-            int rid = rhs_counter++;
+            int rid = (rhs_counter++) % 16;
             char let_line[MAXLINE * 2];
             snprintf(let_line, sizeof let_line, "let _s_rhs_%d = %s", rid, p);
             emit_line(let_line, out);
@@ -9337,18 +9547,11 @@ static void scan_file_for_types(const char *path) {
         /* check include/import */
         if ((!strncmp(p, "include", 7) && (p[7] == ' ' || p[7] == '\t')) ||
             (!strncmp(p, "import", 6) && (p[6] == ' ' || p[6] == '\t'))) {
-            p += (p[0] == 'i' && p[2] == 'c') ? 7 : 6;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '"') {
-                char rel[MAXLINE]; int r = 0;
-                p++;
-                while (*p && *p != '"' && r < MAXLINE - 1) rel[r++] = *p++;
-                rel[r] = '\0';
-                if (*p == '"') {
-                    char canon_cand[MAXLINE * 2];
-                    if (resolve_include_path(curdir, rel, canon_cand, sizeof canon_cand)) {
-                        scan_file_for_types(canon_cand);
-                    }
+            char rel[MAXLINE];
+            if (extract_include_rel(p, rel, sizeof rel)) {
+                char canon_cand[MAXLINE * 2];
+                if (resolve_include_path(curdir, rel, canon_cand, sizeof canon_cand)) {
+                    scan_file_for_types(canon_cand);
                 }
             }
             continue;
@@ -9891,12 +10094,12 @@ static void p2_algebraic_pass(void) {
 }
 
 static void p2_dce_unused_functions(void) {
-    P2FnSpan *fns = malloc(sizeof(P2FnSpan) * 512);
+    P2FnSpan *fns = malloc(sizeof(P2FnSpan) * 4096);
     if (!fns) return;
     int nfns = 0;
 
     int i = 0;
-    while (i < P2n && nfns < 512) {
+    while (i < P2n && nfns < 4096) {
         const char *p = P2[i];
         while (*p == ' ' || *p == '\t') p++;
         if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3)) {
@@ -9997,6 +10200,412 @@ static void p2_dce_unused_functions(void) {
 
     free(in_fn);
     free(fns);
+
+    /* Phase 2B: Call-Graph Height Local Variable Coalescing for non-recursive functions */
+    P2FnSpan *rfns = malloc(sizeof(P2FnSpan) * 2048);
+    if (!rfns) return;
+    int nrfns = 0;
+    int ri = 0;
+    while (ri < P2n && nrfns < 2048) {
+        const char *p = P2[ri];
+        while (*p == ' ' || *p == '\t') p++;
+        if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3)) {
+            p += 3;
+            while (*p == ' ' || *p == '\t') p++;
+            const char *ns = p;
+            while (prec_is_ident1((unsigned char)*p)) p++;
+            size_t nlen = (size_t)(p - ns);
+            while (*p == ' ' || *p == '\t') p++;
+            if (nlen > 0 && nlen < 128 && *p == '{') {
+                int depth = 0, rj = ri;
+                while (rj < P2n) {
+                    const char *q = P2[rj];
+                    int in_s = 0;
+                    for (; *q; q++) {
+                        if (in_s && *q == '\\' && q[1]) { q++; continue; }
+                        if (*q == '"') in_s = !in_s;
+                        if (in_s) continue;
+                        if (*q == '#' || *q == ';') break;
+                        if (*q == '{') depth++;
+                        else if (*q == '}') depth--;
+                    }
+                    if (depth <= 0) break;
+                    rj++;
+                }
+                if (rj < P2n && depth == 0) {
+                    memcpy(rfns[nrfns].name, ns, nlen);
+                    rfns[nrfns].name[nlen] = '\0';
+                    rfns[nrfns].start_line = ri;
+                    rfns[nrfns].end_line = rj;
+                    rfns[nrfns].reachable = 0;
+                    nrfns++;
+                    ri = rj + 1;
+                    continue;
+                }
+            }
+        }
+        ri++;
+    }
+    if (nrfns > 0 && nrfns <= 1024) {
+        unsigned char *adj = calloc((size_t)(nrfns * nrfns), 1);
+        int *height = calloc((size_t)nrfns, sizeof(int));
+        if (adj && height) {
+            for (int k = 0; k < nrfns; k++) {
+                for (int li = rfns[k].start_line + 1; li < rfns[k].end_line; li++) {
+                    const char *p = P2[li];
+                    int in_s = 0;
+                    while (*p) {
+                        if (in_s) {
+                            if (*p == '\\' && p[1]) { p += 2; continue; }
+                            if (*p == '"') in_s = 0;
+                            p++;
+                            continue;
+                        }
+                        if (*p == '"') { in_s = 1; p++; continue; }
+                        if (*p == '#' || *p == ';') break;
+                        if (prec_is_ident0((unsigned char)*p)) {
+                            const char *s = p;
+                            while (prec_is_ident1((unsigned char)*p)) p++;
+                            if ((size_t)(p - s) == 4 && !strncmp(s, "call", 4)) {
+                                while (*p == ' ' || *p == '\t') p++;
+                                if (prec_is_ident0((unsigned char)*p)) {
+                                    const char *cs = p;
+                                    while (prec_is_ident1((unsigned char)*p)) p++;
+                                    size_t clen = (size_t)(p - cs);
+                                    for (int m = 0; m < nrfns; m++) {
+                                        if (strlen(rfns[m].name) == clen && !strncmp(rfns[m].name, cs, clen)) {
+                                            adj[k * nrfns + m] = 1;
+                                        }
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        p++;
+                    }
+                }
+            }
+            /* Transitive closure to detect recursion */
+            unsigned char *tc = malloc((size_t)(nrfns * nrfns));
+            if (tc) {
+                memcpy(tc, adj, (size_t)(nrfns * nrfns));
+                for (int mid = 0; mid < nrfns; mid++) {
+                    for (int a = 0; a < nrfns; a++) {
+                        if (!tc[a * nrfns + mid]) continue;
+                        for (int b = 0; b < nrfns; b++) {
+                            if (tc[mid * nrfns + b]) tc[a * nrfns + b] = 1;
+                        }
+                    }
+                }
+                for (int step = 0; step < nrfns; step++) {
+                    int h_changed = 0;
+                    for (int k = 0; k < nrfns; k++) {
+                        if (tc[k * nrfns + k]) continue; /* skip recursive */
+                        for (int m = 0; m < nrfns; m++) {
+                            if (adj[k * nrfns + m] && !tc[m * nrfns + m]) {
+                                if (height[k] < height[m] + 1) {
+                                    height[k] = height[m] + 1;
+                                    h_changed = 1;
+                                }
+                            }
+                        }
+                    }
+                    if (!h_changed) break;
+                }
+                /* Coalesce _ls_* variables inside non-recursive ae_* functions by height */
+                for (int k = 0; k < nrfns; k++) {
+                    if (tc[k * nrfns + k] || !is_aether_fn_name(rfns[k].name)) continue;
+                    int h = height[k];
+                    char orig_vars[128][128];
+                    int norig = 0;
+                    for (int li = rfns[k].start_line + 1; li < rfns[k].end_line; li++) {
+                        char tr[MAXLINE];
+                        p2_trim(P2[li], tr, sizeof tr);
+                        char lhs[128];
+                        const char *rhs_p = NULL;
+                        if (p2_parse_let(tr, lhs, sizeof lhs, &rhs_p)) {
+                            if (strncmp(lhs, "nx_", 3) != 0 && strncmp(lhs, "_nx_", 4) != 0 && strncmp(lhs, "_p_", 3) != 0 && strncmp(lhs, "_arg_", 5) != 0 && strncmp(lhs, "_ret_", 5) != 0 && strncmp(lhs, "_ae_", 4) != 0 &&
+                                strncmp(lhs, "_fcall_", 7) != 0 && strncmp(lhs, "_paren_", 7) != 0 &&
+                                strncmp(lhs, "_prec_", 6) != 0 && strncmp(lhs, "_rel_", 5) != 0 &&
+                                strncmp(lhs, "_or_", 4) != 0 && strncmp(lhs, "_and_", 5) != 0 &&
+                                strncmp(lhs, "_icond_", 7) != 0 && strncmp(lhs, "_wcond_", 7) != 0 &&
+                                strncmp(lhs, "_as_", 4) != 0 && strncmp(lhs, "_st_tmp_", 8) != 0 && strncmp(lhs, "_ld_tmp_", 8) != 0 && strcmp(lhs, "_TRUE_") != 0 &&
+                                strcmp(lhs, "_FALSE_") != 0) {
+                                int fnd = -1;
+                                for (int v = 0; v < norig; v++) {
+                                    if (!strcmp(orig_vars[v], lhs)) { fnd = v; break; }
+                                }
+                                if (fnd < 0 && norig < 128) {
+                                    snprintf(orig_vars[norig++], 128, "%s", lhs);
+                                }
+                            }
+                        }
+                    }
+                    if (norig > 0) {
+                        for (int li = rfns[k].start_line + 1; li < rfns[k].end_line; li++) {
+                            const char *src_ln = P2[li];
+                            char dst_ln[MAXLINE * 2];
+                            size_t di = 0;
+                            const char *p = src_ln;
+                            int in_s = 0;
+                            while (*p && di + 1 < sizeof(dst_ln)) {
+                                if (in_s) {
+                                    if (*p == '\\' && p[1] && di + 2 < sizeof(dst_ln)) {
+                                        dst_ln[di++] = *p++;
+                                        dst_ln[di++] = *p++;
+                                        continue;
+                                    }
+                                    if (*p == '"') in_s = 0;
+                                    dst_ln[di++] = *p++;
+                                    continue;
+                                }
+                                if (*p == '"') { in_s = 1; dst_ln[di++] = *p++; continue; }
+                                if (*p == '#' || *p == ';') {
+                                    while (*p && di + 1 < sizeof(dst_ln)) dst_ln[di++] = *p++;
+                                    break;
+                                }
+                                if (prec_is_ident0((unsigned char)*p)) {
+                                    const char *s = p;
+                                    while (prec_is_ident1((unsigned char)*p)) p++;
+                                    size_t tlen = (size_t)(p - s);
+                                    int fnd = -1;
+                                    if (tlen > 0 && tlen < 120) {
+                                        /* Do not rename function name after call */
+                                        int after_call = 0;
+                                        if (s - src_ln >= 5) {
+                                            const char *prev = s - 1;
+                                            while (prev > src_ln && (*prev == ' ' || *prev == '\t')) prev--;
+                                            if (prev - src_ln >= 3 && !strncmp(prev - 3, "call", 4) &&
+                                                (prev - 3 == src_ln || !prec_is_ident1((unsigned char)prev[-4]))) {
+                                                after_call = 1;
+                                            }
+                                        }
+                                        if (!after_call) {
+                                            for (int v = 0; v < norig; v++) {
+                                                if (strlen(orig_vars[v]) == tlen && !strncmp(orig_vars[v], s, tlen)) {
+                                                    fnd = v;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (fnd >= 0) {
+                                        char rep[64];
+                                        snprintf(rep, sizeof rep, "_lsh%d_%d", h, fnd);
+                                        size_t rlen = strlen(rep);
+                                        if (di + rlen < sizeof(dst_ln)) {
+                                            memcpy(dst_ln + di, rep, rlen);
+                                            di += rlen;
+                                        }
+                                    } else {
+                                        if (di + tlen < sizeof(dst_ln)) {
+                                            memcpy(dst_ln + di, s, tlen);
+                                            di += tlen;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                dst_ln[di++] = *p++;
+                            }
+                            dst_ln[di] = '\0';
+                            free(P2[li]);
+                            P2[li] = strdup(dst_ln);
+                        }
+                    }
+                }
+                free(tc);
+            }
+        }
+        if (adj) free(adj);
+        if (height) free(height);
+    }
+    free(rfns);
+
+    /* Phase 2B.2: Direct Parameter Slot Passing for non-recursive functions */
+    {
+        P2FnSpan *pfns = malloc(sizeof(P2FnSpan) * 2048);
+        int (*p_slot)[32] = calloc(2048, sizeof(int[32]));
+        int *p_height = calloc(2048, sizeof(int));
+        if (pfns && p_slot && p_height) {
+            int npfns = 0, pi = 0;
+            while (pi < P2n && npfns < 2048) {
+                const char *p = P2[pi];
+                while (*p == ' ' || *p == '\t') p++;
+                if (!strncmp(p, "fn ", 3) || !strncmp(p, "fn\t", 3)) {
+                    p += 3;
+                    while (*p == ' ' || *p == '\t') p++;
+                    const char *ns = p;
+                    while (prec_is_ident1((unsigned char)*p)) p++;
+                    size_t nlen = (size_t)(p - ns);
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (nlen > 0 && nlen < 128 && *p == '{') {
+                        int depth = 0, pj = pi;
+                        while (pj < P2n) {
+                            const char *q = P2[pj];
+                            int in_s = 0;
+                            for (; *q; q++) {
+                                if (in_s && *q == '\\' && q[1]) { q++; continue; }
+                                if (*q == '"') in_s = !in_s;
+                                if (in_s) continue;
+                                if (*q == '#' || *q == ';') break;
+                                if (*q == '{') depth++;
+                                else if (*q == '}') depth--;
+                            }
+                            if (depth <= 0) break;
+                            pj++;
+                        }
+                        if (pj < P2n && depth == 0) {
+                            memcpy(pfns[npfns].name, ns, nlen);
+                            pfns[npfns].name[nlen] = '\0';
+                            pfns[npfns].start_line = pi;
+                            pfns[npfns].end_line = pj;
+                            for (int m = 0; m < 32; m++) p_slot[npfns][m] = -1;
+                            p_height[npfns] = -1;
+                            /* Inspect prologue lines immediately after fn header */
+                            for (int li = pi + 1; li < pj; li++) {
+                                char tr[MAXLINE];
+                                p2_trim(P2[li], tr, sizeof tr);
+                                if (p2_is_blank(tr)) continue;
+                                int h_val = -1, s_val = -1, arg_idx = -1;
+                                if (sscanf(tr, "let _lsh%d_%d = nx_i%d", &h_val, &s_val, &arg_idx) == 3 &&
+                                    arg_idx >= 0 && arg_idx < 32) {
+                                    p_height[npfns] = h_val;
+                                    p_slot[npfns][arg_idx] = s_val;
+                                    free(P2[li]);
+                                    P2[li] = strdup("\n");
+                                } else {
+                                    break;
+                                }
+                            }
+                            npfns++;
+                            pi = pj + 1;
+                            continue;
+                        }
+                    }
+                }
+                pi++;
+            }
+            /* Rewrite call sites to functions with p_height >= 0 */
+            for (int li = 0; li < P2n; li++) {
+                char tr[MAXLINE];
+                p2_trim(P2[li], tr, sizeof tr);
+                if (!strncmp(tr, "call ", 5) || !strncmp(tr, "call\t", 5)) {
+                    const char *cn = tr + 5;
+                    while (*cn == ' ' || *cn == '\t') cn++;
+                    int fidx = -1;
+                    for (int k = 0; k < npfns; k++) {
+                        if (!strcmp(pfns[k].name, cn)) { fidx = k; break; }
+                    }
+                    if (fidx >= 0 && p_height[fidx] >= 0) {
+                        /* Walk backwards from li - 1 rewriting let nx_i<m> = ... for this call */
+                        for (int back = li - 1; back >= 0 && back >= li - 24; back--) {
+                            char btr[MAXLINE];
+                            p2_trim(P2[back], btr, sizeof btr);
+                            if (p2_is_blank(btr)) continue;
+                            if (!strncmp(btr, "call ", 5) || strchr(btr, '{') || strchr(btr, '}')) break;
+                            int a_idx = -1;
+                            if (sscanf(btr, "let nx_i%d =", &a_idx) == 1 && a_idx >= 0 && a_idx < 32 &&
+                                p_slot[fidx][a_idx] >= 0) {
+                                const char *eq = strchr(btr, '=');
+                                if (eq) {
+                                    char repl[MAXLINE];
+                                    snprintf(repl, sizeof repl, "let _lsh%d_%d =%s\n",
+                                             p_height[fidx], p_slot[fidx][a_idx], eq + 1);
+                                    free(P2[back]);
+                                    P2[back] = strdup(repl);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (pfns) free(pfns);
+        if (p_slot) free(p_slot);
+        if (p_height) free(p_height);
+    }
+
+    /* Phase 2C: Copy-propagation and left-to-right _paren_ fusion for compact code emission */
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < P2n; i++) {
+            char t1[MAXLINE];
+            p2_trim(P2[i], t1, sizeof t1);
+            if (p2_is_blank(t1)) continue;
+            char d1[128];
+            const char *r1 = NULL;
+            if (!p2_parse_let(t1, d1, sizeof d1, &r1)) continue;
+            if (!strcmp(d1, r1)) {
+                free(P2[i]); P2[i] = strdup("\n");
+                continue;
+            }
+
+            int j = i + 1;
+            while (j < P2n) {
+                char tj[MAXLINE];
+                p2_trim(P2[j], tj, sizeof tj);
+                if (!p2_is_blank(tj)) break;
+                j++;
+            }
+            if (j >= P2n) break;
+
+            char t2[MAXLINE];
+            p2_trim(P2[j], t2, sizeof t2);
+            char d2[128];
+            const char *r2 = NULL;
+            if (!p2_parse_let(t2, d2, sizeof d2, &r2)) continue;
+
+            /* Case 1: let TMP = EXPR followed by let DEST = TMP (where TMP is a compiler temp or return local) */
+            int is_temp_d1 = (!strncmp(d1, "_fcall_", 7) || !strncmp(d1, "_paren_", 7) ||
+                              !strncmp(d1, "_prec_", 6) || !strncmp(d1, "_ld_tmp_", 8));
+            int is_ret_d1 = (!strncmp(d1, "_lsh", 4) && !strncmp(d2, "nx_r", 4));
+            if (is_ret_d1) {
+                /* Verify next non-blank line after j is return or let nx_r */
+                int k = j + 1;
+                while (k < P2n) {
+                    char tk_s[MAXLINE];
+                    p2_trim(P2[k], tk_s, sizeof tk_s);
+                    if (!p2_is_blank(tk_s)) {
+                        if (strcmp(tk_s, "return") != 0 && strncmp(tk_s, "let nx_r", 8) != 0) is_ret_d1 = 0;
+                        break;
+                    }
+                    k++;
+                }
+            }
+            if ((is_temp_d1 || is_ret_d1) && !strcmp(r2, d1)) {
+                if (!strcmp(d2, r1)) {
+                    free(P2[i]); P2[i] = strdup("\n");
+                    free(P2[j]); P2[j] = strdup("\n");
+                } else {
+                    char merged[MAXLINE * 2];
+                    snprintf(merged, sizeof merged, "let %s = %s\n", d2, r1);
+                    free(P2[i]); P2[i] = strdup("\n");
+                    free(P2[j]); P2[j] = strdup(merged);
+                }
+                continue;
+            }
+
+            /* Case 2: let _paren_K = A op1 B followed by let DEST = _paren_K op2 C */
+            if (!strncmp(d1, "_paren_", 7) || !strncmp(d1, "_prec_", 6)) {
+                size_t d1len = strlen(d1);
+                if (!strncmp(r2, d1, d1len) && (r2[d1len] == ' ' || r2[d1len] == '\0')) {
+                    const char *rest = r2 + d1len;
+                    while (*rest == ' ' || *rest == '\t') rest++;
+                    if ((*rest == '*' || *rest == '/' || *rest == '%' || *rest == '+' || *rest == '-') &&
+                        rest[1] == ' ') {
+                        const char *op2_rhs = rest + 2;
+                        while (*op2_rhs == ' ') op2_rhs++;
+                        if (!strpbrk(r1, "()[]\"") && !strpbrk(op2_rhs, "()[]\"*/%")) {
+                            char merged[MAXLINE * 2];
+                            snprintf(merged, sizeof merged, "let %s = %s %c %s\n", d2, r1, *rest, op2_rhs);
+                            free(P2[i]); P2[i] = strdup("\n");
+                            free(P2[j]); P2[j] = strdup(merged);
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 static void p2_sanitize_identifiers(void) {
@@ -11325,6 +11934,21 @@ int main(int argc, char **argv) {
         fprintf(dest_out, "let _nx_argc_ = os_argc\n");
     }
     emit_lambdas_and_dispatchers(dest_out);
+    {
+        int use_strcat = 0, use_streq = 0, use_itoa = 0, use_atoi = 0;
+        for (int li = 0; li < P2n; li++) {
+            const char *ln = P2[li];
+            if (!use_strcat && strstr(ln, "_nx_rt_strcat")) use_strcat = 1;
+            if (!use_streq && strstr(ln, "_nx_rt_streq")) use_streq = 1;
+            if (!use_itoa && strstr(ln, "_nx_rt_itoa")) use_itoa = 1;
+            if (!use_atoi && strstr(ln, "_nx_rt_atoi")) use_atoi = 1;
+        }
+        if (use_strcat) use_itoa = use_itoa; /* keep independent */
+        g_need_rt_strcat = use_strcat;
+        g_need_rt_streq = use_streq;
+        g_need_rt_itoa = use_itoa;
+        g_need_rt_atoi = use_atoi;
+    }
     emit_runtime_helpers(dest_out);
 
     for (int li = 0; li < P2n; li++) {

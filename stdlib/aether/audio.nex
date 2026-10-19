@@ -1,0 +1,693 @@
+# ==============================================================================
+#  AETHER AUDIO ENGINE (stdlib/aether/audio.nex)
+#  Multi-Voice Stereo PCM Mixer, Waveform & Envelope Synthesizer,
+#  RIFF/WAVE (.wav) Loader & Exporter, Sound Effects & Music Playback,
+#  Volume/Pitch/Pan/Looping/Pause/Resume, and 3D Spatial Audio Attenuation
+# ==============================================================================
+
+include "stdlib/aether/core.nex"
+include "stdlib/aether/math.nex"
+
+const AE_WAVE_SINE     = 0
+const AE_WAVE_SQUARE   = 1
+const AE_WAVE_TRIANGLE = 2
+const AE_WAVE_SAWTOOTH = 3
+const AE_WAVE_NOISE    = 4
+
+const AE_SAMPLE_RATE   = 22050
+const AE_MAX_VOICES    = 16
+
+# Sound layout (48 bytes):
+#   +0:  samples_ptr (int16 stereo or mono signed 16-bit PCM stored in 32-bit slots)
+#   +8:  sample_count
+#   +16: sample_rate
+#   +24: channels (1 or 2)
+#   +32: duration_ms
+#   +40: valid
+
+struct AeSound {
+    samples_ptr
+    sample_count
+    sample_rate
+    channels
+    duration_ms
+    valid
+}
+
+# Voice slot layout (80 bytes per voice in voice table at [_ae_ctx + 4128]):
+#   +0:  active (0 or 1)
+#   +8:  paused (0 or 1)
+#   +16: looping (0 or 1)
+#   +24: completed (0 or 1)
+#   +32: sound_ptr
+#   +40: cursor_fp (fixed-point sample index, 1000 = 1 sample)
+#   +48: pitch_fp (1000 = 1.0x speed)
+#   +56: volume_fp (0..1000)
+#   +64: pan_fp (-1000 = full left, 0 = center, +1000 = full right)
+#   +72: is_music (0 or 1)
+
+# ------------------------------------------------------------------------------
+# Audio Subsystem Initialization & Master Controls
+# ------------------------------------------------------------------------------
+fn ae_audio_init(sample_rate = 22050) {
+    ae_ensure_ctx()
+    let init_flag = load64 [_ae_ctx + 4096]
+    if init_flag == 1 { return 1 }
+    if sample_rate <= 0 {
+        ae_set_error(AE_ERR_AUDIO_DEVICE, "Invalid audio sample rate")
+        return 0
+    }
+    let vtable = alloc 1536
+    let mix_buf = alloc 32768
+    store64 [_ae_ctx + 4096] 1
+    store64 [_ae_ctx + 4104] sample_rate
+    store64 [_ae_ctx + 4112] 1000           # master_volume_fp (1000 = 1.0)
+    store64 [_ae_ctx + 4120] 0              # muted
+    store64 [_ae_ctx + 4128] vtable
+    store64 [_ae_ctx + 4136] mix_buf
+    store64 [_ae_ctx + 4144] 0              # peak_left
+    store64 [_ae_ctx + 4152] 0              # peak_right
+    store64 [_ae_ctx + 4160] 0              # total_mixed_frames
+
+    # Default 3D listener at origin looking down -Z, right +X
+    store64 [_ae_ctx + 4168] 0              # listener_x
+    store64 [_ae_ctx + 4176] 0              # listener_y
+    store64 [_ae_ctx + 4184] 0              # listener_z
+    store64 [_ae_ctx + 4192] 1000           # listener_right_x
+    store64 [_ae_ctx + 4200] 0              # listener_right_y
+    store64 [_ae_ctx + 4208] 0              # listener_right_z
+    return 1
+}
+
+fn ae_audio_shutdown() {
+    ae_ensure_ctx()
+    let vtable = load64 [_ae_ctx + 4128]
+    if vtable != 0 {
+        let i = 0
+        while i < AE_MAX_VOICES {
+            let off = i * 80
+            store64 [vtable + off] 0
+            let i = i + 1
+        }
+    }
+    store64 [_ae_ctx + 4096] 0
+    return 1
+}
+
+fn ae_audio_is_initialized() {
+    ae_ensure_ctx()
+    let r = load64 [_ae_ctx + 4096]
+    return r
+}
+
+fn ae_audio_set_master_volume(vol_fp) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    let v = ae_clamp(vol_fp, 0, 2000)
+    store64 [_ae_ctx + 4112] v
+    return v
+}
+
+fn ae_audio_get_master_volume() {
+    ae_audio_init(AE_SAMPLE_RATE)
+    let v = load64 [_ae_ctx + 4112]
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# Sound Buffer Creation & Procedural Waveform / ADSR Synthesis
+# ------------------------------------------------------------------------------
+fn ae_sound_create(sample_count, sample_rate = 22050, channels = 1) {
+    ae_audio_init(sample_rate)
+    if sample_count <= 0 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Sound sample count must be positive")
+        return 0
+    }
+    let snd = alloc 48
+    let buf_sz = sample_count * 4 + 16
+    let sbuf = alloc buf_sz
+    let dur_ms = (sample_count * 1000) / sample_rate
+    store64 [snd + 0] sbuf
+    store64 [snd + 8] sample_count
+    store64 [snd + 16] sample_rate
+    store64 [snd + 24] channels
+    store64 [snd + 32] dur_ms
+    store64 [snd + 40] 1
+    return snd
+}
+
+fn ae_sound_synth_tone(wave_type, freq_hz, duration_ms, amp_fp = 800) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    if duration_ms <= 0 { let duration_ms = 100 }
+    if freq_hz <= 0 { let freq_hz = 440 }
+    let scount = (AE_SAMPLE_RATE * duration_ms) / 1000
+    if scount < 16 { let scount = 16 }
+    let snd = ae_sound_create(scount, AE_SAMPLE_RATE, 1)
+    let sbuf = load64 [snd + 0]
+
+    let attack_samples = scount / 10
+    let release_samples = scount / 5
+    if attack_samples < 1 { let attack_samples = 1 }
+    if release_samples < 1 { let release_samples = 1 }
+
+    let rng = 1337
+    let i = 0
+    while i < scount {
+        let phase_deg = ((i * freq_hz * 360) / AE_SAMPLE_RATE) % 360
+        let raw_val = 0
+        if wave_type == AE_WAVE_SINE {
+            let raw_val = ae_sin_deg(phase_deg)
+        } else if wave_type == AE_WAVE_SQUARE {
+            let raw_val = 1000
+            if phase_deg >= 180 { let raw_val = 0 - 1000 }
+        } else if wave_type == AE_WAVE_TRIANGLE {
+            if phase_deg < 90 {
+                let raw_val = (phase_deg * 1000) / 90
+            } else if phase_deg < 270 {
+                let d_ph = 180 - phase_deg
+                let raw_val = (d_ph * 1000) / 90
+            } else {
+                let d_ph = phase_deg - 360
+                let raw_val = (d_ph * 1000) / 90
+            }
+        } else if wave_type == AE_WAVE_SAWTOOTH {
+            let raw_val = (phase_deg * 2000) / 360 - 1000
+        } else {
+            let rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
+            let raw_val = (rng % 2001) - 1000
+        }
+
+        let env_fp = 1000
+        let rel_start = scount - release_samples
+        if i < attack_samples {
+            let env_fp = (i * 1000) / attack_samples
+        } else if i > rel_start {
+            let rem = scount - i
+            let env_fp = (rem * 1000) / release_samples
+        }
+
+        let pcm = (raw_val * amp_fp * env_fp) / 30517
+        let pcm = ae_clamp(pcm, -32767, 32767)
+        let off = i * 4
+        store32 [sbuf + off] pcm
+        let i = i + 1
+    }
+    return snd
+}
+
+fn ae_sound_synth_sweep(wave_type, start_freq_hz, end_freq_hz, duration_ms, amp_fp = 800) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    if duration_ms <= 0 { let duration_ms = 150 }
+    let scount = (AE_SAMPLE_RATE * duration_ms) / 1000
+    if scount < 16 { let scount = 16 }
+    let snd = ae_sound_create(scount, AE_SAMPLE_RATE, 1)
+    let sbuf = load64 [snd + 0]
+    let phase_acc = 0
+    let i = 0
+    while i < scount {
+        let t_fp = (i * 1000) / scount
+        let cur_freq = ae_lerp(start_freq_hz, end_freq_hz, t_fp)
+        let phase_acc = (phase_acc + (cur_freq * 360) / AE_SAMPLE_RATE) % 360
+        let raw_val = ae_sin_deg(phase_acc)
+        if wave_type == AE_WAVE_SQUARE {
+            let raw_val = 1000
+            if phase_acc >= 180 { let raw_val = 0 - 1000 }
+        }
+        let env_fp = 1000 - (t_fp * 700) / 1000
+        let pcm = (raw_val * amp_fp * env_fp) / 30517
+        let pcm = ae_clamp(pcm, -32767, 32767)
+        let off = i * 4
+        store32 [sbuf + off] pcm
+        let i = i + 1
+    }
+    return snd
+}
+
+# ------------------------------------------------------------------------------
+# RIFF/WAVE (.wav) File Export & Loader with Format Validation
+# ------------------------------------------------------------------------------
+fn ae_wav_write_u16(buf, off, val) {
+    let b0 = val % 256
+    let b1 = (val / 256) % 256
+    let off1 = off + 1
+    store [buf + off] b0
+    store [buf + off1] b1
+    return 2
+}
+
+fn ae_wav_write_u32(buf, off, val) {
+    let b0 = val % 256
+    let b1 = (val / 256) % 256
+    let b2 = (val / 65536) % 256
+    let b3 = (val / 16777216) % 256
+    let off1 = off + 1
+    let off2 = off + 2
+    let off3 = off + 3
+    store [buf + off] b0
+    store [buf + off1] b1
+    store [buf + off2] b2
+    store [buf + off3] b3
+    return 4
+}
+
+fn ae_sound_save_wav(snd, path) {
+    if snd == 0 {
+        ae_set_error(AE_ERR_INVALID_HANDLE, "Null sound handle in ae_sound_save_wav")
+        return 0
+    }
+    let sbuf = load64 [snd + 0]
+    let scount = load64 [snd + 8]
+    let srate = load64 [snd + 16]
+    let data_bytes = scount * 2
+    let total_bytes = 44 + data_bytes
+    let out = alloc total_bytes
+
+    # "RIFF"
+    store [out + 0] 82
+    store [out + 1] 73
+    store [out + 2] 70
+    store [out + 3] 70
+    ae_wav_write_u32(out, 4, 36 + data_bytes)
+    # "WAVE"
+    store [out + 8] 87
+    store [out + 9] 65
+    store [out + 10] 86
+    store [out + 11] 69
+    # "fmt "
+    store [out + 12] 102
+    store [out + 13] 109
+    store [out + 14] 116
+    store [out + 15] 32
+    ae_wav_write_u32(out, 16, 16)
+    ae_wav_write_u16(out, 20, 1)            # PCM = 1
+    ae_wav_write_u16(out, 22, 1)            # Mono = 1
+    ae_wav_write_u32(out, 24, srate)
+    ae_wav_write_u32(out, 28, srate * 2)
+    ae_wav_write_u16(out, 32, 2)
+    ae_wav_write_u16(out, 34, 16)
+    # "data"
+    store [out + 36] 100
+    store [out + 37] 97
+    store [out + 38] 116
+    store [out + 39] 97
+    ae_wav_write_u32(out, 40, data_bytes)
+
+    let i = 0
+    while i < scount {
+        let soff = i * 4
+        let s16 = load32 [sbuf + soff]
+        if s16 < 0 { let s16 = s16 + 65536 }
+        let doff = 44 + i * 2
+        ae_wav_write_u16(out, doff, s16)
+        let i = i + 1
+    }
+
+    let fd = file_create path
+    if fd < 0 {
+        ae_set_error(AE_ERR_ASSET_NOT_FOUND, "Cannot write WAV file")
+        return 0
+    }
+    file_write fd out total_bytes
+    file_close fd
+    return 1
+}
+
+fn ae_sound_load_wav(path) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    let fd = file_open path 0
+    if fd < 0 {
+        ae_set_error(AE_ERR_ASSET_NOT_FOUND, "WAV file not found")
+        return 0
+    }
+    let raw = alloc 524288
+    let nread = file_read fd raw 524280
+    file_close fd
+    if nread < 44 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "WAV file too short (< 44 bytes)")
+        return 0
+    }
+    let r0 = load [raw + 0]
+    let r1 = load [raw + 1]
+    let r2 = load [raw + 2]
+    let r3 = load [raw + 3]
+    if r0 != 82 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Invalid WAV RIFF header")
+        return 0
+    }
+    if r1 != 73 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "Invalid WAV RIFF header")
+        return 0
+    }
+    let b24 = load [raw + 24]
+    let b25 = load [raw + 25]
+    let b26 = load [raw + 26]
+    let srate = b24 + b25 * 256 + b26 * 65536
+    if srate <= 0 { let srate = AE_SAMPLE_RATE }
+
+    let b40 = load [raw + 40]
+    let b41 = load [raw + 41]
+    let b42 = load [raw + 42]
+    let b43 = load [raw + 43]
+    let data_bytes = b40 + b41 * 256 + b42 * 65536 + b43 * 16777216
+    if data_bytes > nread - 44 { let data_bytes = nread - 44 }
+    let scount = data_bytes / 2
+    if scount <= 0 {
+        ae_set_error(AE_ERR_INVALID_FORMAT, "WAV contains zero PCM samples")
+        return 0
+    }
+    let snd = ae_sound_create(scount, srate, 1)
+    let sbuf = load64 [snd + 0]
+    let i = 0
+    while i < scount {
+        let roff = 44 + i * 2
+        let roff1 = roff + 1
+        let lo = load [raw + roff]
+        let hi = load [raw + roff1]
+        let val = lo + hi * 256
+        if val >= 32768 { let val = val - 65536 }
+        let soff = i * 4
+        store32 [sbuf + soff] val
+        let i = i + 1
+    }
+    return snd
+}
+
+# ------------------------------------------------------------------------------
+# Voice Playback, Music Streaming, Volume/Pitch/Pan, Pause/Resume & Spatial 3D
+# ------------------------------------------------------------------------------
+fn ae_sound_play_ex(snd, volume_fp = 1000, pitch_fp = 1000, pan_fp = 0, looping = 0) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    if snd == 0 {
+        ae_set_error(AE_ERR_INVALID_HANDLE, "Cannot play null sound handle")
+        return 0 - 1
+    }
+    let vtable = load64 [_ae_ctx + 4128]
+    let slot = 0 - 1
+    let i = 0
+    while i < AE_MAX_VOICES {
+        let off = i * 80
+        let act = load64 [vtable + off]
+        if act == 0 {
+            let slot = i
+            break
+        }
+        let i = i + 1
+    }
+    if slot < 0 { let slot = 0 }
+    let off = slot * 80
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let off4 = off + 32
+    let off5 = off + 40
+    let off6 = off + 48
+    let off7 = off + 56
+    let off8 = off + 64
+    let off9 = off + 72
+    if pitch_fp <= 50 { let pitch_fp = 50 }
+    store64 [vtable + off] 1
+    store64 [vtable + off1] 0
+    store64 [vtable + off2] looping
+    store64 [vtable + off3] 0
+    store64 [vtable + off4] snd
+    store64 [vtable + off5] 0
+    store64 [vtable + off6] pitch_fp
+    store64 [vtable + off7] ae_clamp(volume_fp, 0, 2000)
+    store64 [vtable + off8] ae_clamp(pan_fp, -1000, 1000)
+    store64 [vtable + off9] 0
+    return slot
+}
+
+fn ae_sound_play(snd, volume_fp = 1000) {
+    let vid = ae_sound_play_ex(snd, volume_fp, 1000, 0, 0)
+    return vid
+}
+
+fn ae_music_play(snd, volume_fp = 850, looping = 1) {
+    let vid = ae_sound_play_ex(snd, volume_fp, 1000, 0, looping)
+    if vid >= 0 {
+        let vtable = load64 [_ae_ctx + 4128]
+        let off9 = vid * 80 + 72
+        store64 [vtable + off9] 1
+    }
+    return vid
+}
+
+fn ae_voice_pause(voice_id) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off1 = voice_id * 80 + 8
+    store64 [vtable + off1] 1
+    return 1
+}
+
+fn ae_voice_resume(voice_id) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off1 = voice_id * 80 + 8
+    store64 [vtable + off1] 0
+    return 1
+}
+
+fn ae_voice_stop(voice_id) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off = voice_id * 80
+    let off3 = off + 24
+    store64 [vtable + off] 0
+    store64 [vtable + off3] 1
+    return 1
+}
+
+fn ae_voice_set_volume(voice_id, vol_fp) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off7 = voice_id * 80 + 56
+    store64 [vtable + off7] ae_clamp(vol_fp, 0, 2000)
+    return 1
+}
+
+fn ae_voice_set_pitch(voice_id, pitch_fp) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off6 = voice_id * 80 + 48
+    store64 [vtable + off6] ae_clamp(pitch_fp, 50, 4000)
+    return 1
+}
+
+fn ae_voice_set_pan(voice_id, pan_fp) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off8 = voice_id * 80 + 64
+    store64 [vtable + off8] ae_clamp(pan_fp, -1000, 1000)
+    return 1
+}
+
+fn ae_voice_set_looping(voice_id, looping) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off2 = voice_id * 80 + 16
+    store64 [vtable + off2] looping
+    return 1
+}
+
+fn ae_voice_is_playing(voice_id) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off = voice_id * 80
+    let off1 = off + 8
+    let act = load64 [vtable + off]
+    let paused = load64 [vtable + off1]
+    if act == 1 {
+        if paused == 0 { return 1 }
+    }
+    return 0
+}
+
+fn ae_voice_is_completed(voice_id) {
+    if voice_id < 0 { return 0 }
+    if voice_id >= AE_MAX_VOICES { return 0 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let off3 = voice_id * 80 + 24
+    let comp = load64 [vtable + off3]
+    return comp
+}
+
+fn ae_audio_set_listener(lx_fp, ly_fp, lz_fp, right_x_fp = 1000, right_y_fp = 0, right_z_fp = 0) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    store64 [_ae_ctx + 4168] lx_fp
+    store64 [_ae_ctx + 4176] ly_fp
+    store64 [_ae_ctx + 4184] lz_fp
+    store64 [_ae_ctx + 4192] right_x_fp
+    store64 [_ae_ctx + 4200] right_y_fp
+    store64 [_ae_ctx + 4208] right_z_fp
+    return 1
+}
+
+fn ae_sound_play_spatial(snd, sx_fp, sy_fp, sz_fp, max_dist_fp = 10000, base_vol_fp = 1000) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    let lx = load64 [_ae_ctx + 4168]
+    let ly = load64 [_ae_ctx + 4176]
+    let lz = load64 [_ae_ctx + 4184]
+    let rx = load64 [_ae_ctx + 4192]
+    let ry = load64 [_ae_ctx + 4200]
+    let rz = load64 [_ae_ctx + 4208]
+
+    let dx = sx_fp - lx
+    let dy = sy_fp - ly
+    let dz = sz_fp - lz
+    let d2 = (dx * dx + dy * dy + dz * dz) / 1000
+    let dist = ae_isqrt(d2 * 1000)
+    if max_dist_fp <= 0 { let max_dist_fp = 10000 }
+    let atten_fp = 0
+    if dist < max_dist_fp {
+        let rem = max_dist_fp - dist
+        let atten_fp = (rem * 1000) / max_dist_fp
+    }
+    let vol = (base_vol_fp * atten_fp) / 1000
+    let pan = 0
+    if dist > 10 {
+        let dot_r = (dx * rx + dy * ry + dz * rz) / dist
+        let pan = ae_clamp(dot_r, -1000, 1000)
+    }
+    let vid = ae_sound_play_ex(snd, vol, 1000, pan, 0)
+    return vid
+}
+
+# ------------------------------------------------------------------------------
+# Multi-Voice Stereo Mixer & Telemetry
+# ------------------------------------------------------------------------------
+fn ae_audio_mix_frames(frame_count) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    if frame_count <= 0 { return 0 }
+    if frame_count > 4096 { let frame_count = 4096 }
+    let vtable = load64 [_ae_ctx + 4128]
+    let mix_buf = load64 [_ae_ctx + 4136]
+    let master_vol = load64 [_ae_ctx + 4112]
+    let peak_l = 0
+    let peak_r = 0
+
+    let f = 0
+    while f < frame_count {
+        let acc_l = 0
+        let acc_r = 0
+        let v = 0
+        while v < AE_MAX_VOICES {
+            let voff = v * 80
+            let act = load64 [vtable + voff]
+            if act == 1 {
+                let voff1 = voff + 8
+                let paused = load64 [vtable + voff1]
+                if paused == 0 {
+                    let voff2 = voff + 16
+                    let voff3 = voff + 24
+                    let voff4 = voff + 32
+                    let voff5 = voff + 40
+                    let voff6 = voff + 48
+                    let voff7 = voff + 56
+                    let voff8 = voff + 64
+                    let looping = load64 [vtable + voff2]
+                    let snd = load64 [vtable + voff4]
+                    let cur_fp = load64 [vtable + voff5]
+                    let pitch_fp = load64 [vtable + voff6]
+                    let vol_fp = load64 [vtable + voff7]
+                    let pan_fp = load64 [vtable + voff8]
+
+                    let sbuf = load64 [snd + 0]
+                    let scount = load64 [snd + 8]
+                    let s_idx = cur_fp / 1000
+                    if s_idx >= scount {
+                        if looping == 1 {
+                            let cur_fp = cur_fp % (scount * 1000)
+                            let s_idx = cur_fp / 1000
+                        } else {
+                            store64 [vtable + voff] 0
+                            store64 [vtable + voff3] 1
+                            let s_idx = 0 - 1
+                        }
+                    }
+                    if s_idx >= 0 {
+                        let soff = s_idx * 4
+                        let sample = load32 [sbuf + soff]
+                        let gain_l = ((1000 - pan_fp) * vol_fp) / 1000
+                        let gain_r = ((1000 + pan_fp) * vol_fp) / 1000
+                        let gain_l = ae_clamp(gain_l, 0, 2000)
+                        let gain_r = ae_clamp(gain_r, 0, 2000)
+                        let acc_l = acc_l + (sample * gain_l) / 1000
+                        let acc_r = acc_r + (sample * gain_r) / 1000
+                        let next_cur = cur_fp + pitch_fp
+                        if next_cur >= scount * 1000 {
+                            if looping == 1 {
+                                let next_cur = next_cur % (scount * 1000)
+                                store64 [vtable + voff5] next_cur
+                            } else {
+                                store64 [vtable + voff] 0
+                                store64 [vtable + voff3] 1
+                            }
+                        } else {
+                            store64 [vtable + voff5] next_cur
+                        }
+                    }
+                }
+            }
+            let v = v + 1
+        }
+        let out_l = ae_clamp((acc_l * master_vol) / 1000, -32767, 32767)
+        let out_r = ae_clamp((acc_r * master_vol) / 1000, -32767, 32767)
+        let al = ae_abs(out_l)
+        let ar = ae_abs(out_r)
+        if al > peak_l { let peak_l = al }
+        if ar > peak_r { let peak_r = ar }
+
+        let moff_l = f * 8
+        let moff_r = moff_l + 4
+        store32 [mix_buf + moff_l] out_l
+        store32 [mix_buf + moff_r] out_r
+        let f = f + 1
+    }
+    store64 [_ae_ctx + 4144] peak_l
+    store64 [_ae_ctx + 4152] peak_r
+    let tot = load64 [_ae_ctx + 4160]
+    store64 [_ae_ctx + 4160] tot + frame_count
+    return frame_count
+}
+
+fn ae_audio_update(dt_ms = 16) {
+    ae_audio_init(AE_SAMPLE_RATE)
+    let srate = load64 [_ae_ctx + 4104]
+    let frames = (srate * dt_ms) / 1000
+    if frames < 1 { let frames = 1 }
+    let r = ae_audio_mix_frames(frames)
+    return r
+}
+
+fn ae_audio_peak_left() {
+    let p = load64 [_ae_ctx + 4144]
+    return p
+}
+
+fn ae_audio_peak_right() {
+    let p = load64 [_ae_ctx + 4152]
+    return p
+}
+
+fn ae_audio_active_voices() {
+    ae_audio_init(AE_SAMPLE_RATE)
+    let vtable = load64 [_ae_ctx + 4128]
+    let cnt = 0
+    let i = 0
+    while i < AE_MAX_VOICES {
+        let off = i * 80
+        let act = load64 [vtable + off]
+        if act == 1 { let cnt = cnt + 1 }
+        let i = i + 1
+    }
+    return cnt
+}

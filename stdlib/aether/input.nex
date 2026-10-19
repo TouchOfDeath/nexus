@@ -1,0 +1,684 @@
+# ==============================================================================
+#                  AETHER GRAPHICS ENGINE FOR NEXUS: INPUT MODULE
+#                       stdlib/aether/input.nex
+#   Keyboard, Mouse, Scroll Wheel, Text Input Queue, Gamepad & Action Mapping
+# ==============================================================================
+
+include "stdlib/aether/core.nex"
+
+# Physical Keycodes
+const AE_KEY_UNKNOWN       = 0
+const AE_KEY_SPACE         = 32
+const AE_KEY_APOSTROPHE    = 39
+const AE_KEY_COMMA         = 44
+const AE_KEY_MINUS         = 45
+const AE_KEY_PERIOD        = 46
+const AE_KEY_SLASH         = 47
+const AE_KEY_0             = 48
+const AE_KEY_1             = 49
+const AE_KEY_2             = 50
+const AE_KEY_3             = 51
+const AE_KEY_4             = 52
+const AE_KEY_5             = 53
+const AE_KEY_6             = 54
+const AE_KEY_7             = 55
+const AE_KEY_8             = 56
+const AE_KEY_9             = 57
+const AE_KEY_SEMICOLON     = 59
+const AE_KEY_EQUAL         = 61
+const AE_KEY_A             = 65
+const AE_KEY_B             = 66
+const AE_KEY_C             = 67
+const AE_KEY_D             = 68
+const AE_KEY_E             = 69
+const AE_KEY_F             = 70
+const AE_KEY_G             = 71
+const AE_KEY_H             = 72
+const AE_KEY_I             = 73
+const AE_KEY_J             = 74
+const AE_KEY_K             = 75
+const AE_KEY_L             = 76
+const AE_KEY_M             = 77
+const AE_KEY_N             = 78
+const AE_KEY_O             = 79
+const AE_KEY_P             = 80
+const AE_KEY_Q             = 81
+const AE_KEY_R             = 82
+const AE_KEY_S             = 83
+const AE_KEY_T             = 84
+const AE_KEY_U             = 85
+const AE_KEY_V             = 86
+const AE_KEY_W             = 87
+const AE_KEY_X             = 88
+const AE_KEY_Y             = 89
+const AE_KEY_Z             = 90
+const AE_KEY_ESCAPE        = 256
+const AE_KEY_ENTER         = 257
+const AE_KEY_TAB           = 258
+const AE_KEY_BACKSPACE     = 259
+const AE_KEY_INSERT        = 260
+const AE_KEY_DELETE        = 261
+const AE_KEY_RIGHT         = 262
+const AE_KEY_LEFT          = 263
+const AE_KEY_DOWN          = 264
+const AE_KEY_UP            = 265
+const AE_KEY_PAGE_UP       = 266
+const AE_KEY_PAGE_DOWN     = 267
+const AE_KEY_HOME          = 268
+const AE_KEY_END           = 269
+const AE_KEY_F1            = 290
+const AE_KEY_F2            = 291
+const AE_KEY_F3            = 292
+const AE_KEY_F4            = 293
+const AE_KEY_F5            = 294
+const AE_KEY_F6            = 295
+const AE_KEY_F7            = 296
+const AE_KEY_F8            = 297
+const AE_KEY_F9            = 298
+const AE_KEY_F10           = 299
+const AE_KEY_F11           = 300
+const AE_KEY_F12           = 301
+const AE_KEY_LEFT_SHIFT    = 340
+const AE_KEY_LEFT_CONTROL  = 341
+const AE_KEY_LEFT_ALT      = 342
+
+# Key Modifiers
+const AE_MOD_NONE          = 0
+const AE_MOD_SHIFT         = 1
+const AE_MOD_CTRL          = 2
+const AE_MOD_ALT           = 4
+const AE_MOD_SUPER         = 8
+const AE_MOD_CAPSLOCK      = 16
+
+# Mouse Buttons
+const AE_MOUSE_LEFT        = 1
+const AE_MOUSE_RIGHT       = 2
+const AE_MOUSE_MIDDLE      = 4
+
+# Gamepad Buttons & Axes
+const AE_PAD_A             = 1
+const AE_PAD_B             = 2
+const AE_PAD_X             = 4
+const AE_PAD_Y             = 8
+const AE_PAD_LB            = 16
+const AE_PAD_RB            = 32
+const AE_PAD_START         = 64
+const AE_PAD_SELECT        = 128
+const AE_PAD_DPAD_UP       = 256
+const AE_PAD_DPAD_DOWN     = 512
+const AE_PAD_DPAD_LEFT     = 1024
+const AE_PAD_DPAD_RIGHT    = 2048
+
+const AE_AXIS_LEFT_X       = 0
+const AE_AXIS_LEFT_Y       = 1
+const AE_AXIS_RIGHT_X      = 2
+const AE_AXIS_RIGHT_Y      = 3
+const AE_AXIS_TRIGGER_L    = 4
+const AE_AXIS_TRIGGER_R    = 5
+
+# Event Types
+const AE_EVENT_NONE         = 0
+const AE_EVENT_QUIT         = 1
+const AE_EVENT_RESIZE       = 2
+const AE_EVENT_FOCUS_GAINED = 3
+const AE_EVENT_FOCUS_LOST   = 4
+const AE_EVENT_MINIMIZED    = 5
+const AE_EVENT_RESTORED     = 6
+const AE_EVENT_KEY_DOWN     = 7
+const AE_EVENT_KEY_UP       = 8
+const AE_EVENT_TEXT_INPUT   = 9
+const AE_EVENT_MOUSE_MOVE   = 10
+const AE_EVENT_MOUSE_DOWN   = 11
+const AE_EVENT_MOUSE_UP     = 12
+const AE_EVENT_MOUSE_WHEEL  = 13
+
+# ------------------------------------------------------------------------------
+# Internal Input Initialization & Per-Frame Transition Reset
+# ------------------------------------------------------------------------------
+fn ae_input_init() {
+    ae_ensure_ctx()
+    let kd = load64 [_ae_ctx + 1536]
+    if kd != 0 {
+        return 1
+    }
+    let kd_buf = alloc 512
+    let kp_buf = alloc 512
+    let kr_buf = alloc 512
+    let krep_buf = alloc 512
+    let txt_buf = alloc 256
+    let axes_buf = alloc 64
+    let act_buf = alloc 2048
+    let ev_buf = alloc 4096
+
+    store64 [_ae_ctx + 1536] kd_buf
+    store64 [_ae_ctx + 1544] kp_buf
+    store64 [_ae_ctx + 1552] kr_buf
+    store64 [_ae_ctx + 1560] krep_buf
+    store64 [_ae_ctx + 1584] txt_buf
+    store64 [_ae_ctx + 1712] axes_buf
+    store64 [_ae_ctx + 1720] 100
+    store64 [_ae_ctx + 1728] act_buf
+    store64 [_ae_ctx + 1688] 1
+
+    store64 [_ae_ctx + 712] ev_buf
+    store64 [_ae_ctx + 720] 0
+    store64 [_ae_ctx + 728] 0
+    return 1
+}
+
+fn ae_input_begin_frame() {
+    ae_input_init()
+    let kp_buf = load64 [_ae_ctx + 1544]
+    let kr_buf = load64 [_ae_ctx + 1552]
+    let krep_buf = load64 [_ae_ctx + 1560]
+    let i = 0
+    while i < 512 {
+        store [kp_buf + i] 0
+        store [kr_buf + i] 0
+        store [krep_buf + i] 0
+        let i = i + 1
+    }
+    store64 [_ae_ctx + 1592] 0
+    let mx = load64 [_ae_ctx + 1600]
+    let my = load64 [_ae_ctx + 1608]
+    store64 [_ae_ctx + 1616] mx
+    store64 [_ae_ctx + 1624] my
+    store64 [_ae_ctx + 1632] 0
+    store64 [_ae_ctx + 1640] 0
+    store64 [_ae_ctx + 1648] 0
+    store64 [_ae_ctx + 1656] 0
+    store64 [_ae_ctx + 1672] 0
+    store64 [_ae_ctx + 1680] 0
+    store64 [_ae_ctx + 1704] 0
+    return 1
+}
+
+fn ae_input_on_focus_lost() {
+    ae_input_init()
+    let kd_buf = load64 [_ae_ctx + 1536]
+    let kr_buf = load64 [_ae_ctx + 1552]
+    let i = 0
+    while i < 512 {
+        let was_down = load [kd_buf + i]
+        if was_down == 1 {
+            store [kd_buf + i] 0
+            store [kr_buf + i] 1
+        }
+        let i = i + 1
+    }
+    store64 [_ae_ctx + 1568] 0
+    store64 [_ae_ctx + 1664] 0
+    store64 [_ae_ctx + 1696] 0
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Event Queue Operations
+# ------------------------------------------------------------------------------
+fn ae_push_event(ev_type, a, b, c) {
+    ae_input_init()
+    let ev_buf = load64 [_ae_ctx + 712]
+    let tail = load64 [_ae_ctx + 728]
+    let head = load64 [_ae_ctx + 720]
+    let next_tail = (tail + 1) % 128
+    if next_tail == head {
+        # Ring buffer full: drop oldest event
+        let next_head = (head + 1) % 128
+        store64 [_ae_ctx + 720] next_head
+    }
+    let off = tail * 32
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    store64 [ev_buf + off] ev_type
+    store64 [ev_buf + off1] a
+    store64 [ev_buf + off2] b
+    store64 [ev_buf + off3] c
+    store64 [_ae_ctx + 728] next_tail
+    return 1
+}
+
+fn ae_poll_event() {
+    ae_input_init()
+    let head = load64 [_ae_ctx + 720]
+    let tail = load64 [_ae_ctx + 728]
+    if head == tail {
+        store64 [_ae_ctx + 736] 0
+        store64 [_ae_ctx + 744] 0
+        store64 [_ae_ctx + 752] 0
+        store64 [_ae_ctx + 760] 0
+        return 0
+    }
+    let ev_buf = load64 [_ae_ctx + 712]
+    let off = head * 32
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let et = load64 [ev_buf + off]
+    let ea = load64 [ev_buf + off1]
+    let eb = load64 [ev_buf + off2]
+    let ec = load64 [ev_buf + off3]
+    store64 [_ae_ctx + 736] et
+    store64 [_ae_ctx + 744] ea
+    store64 [_ae_ctx + 752] eb
+    store64 [_ae_ctx + 760] ec
+    let next_head = (head + 1) % 128
+    store64 [_ae_ctx + 720] next_head
+    return 1
+}
+
+fn ae_event_type() {
+    let et = load64 [_ae_ctx + 736]
+    return et
+}
+
+fn ae_event_a() {
+    let ea = load64 [_ae_ctx + 744]
+    return ea
+}
+
+fn ae_event_b() {
+    let eb = load64 [_ae_ctx + 752]
+    return eb
+}
+
+fn ae_event_c() {
+    let ec = load64 [_ae_ctx + 760]
+    return ec
+}
+
+# ------------------------------------------------------------------------------
+# Input Injection & Hardware Event Updating
+# ------------------------------------------------------------------------------
+fn ae_input_inject_key(key, is_down, is_repeat = 0) {
+    ae_input_init()
+    if key <= 0 { return 0 }
+    if key >= 512 { return 0 }
+    let kd_buf = load64 [_ae_ctx + 1536]
+    let kp_buf = load64 [_ae_ctx + 1544]
+    let kr_buf = load64 [_ae_ctx + 1552]
+    let krep_buf = load64 [_ae_ctx + 1560]
+    let prev = load [kd_buf + key]
+
+    let cur_mods = load64 [_ae_ctx + 1568]
+    if is_down == 1 {
+        store [kd_buf + key] 1
+        store64 [_ae_ctx + 1576] key
+        if prev == 0 {
+            store [kp_buf + key] 1
+            ae_push_event(AE_EVENT_KEY_DOWN, key, cur_mods, 0)
+        } else {
+            store [krep_buf + key] 1
+            ae_push_event(AE_EVENT_KEY_DOWN, key, cur_mods, 1)
+        }
+        if is_repeat == 1 {
+            store [krep_buf + key] 1
+        }
+        if key == AE_KEY_LEFT_SHIFT {
+            let m = cur_mods | AE_MOD_SHIFT
+            store64 [_ae_ctx + 1568] m
+        }
+        if key == AE_KEY_LEFT_CONTROL {
+            let m = cur_mods | AE_MOD_CTRL
+            store64 [_ae_ctx + 1568] m
+        }
+        if key == AE_KEY_LEFT_ALT {
+            let m = cur_mods | AE_MOD_ALT
+            store64 [_ae_ctx + 1568] m
+        }
+    } else {
+        store [kd_buf + key] 0
+        if prev == 1 {
+            store [kr_buf + key] 1
+            ae_push_event(AE_EVENT_KEY_UP, key, cur_mods, 0)
+        }
+        if key == AE_KEY_LEFT_SHIFT {
+            let bit = cur_mods & AE_MOD_SHIFT
+            let m = cur_mods - bit
+            store64 [_ae_ctx + 1568] m
+        }
+        if key == AE_KEY_LEFT_CONTROL {
+            let bit = cur_mods & AE_MOD_CTRL
+            let m = cur_mods - bit
+            store64 [_ae_ctx + 1568] m
+        }
+        if key == AE_KEY_LEFT_ALT {
+            let bit = cur_mods & AE_MOD_ALT
+            let m = cur_mods - bit
+            store64 [_ae_ctx + 1568] m
+        }
+    }
+    return 1
+}
+
+fn ae_inject_text_char(ch) {
+    ae_input_init()
+    if ch < 32 { return 0 }
+    if ch == 127 { return 0 }
+    let qlen = load64 [_ae_ctx + 1592]
+    if qlen >= 255 {
+        return 0
+    }
+    let txt_buf = load64 [_ae_ctx + 1584]
+    store [txt_buf + qlen] ch
+    let next_len = qlen + 1
+    store [txt_buf + next_len] 0
+    store64 [_ae_ctx + 1592] next_len
+    ae_push_event(AE_EVENT_TEXT_INPUT, ch, 0, 0)
+    return 1
+}
+
+fn ae_input_inject_mouse_move(x, y) {
+    ae_input_init()
+    let old_x = load64 [_ae_ctx + 1600]
+    let old_y = load64 [_ae_ctx + 1608]
+    let dx = x - old_x
+    let dy = y - old_y
+    store64 [_ae_ctx + 1600] x
+    store64 [_ae_ctx + 1608] y
+    let prev_dx = load64 [_ae_ctx + 1632]
+    let prev_dy = load64 [_ae_ctx + 1640]
+    let cur_dx = prev_dx + dx
+    let cur_dy = prev_dy + dy
+    store64 [_ae_ctx + 1632] cur_dx
+    store64 [_ae_ctx + 1640] cur_dy
+    ae_push_event(AE_EVENT_MOUSE_MOVE, x, y, 0)
+    return 1
+}
+
+fn ae_input_inject_mouse_button(btn, is_down) {
+    ae_input_init()
+    let cur_down = load64 [_ae_ctx + 1664]
+    let mx = load64 [_ae_ctx + 1600]
+    let my = load64 [_ae_ctx + 1608]
+    if is_down == 1 {
+        let was_down = cur_down & btn
+        let new_down = cur_down | btn
+        store64 [_ae_ctx + 1664] new_down
+        if was_down == 0 {
+            let prev_p = load64 [_ae_ctx + 1672]
+            let p = prev_p | btn
+            store64 [_ae_ctx + 1672] p
+            ae_push_event(AE_EVENT_MOUSE_DOWN, btn, mx, my)
+        }
+    } else {
+        let was_down = cur_down & btn
+        let new_down = cur_down - was_down
+        store64 [_ae_ctx + 1664] new_down
+        if was_down != 0 {
+            let prev_r = load64 [_ae_ctx + 1680]
+            let r = prev_r | btn
+            store64 [_ae_ctx + 1680] r
+            ae_push_event(AE_EVENT_MOUSE_UP, btn, mx, my)
+        }
+    }
+    return 1
+}
+
+fn ae_input_inject_mouse_wheel(wx, wy) {
+    ae_input_init()
+    let prev_wx = load64 [_ae_ctx + 1648]
+    let prev_wy = load64 [_ae_ctx + 1656]
+    let cx = prev_wx + wx
+    let cy = prev_wy + wy
+    store64 [_ae_ctx + 1648] cx
+    store64 [_ae_ctx + 1656] cy
+    ae_push_event(AE_EVENT_MOUSE_WHEEL, wx, wy, 0)
+    return 1
+}
+
+fn ae_input_inject_gamepad(btns_mask, lx, ly, rx, ry) {
+    ae_input_init()
+    let prev_btns = load64 [_ae_ctx + 1696]
+    let overlap = btns_mask & prev_btns
+    let newly_pressed = btns_mask - overlap
+    store64 [_ae_ctx + 1696] btns_mask
+    let prev_p = load64 [_ae_ctx + 1704]
+    let cur_p = prev_p | newly_pressed
+    store64 [_ae_ctx + 1704] cur_p
+
+    let axes = load64 [_ae_ctx + 1712]
+    store64 [axes + 0] lx
+    store64 [axes + 8] ly
+    store64 [axes + 16] rx
+    store64 [axes + 24] ry
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Public Keyboard, Text, Mouse & Gamepad State Queries
+# ------------------------------------------------------------------------------
+fn ae_key_down(key) {
+    if key <= 0 { return 0 }
+    if key >= 512 { return 0 }
+    let kd_buf = load64 [_ae_ctx + 1536]
+    let v = load [kd_buf + key]
+    return v
+}
+
+fn ae_key_pressed(key) {
+    if key <= 0 { return 0 }
+    if key >= 512 { return 0 }
+    let kp_buf = load64 [_ae_ctx + 1544]
+    let v = load [kp_buf + key]
+    return v
+}
+
+fn ae_key_released(key) {
+    if key <= 0 { return 0 }
+    if key >= 512 { return 0 }
+    let kr_buf = load64 [_ae_ctx + 1552]
+    let v = load [kr_buf + key]
+    return v
+}
+
+fn ae_key_repeated(key) {
+    if key <= 0 { return 0 }
+    if key >= 512 { return 0 }
+    let krep_buf = load64 [_ae_ctx + 1560]
+    let v = load [krep_buf + key]
+    return v
+}
+
+fn ae_key_modifiers() {
+    let m = load64 [_ae_ctx + 1568]
+    return m
+}
+
+fn ae_last_key() {
+    let k = load64 [_ae_ctx + 1576]
+    return k
+}
+
+fn ae_text_input_count() {
+    let n = load64 [_ae_ctx + 1592]
+    return n
+}
+
+fn ae_text_input_char(idx) {
+    let n = load64 [_ae_ctx + 1592]
+    if idx < 0 { return 0 }
+    if idx >= n { return 0 }
+    let txt_buf = load64 [_ae_ctx + 1584]
+    let ch = load [txt_buf + idx]
+    return ch
+}
+
+fn ae_text_input_str() {
+    let txt_buf = load64 [_ae_ctx + 1584]
+    return txt_buf
+}
+
+fn ae_mouse_x() {
+    let x = load64 [_ae_ctx + 1600]
+    return x
+}
+
+fn ae_mouse_y() {
+    let y = load64 [_ae_ctx + 1608]
+    return y
+}
+
+fn ae_mouse_pos() {
+    let x = load64 [_ae_ctx + 1600]
+    let y = load64 [_ae_ctx + 1608]
+    return x, y
+}
+
+fn ae_mouse_dx() {
+    let dx = load64 [_ae_ctx + 1632]
+    return dx
+}
+
+fn ae_mouse_dy() {
+    let dy = load64 [_ae_ctx + 1640]
+    return dy
+}
+
+fn ae_mouse_wheel_x() {
+    let wx = load64 [_ae_ctx + 1648]
+    return wx
+}
+
+fn ae_mouse_wheel_y() {
+    let wy = load64 [_ae_ctx + 1656]
+    return wy
+}
+
+fn ae_mouse_down(btn) {
+    let mask = load64 [_ae_ctx + 1664]
+    let m = mask & btn
+    if m != 0 { return 1 }
+    return 0
+}
+
+fn ae_mouse_pressed(btn) {
+    let mask = load64 [_ae_ctx + 1672]
+    let m = mask & btn
+    if m != 0 { return 1 }
+    return 0
+}
+
+fn ae_mouse_released(btn) {
+    let mask = load64 [_ae_ctx + 1680]
+    let m = mask & btn
+    if m != 0 { return 1 }
+    return 0
+}
+
+fn ae_gamepad_is_connected(pad_idx = 0) {
+    if pad_idx == 0 {
+        let c = load64 [_ae_ctx + 1688]
+        return c
+    }
+    return 0
+}
+
+fn ae_gamepad_down(btn) {
+    let mask = load64 [_ae_ctx + 1696]
+    let m = mask & btn
+    if m != 0 { return 1 }
+    return 0
+}
+
+fn ae_gamepad_pressed(btn) {
+    let mask = load64 [_ae_ctx + 1704]
+    let m = mask & btn
+    if m != 0 { return 1 }
+    return 0
+}
+
+fn ae_gamepad_set_deadzone(dz_fp) {
+    store64 [_ae_ctx + 1720] dz_fp
+    return dz_fp
+}
+
+fn ae_gamepad_axis(axis_idx) {
+    if axis_idx < 0 { return 0 }
+    if axis_idx >= 6 { return 0 }
+    let axes = load64 [_ae_ctx + 1712]
+    let raw = load64 [axes + axis_idx * 8]
+    let dz = load64 [_ae_ctx + 1720]
+    let a_raw = raw
+    if a_raw < 0 { let a_raw = 0 - a_raw }
+    if a_raw <= dz { return 0 }
+    return raw
+}
+
+# ------------------------------------------------------------------------------
+# Input Action Mapping System
+# ------------------------------------------------------------------------------
+fn ae_action_bind(action_id, primary_key, alt_key = 0, mouse_btn = 0, pad_btn = 0) {
+    ae_input_init()
+    if action_id < 0 { return 0 }
+    if action_id >= 64 { return 0 }
+    let act_buf = load64 [_ae_ctx + 1728]
+    let off = action_id * 32
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    store64 [act_buf + off] primary_key
+    store64 [act_buf + off1] alt_key
+    store64 [act_buf + off2] mouse_btn
+    store64 [act_buf + off3] pad_btn
+    return 1
+}
+
+fn ae_bind_action(action_id, primary_key, alt_key = 0, mouse_btn = 0, pad_btn = 0) {
+    let r = ae_action_bind(action_id, primary_key, alt_key, mouse_btn, pad_btn)
+    return r
+}
+
+fn ae_action_down(action_id) {
+    if action_id < 0 { return 0 }
+    if action_id >= 64 { return 0 }
+    let act_buf = load64 [_ae_ctx + 1728]
+    let off = action_id * 32
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let k1 = load64 [act_buf + off]
+    let k2 = load64 [act_buf + off1]
+    let mb = load64 [act_buf + off2]
+    let pb = load64 [act_buf + off3]
+    if k1 > 0 {
+        if ae_key_down(k1) == 1 { return 1 }
+    }
+    if k2 > 0 {
+        if ae_key_down(k2) == 1 { return 1 }
+    }
+    if mb > 0 {
+        if ae_mouse_down(mb) == 1 { return 1 }
+    }
+    if pb > 0 {
+        if ae_gamepad_down(pb) == 1 { return 1 }
+    }
+    return 0
+}
+
+fn ae_action_pressed(action_id) {
+    if action_id < 0 { return 0 }
+    if action_id >= 64 { return 0 }
+    let act_buf = load64 [_ae_ctx + 1728]
+    let off = action_id * 32
+    let off1 = off + 8
+    let off2 = off + 16
+    let off3 = off + 24
+    let k1 = load64 [act_buf + off]
+    let k2 = load64 [act_buf + off1]
+    let mb = load64 [act_buf + off2]
+    let pb = load64 [act_buf + off3]
+    if k1 > 0 {
+        if ae_key_pressed(k1) == 1 { return 1 }
+    }
+    if k2 > 0 {
+        if ae_key_pressed(k2) == 1 { return 1 }
+    }
+    if mb > 0 {
+        if ae_mouse_pressed(mb) == 1 { return 1 }
+    }
+    if pb > 0 {
+        if ae_gamepad_pressed(pb) == 1 { return 1 }
+    }
+    return 0
+}
