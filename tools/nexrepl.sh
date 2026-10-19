@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#                        NEXREPL - NEXUS Interactive REPL
+#                        NEXREPL - NEXUS Interactive REPL (v1.0.0)
 # ==============================================================================
-# A stateful, line-by-line NEXUS playground built on the native toolchain.
-#
-# How it works:
-#   Every accepted line is appended to a running session program. The whole
-#   session is recompiled with the self-hosted compiler and executed; only
-#   the NEW output (the delta against the previous run) is displayed. If a
-#   line breaks compilation it is rejected and the session stays intact.
+# A stateful, line-by-line and multi-line NEXUS playground built on the native
+# self-hosted toolchain.
 #
 # Session commands (start with ':'):
 #   :help            show this help
@@ -21,9 +16,11 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+export NEXUS_HOME="$PROJECT_DIR"
 COMPILER_DIR="$PROJECT_DIR/compiler"
 SCRATCH_DIR="$PROJECT_DIR/scratch"
 SESSION="$SCRATCH_DIR/repl_session.nex"
+SESSION_BAK="$SCRATCH_DIR/repl_session.bak"
 REPL_OUT="$SCRATCH_DIR/repl_last_output.txt"
 
 NEXPREP="$PROJECT_DIR/bin/nexprep"
@@ -37,7 +34,6 @@ DEPTH=0
 BUFFER=""
 PREV_LINES=0
 
-# make sure the toolchain binaries exist
 if [ ! -x "$NEXPREP" ]; then gcc -O2 "$PROJECT_DIR/tools/nexprep.c" -o "$NEXPREP"; fi
 if [ ! -x "$NEXELF" ] && [ -f "$PROJECT_DIR/tools/nexelf.c" ]; then
     gcc -O2 "$PROJECT_DIR/tools/nexelf.c" -o "$NEXELF"
@@ -45,14 +41,13 @@ fi
 
 banner() {
     echo "=================================================="
-    echo " NEXREPL - NEXUS Interactive Session"
+    echo " NEXREPL v1.0.0 - NEXUS Interactive Session"
     echo " Compiler: self-hosted nexc (0% C# / 0% .NET)"
     echo " stdlib: ON   |  :help for commands  |  :quit exits"
     echo "=================================================="
 }
 
 session_compile() {
-    # 1. assemble full program
     local full="$SCRATCH_DIR/repl_full.nex"
     if [ "$STDLIB" = 1 ]; then
         echo "include \"stdlib/nstdlib.nex\"" > "$full"
@@ -61,7 +56,6 @@ session_compile() {
     fi
     cat "$SESSION" >> "$full"
 
-    # 2. preprocess + compile + run, all failures silent (caller reports)
     rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
     "$NEXPREP" "$full" "$COMPILER_DIR/code.nex" 2>/dev/null || return 1
     ( cd "$COMPILER_DIR" && ./nexc.elf > /dev/null 2>&1 ) || return 1
@@ -84,17 +78,23 @@ show_delta() {
     PREV_LINES=$now
 }
 
-reject_line() {
-    # drop the last accepted line from the session
-    local n
-    n=$(wc -l < "$SESSION")
-    if [ "$n" -gt 0 ]; then sed -i "${n}d" "$SESSION"; fi
+is_bare_expr() {
+    local s="$1"
+    case "$s" in
+        *$'\n'*) return 1 ;;
+        let\ *|local\ *|var\ *|const\ *|fn\ *|call\ *|if\ *|if_f\ *|while\ *|while_f\ *|for\ *|match\ *|struct\ *|enum\ *|impl\ *|print\ *|print\(*|print_str\ *|print_float\ *|print_raw\ *|print_raw\(*|read\ *|store*|file_*|include\ *|import\ *|assert_*|exit*|return*)
+            return 1 ;;
+    esac
+    if printf '%s' "$s" | grep -Eq '[^=!<>]=[^=]|\+\+|--'; then
+        return 1
+    fi
+    return 0
 }
 
 handle_command() {
     case "$BUFFER" in
         ":help")
-            sed -n '3,30p' "$SCRIPT_DIR/nexrepl.sh" | sed 's/^# \{0,1\}//'
+            sed -n '3,16p' "$SCRIPT_DIR/nexrepl.sh" | sed 's/^# \{0,1\}//'
             ;;
         ":clear"|":reset")
             : > "$SESSION"; : > "$REPL_OUT"; PREV_LINES=0; DEPTH=0; BUFFER=""
@@ -145,18 +145,15 @@ while true; do
         exit 0
     fi
 
-    # trim leading/trailing whitespace
     LINE="$(echo "$LINE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     [ -z "$LINE" ] && continue
 
-    # session commands only at top level
     if [ "$DEPTH" -eq 0 ]; then
         case "$LINE" in
-            :*) BUFFER="$LINE"; handle_command; continue ;;
+            :*) BUFFER="$LINE"; handle_command; BUFFER=""; continue ;;
         esac
     fi
 
-    # block accumulation
     BUFFER="$BUFFER$LINE"
     local_opens=$(printf '%s' "$LINE" | tr -cd '{' | wc -c)
     local_closes=$(printf '%s' "$LINE" | tr -cd '}' | wc -c)
@@ -167,14 +164,24 @@ while true; do
         continue
     fi
 
-    # compile + run the updated session
+    cp "$SESSION" "$SESSION_BAK"
+    if is_bare_expr "$BUFFER"; then
+        echo "print($BUFFER)" >> "$SESSION"
+        if session_compile; then
+            show_delta
+            BUFFER=""
+            continue
+        fi
+        cp "$SESSION_BAK" "$SESSION"
+    fi
+
     echo "$BUFFER" >> "$SESSION"
     BUFFER=""
     if session_compile; then
         show_delta
     else
         echo "[-] rejected (compilation failed)"
-        reject_line
-        session_compile > /dev/null 2>&1   # restore prior output baseline
+        cp "$SESSION_BAK" "$SESSION"
+        session_compile > /dev/null 2>&1
     fi
 done

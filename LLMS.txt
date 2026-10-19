@@ -47,7 +47,9 @@ let res = ok ? 1 : 0       # Ternary conditional operator
 - **Compound**: `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `+=.`, `-=.`
 - **Relational Comparisons**: `==`, `!=`, `<`, `>`, `<=`, `>=`
 
-> **CRITICAL RULE**: Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) can appear inside `if`, `while`, and ternary expressions `cond ? a : b`. Direct assignment `let flag = a > b` is invalid; write `let flag = a > b ? 1 : 0` or use an `if` block.
+- **Boolean & Relational Expressions**: Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) and logical operators (`&&`, `||`, `!`, `and`, `or`, `not`) work in `if`, `while`, ternary `cond ? a : b`, and direct `let flag = a > b && c != 0` assignments.
+- **Strings & Casts**: Strings support `+` concatenation (`"Val: " + str(x)`), `==` / `!=` content equality, `len(s)`, `str(int_val)`, `int(str_val)`, `print(s)`, and `print_raw(s)`.
+- **Stdlib Calling Convention**: All `stdlib` functions (`nx_*`) can be called with normal parameterized syntax `let m = nx_hashmap_new(); nx_hashmap_put_str(m, "k", 42)` as well as legacy `let nx_i0 = ...; call nx_...` syntax.
 
 ---
 

@@ -178,7 +178,7 @@ static int is_ident1(int c) { return isalnum((unsigned char)c) || c == '_'; }
 static int is_nexus_keyword(const char *tok) {
     static const char *kw[] = {
         "if", "else", "while", "for", "fn", "let", "call", "return", "print",
-        "print_str", "print_float", "read", "struct", "include", "import",
+        "print_str", "print_float", "print_raw", "exit", "read", "struct", "include", "import",
         "break", "continue", "alloc", "store", "store64", "store32", "store16",
         "load", "load64", "load32", "load16", "fload", "fstore",
         "file_open", "file_create", "file_read", "file_write", "file_close",
@@ -428,9 +428,9 @@ static int assert_line(const char *raw, FILE *out) {
 
     p += 9;
     while (*p == ' ' || *p == '\t') p++;
-    /* split on the first top-level comma */
+    /* split on the first top-level comma (respecting parens and brackets) */
     char a[MAXLINE], b[MAXLINE];
-    int na = 0, in_str = 0;
+    int na = 0, in_str = 0, pdepth = 0, bdepth = 0;
     while (*p && *p != '\n' && *p != '\r') {
         if (in_str && *p == '\\' && *(p + 1)) {
             a[na++] = *p++;
@@ -438,7 +438,13 @@ static int assert_line(const char *raw, FILE *out) {
             continue;
         }
         if (*p == '"') in_str = !in_str;
-        if (*p == ',' && !in_str) break;
+        else if (!in_str) {
+            if (*p == '(') pdepth++;
+            else if (*p == ')' && pdepth > 0) pdepth--;
+            else if (*p == '[') bdepth++;
+            else if (*p == ']' && bdepth > 0) bdepth--;
+            else if (*p == ',' && pdepth == 0 && bdepth == 0) break;
+        }
         a[na++] = *p++;
     }
     a[na] = '\0';
@@ -463,19 +469,19 @@ static int assert_line(const char *raw, FILE *out) {
     char linebuf[MAXLINE * 2];
     snprintf(linebuf, sizeof linebuf, "# assert %d: %s %s %s", id, a, is_eq ? "==" : "!=", b);
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "let _as_l_%d = %s", id, lhs);
+    snprintf(linebuf, sizeof linebuf, "let _as_l = %s", lhs);
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "let _as_r_%d = %s", id, rhs);
+    snprintf(linebuf, sizeof linebuf, "let _as_r = %s", rhs);
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "let _as_ok_%d = 0", id);
+    snprintf(linebuf, sizeof linebuf, "let _as_ok = 0");
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "if _as_l_%d %s _as_r_%d {", id, is_eq ? "==" : "!=", id);
+    snprintf(linebuf, sizeof linebuf, "if _as_l %s _as_r {", is_eq ? "==" : "!=");
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    let _as_ok_%d = 1", id);
+    snprintf(linebuf, sizeof linebuf, "    let _as_ok = 1");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "}");
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "if _as_ok_%d == 1 {", id);
+    snprintf(linebuf, sizeof linebuf, "if _as_ok == 1 {");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "    let nx_assert_passes = nx_assert_passes + 1");
     emit_line(linebuf, out);
@@ -485,11 +491,11 @@ static int assert_line(const char *raw, FILE *out) {
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "    print \"[FAIL] assert %s: got\"", is_eq ? "eq" : "ne");
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    print _as_l_%d", id);
+    snprintf(linebuf, sizeof linebuf, "    print _as_l");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "    print \"[FAIL] expected %s\"", is_eq ? "equal" : "different");
     emit_line(linebuf, out);
-    snprintf(linebuf, sizeof linebuf, "    print _as_r_%d", id);
+    snprintf(linebuf, sizeof linebuf, "    print _as_r");
     emit_line(linebuf, out);
     snprintf(linebuf, sizeof linebuf, "}");
     emit_line(linebuf, out);
@@ -596,6 +602,67 @@ static int struct_line(const char *raw) {
  * include / import processing
  * -------------------------------------------------------------------------- */
 static void process_file(const char *path, FILE *out);
+static char g_prog_dir[MAXLINE * 2] = "";
+
+static int resolve_include_path(const char *curdir, const char *rel, char *out_canon, size_t cap) {
+    char cand[MAXLINE * 3];
+    const char *use = NULL;
+
+    if (rel[0] == '/') {
+        if (access(rel, R_OK) == 0) use = rel;
+    }
+    if (!use && curdir && curdir[0]) {
+        snprintf(cand, sizeof cand, "%s/%s", curdir, rel);
+        if (access(cand, R_OK) == 0) use = cand;
+    }
+    if (!use) {
+        snprintf(cand, sizeof cand, "%s", rel);
+        if (access(cand, R_OK) == 0) use = cand;
+    }
+    if (!use && curdir && curdir[0]) {
+        char walk[MAXLINE * 2];
+        snprintf(walk, sizeof walk, "%s", curdir);
+        while (use == NULL && strcmp(walk, "/") != 0 && walk[0] != '\0') {
+            if (isalpha((unsigned char)walk[0]) && walk[1] == ':' &&
+                (walk[2] == '\0' || (walk[2] == '/' && walk[3] == '\0') || (walk[2] == '\\' && walk[3] == '\0')))
+                break;
+            char *slash = find_last_path_separator(walk);
+            if (slash == walk) {
+                walk[1] = '\0';
+                snprintf(cand, sizeof cand, "%s%s", walk, rel);
+            } else if (slash) {
+                *slash = '\0';
+                snprintf(cand, sizeof cand, "%s/%s", walk, rel);
+            } else break;
+            if (access(cand, R_OK) == 0) use = cand;
+            else if (!strcmp(walk, "/")) break;
+        }
+    }
+    if (!use) {
+        const char *nh = getenv("NEXUS_HOME");
+        if (nh && nh[0]) {
+            snprintf(cand, sizeof cand, "%s/%s", nh, rel);
+            if (access(cand, R_OK) == 0) use = cand;
+            if (!use) {
+                snprintf(cand, sizeof cand, "%s/stdlib/%s", nh, rel);
+                if (access(cand, R_OK) == 0) use = cand;
+            }
+        }
+    }
+    if (!use && g_prog_dir[0]) {
+        snprintf(cand, sizeof cand, "%s/../%s", g_prog_dir, rel);
+        if (access(cand, R_OK) == 0) use = cand;
+        if (!use) {
+            snprintf(cand, sizeof cand, "%s/../stdlib/%s", g_prog_dir, rel);
+            if (access(cand, R_OK) == 0) use = cand;
+        }
+    }
+    if (!use) return 0;
+    char canon[MAXLINE * 2];
+    if (!realpath(use, canon)) return 0;
+    snprintf(out_canon, cap, "%s", canon);
+    return 1;
+}
 
 static int try_include(char *line, const char *curdir, FILE *out) {
     char *p = line;
@@ -618,35 +685,10 @@ static int try_include(char *line, const char *curdir, FILE *out) {
        2. relative to the current working directory
        3. relative to each ancestor directory of the including file
           (so "stdlib/nstdlib.nex" works from any project subdirectory) */
-    const char *use = NULL;
-    char cand[MAXLINE * 3];
-    snprintf(cand, sizeof cand, "%s/%s", curdir, rel);
-    if (access(cand, R_OK) == 0) use = cand;
-    if (!use) {
-        snprintf(cand, sizeof cand, "%s", rel);
-        if (access(cand, R_OK) == 0) use = cand;
-    }
-    if (!use) {
-        char walk[MAXLINE * 2];
-        snprintf(walk, sizeof walk, "%s", curdir);
-        while (use == NULL && strcmp(walk, "/") != 0 && walk[0] != '\0') {
-            if (isalpha((unsigned char)walk[0]) && walk[1] == ':' && (walk[2] == '\0' || (walk[2] == '/' && walk[3] == '\0') || (walk[2] == '\\' && walk[3] == '\0'))) break;
-            char *slash = find_last_path_separator(walk);
-            if (slash == walk) {
-                walk[1] = '\0';
-                snprintf(cand, sizeof cand, "%s%s", walk, rel);
-            } else if (slash) {
-                *slash = '\0';
-                snprintf(cand, sizeof cand, "%s/%s", walk, rel);
-            } else break;
-            if (access(cand, R_OK) == 0) use = cand;
-            else if (!strcmp(walk, "/")) break;
-        }
-    }
-    if (!use) die("Cannot resolve file path", rel);
-
     char canon[MAXLINE * 2];
-    if (!realpath(use, canon)) die("Cannot canonicalize", use);
+    if (!resolve_include_path(curdir, rel, canon, sizeof canon)) {
+        die("Cannot resolve file path", rel);
+    }
     if (list_deps_mode) {
         fprintf(deps_out ? deps_out : stdout, "%s\n", canon);
         /* recurse so nested includes are recorded too; emit_line is a no-op
@@ -706,7 +748,7 @@ static int fn_block_depth = 0;
  * populated when we process 'fn name(p1, p2, ...) {' declarations
  * used for: named argument reordering, multi-return destructuring
  * -------------------------------------------------------------------------- */
-#define MAXFNS      256
+#define MAXFNS      2048
 #define MAXFNPARAMS  32
 
 static int split_args(const char *arg_str, char args[][512], int max_args);
@@ -714,6 +756,8 @@ static int split_args(const char *arg_str, char args[][512], int max_args);
 typedef struct {
     char name[128];
     int  nparams;
+    int  is_subroutine;
+    int  uses_nx_abi;
     char params[MAXFNPARAMS][128];
     int  param_has_default[MAXFNPARAMS];
     char param_defaults[MAXFNPARAMS][256];
@@ -722,7 +766,7 @@ typedef struct {
 static FnRegistryEntry fn_registry[MAXFNS];
 static int fn_registry_count = 0;
 
-static void fn_registry_add_full(const char *name, char raw_params[][512], int nparams) {
+static void fn_registry_add_ex(const char *name, char raw_params[][512], int nparams, int is_subroutine) {
     int idx = -1;
     for (int i = 0; i < fn_registry_count; i++) {
         if (!strcmp(fn_registry[i].name, name)) {
@@ -730,15 +774,20 @@ static void fn_registry_add_full(const char *name, char raw_params[][512], int n
             break;
         }
     }
-    if (idx >= 0 && fn_registry[idx].nparams > 0 && nparams == 0) {
+    if (idx >= 0 && (!fn_registry[idx].is_subroutine || fn_registry[idx].nparams > 0) && is_subroutine) {
         return;
     }
     if (idx < 0) {
         if (fn_registry_count >= MAXFNS) return;
         idx = fn_registry_count++;
+        memset(&fn_registry[idx], 0, sizeof(FnRegistryEntry));
         snprintf(fn_registry[idx].name, 128, "%s", name);
     }
 
+    fn_registry[idx].is_subroutine = is_subroutine;
+    if (is_subroutine && (!strncmp(name, "nx_", 3) || !strncmp(name, "x11_", 4))) {
+        fn_registry[idx].uses_nx_abi = 1;
+    }
     fn_registry[idx].nparams = nparams < MAXFNPARAMS ? nparams : MAXFNPARAMS;
     for (int j = 0; j < fn_registry[idx].nparams; j++) {
         char raw[512];
@@ -792,8 +841,12 @@ static void fn_registry_add_full(const char *name, char raw_params[][512], int n
     }
 }
 
+static void fn_registry_add_full(const char *name, char raw_params[][512], int nparams) {
+    fn_registry_add_ex(name, raw_params, nparams, 0);
+}
+
 static void fn_registry_add(const char *name, char param_names[][512], int nparams) {
-    fn_registry_add_full(name, param_names, nparams);
+    fn_registry_add_ex(name, param_names, nparams, 0);
 }
 
 static int fn_registry_find(const char *name) {
@@ -807,6 +860,16 @@ static int g_dispatch_needed[8] = {0};
 static int g_lambda_count = 0;
 
 static void init_closure_dispatch_sigs(void) {
+    char ps2[2][512] = {"_sa", "_sb"};
+    fn_registry_add("_nx_rt_strcat", ps2, 2);
+
+    fn_registry_add("_nx_rt_streq", ps2, 2);
+
+    char ps1[1][512] = {"_v"};
+    fn_registry_add("_nx_rt_itoa", ps1, 1);
+
+    fn_registry_add("_nx_rt_atoi", ps1, 1);
+
     char p0[1][512] = {"_nx_cl"};
     fn_registry_add("_nx_dispatch_closure_0", p0, 1);
 
@@ -887,11 +950,8 @@ static void scan_signatures_in_file(const char *path) {
                     int ilen = (int)(quote2 - quote1 - 1);
                     char sub[MAXLINE];
                     snprintf(sub, sizeof sub, "%.*s", ilen, quote1 + 1);
-                    char full[MAXLINE * 2];
-                    if (sub[0] == '/') snprintf(full, sizeof full, "%s", sub);
-                    else snprintf(full, sizeof full, "%s/%s", curdir, sub);
                     char canon_inc[MAXLINE * 2];
-                    if (realpath(full, canon_inc)) {
+                    if (resolve_include_path(curdir, sub, canon_inc, sizeof canon_inc)) {
                         scan_signatures_in_file(canon_inc);
                     }
                 }
@@ -926,7 +986,7 @@ static void scan_signatures_in_file(const char *path) {
             } else if (*p == '{' || *p == '\0' || *p == '#' || *p == ';' || *p == '\n' || *p == '\r') {
                 if (fn_len > 0) {
                     char raw_params[1][512];
-                    fn_registry_add_full(fn_name, raw_params, 0);
+                    fn_registry_add_ex(fn_name, raw_params, 0, 1);
                 }
             }
         }
@@ -1377,7 +1437,8 @@ typedef enum {
     TY_UNKNOWN = 0,
     TY_INT,
     TY_FLOAT,
-    TY_PTR
+    TY_PTR,
+    TY_STR
 } NexType;
 
 typedef struct {
@@ -1386,7 +1447,7 @@ typedef struct {
     NexType type;
 } VarTypeEntry;
 
-#define MAX_VAR_TYPES 4096
+#define MAX_VAR_TYPES 8192
 static VarTypeEntry VTYPES[MAX_VAR_TYPES];
 static int num_vtypes = 0;
 
@@ -1397,12 +1458,13 @@ typedef struct {
     int nparams;
 } FnSigEntry;
 
-#define MAX_FN_SIGS 512
+#define MAX_FN_SIGS 2048
 static FnSigEntry FNSIGS[MAX_FN_SIGS];
 static int num_fnsigs = 0;
 
 static void set_var_type(const char *scope, const char *name, NexType type) {
     if (!name || !*name) return;
+    if (type == TY_STR && (!strncmp(name, "nx_i", 4) || !strncmp(name, "nx_r", 4))) return;
     const char *sc = scope ? scope : "";
     for (int i = 0; i < num_vtypes; i++) {
         if (!strcmp(VTYPES[i].scope, sc) && !strcmp(VTYPES[i].name, name)) {
@@ -1418,6 +1480,17 @@ static void set_var_type(const char *scope, const char *name, NexType type) {
     }
 }
 
+static const char *strip_ls_prefix(const char *name) {
+    if (!name) return "";
+    if (!strncmp(name, "_nxu_", 5)) name += 5;
+    if (!strncmp(name, "_ls_", 4)) {
+        const char *p = name + 4;
+        while (*p >= '0' && *p <= '9') p++;
+        if (*p == '_' && p[1] != '\0') return p + 1;
+    }
+    return name;
+}
+
 static NexType get_var_type(const char *scope, const char *name) {
     if (!name || !*name) return TY_UNKNOWN;
     const char *sc = scope ? scope : "";
@@ -1431,6 +1504,21 @@ static NexType get_var_type(const char *scope, const char *name) {
     for (int i = 0; i < num_vtypes; i++) {
         if (VTYPES[i].scope[0] == '\0' && !strcmp(VTYPES[i].name, name)) {
             return VTYPES[i].type;
+        }
+    }
+    const char *base = strip_ls_prefix(name);
+    if (base != name) {
+        if (sc[0] != '\0') {
+            for (int i = 0; i < num_vtypes; i++) {
+                if (!strcmp(VTYPES[i].scope, sc) && !strcmp(VTYPES[i].name, base)) {
+                    return VTYPES[i].type;
+                }
+            }
+        }
+        for (int i = 0; i < num_vtypes; i++) {
+            if (VTYPES[i].scope[0] == '\0' && !strcmp(VTYPES[i].name, base)) {
+                return VTYPES[i].type;
+            }
         }
     }
     return TY_UNKNOWN;
@@ -1487,17 +1575,61 @@ static int is_int_literal(const char *s) {
     return *p == '\0';
 }
 
+static int is_known_str_fn(const char *fn_name) {
+    static const char *sfns[] = {
+        "str", "_nx_rt_itoa", "_nx_rt_strcat",
+        "nx_read_file", "nx_read_line",
+        "nx_str_slice", "nx_str_concat_new", "nx_str_trim_new",
+        "nx_int_to_str_new", "nx_str_from_char",
+        "nx_base64_encode", "nx_base64_decode",
+        "nx_rle_encode", "nx_rle_decode",
+        "nx_path_basename", "nx_path_dirname", "nx_path_ext", "nx_path_join",
+        NULL
+    };
+    for (int i = 0; sfns[i]; i++) {
+        if (!strcmp(fn_name, sfns[i])) return 1;
+    }
+    return 0;
+}
+
 static NexType get_operand_type(const char *scope, const char *tok) {
     if (!tok || !*tok) return TY_UNKNOWN;
+    while (*tok == ' ' || *tok == '\t') tok++;
     if (is_float_literal(tok)) return TY_FLOAT;
     if (is_int_literal(tok)) return TY_INT;
-    if (tok[0] == '"') return TY_PTR;
+    if (tok[0] == '"') return TY_STR;
     if (tok[0] == '[') return TY_PTR;
+    if (!strncmp(tok, "os_argv", 7) && (tok[7] == ' ' || tok[7] == '\t' || tok[7] == '(')) return TY_STR;
+    if (!strncmp(tok, "str(", 4) || !strncmp(tok, "str (", 5)) return TY_STR;
+
+    /* Check if tok is a function call fn(...) or call fn(...) */
+    const char *ct = tok;
+    if (!strncmp(ct, "call ", 5) || !strncmp(ct, "call\t", 5)) {
+        ct += 5;
+        while (*ct == ' ' || *ct == '\t') ct++;
+    }
+    if (is_ident0((unsigned char)*ct)) {
+        char fn_nm[128]; int fl = 0;
+        const char *p = ct;
+        while (*p && is_ident1((unsigned char)*p)) {
+            if (fl < 127) fn_nm[fl++] = *p;
+            p++;
+        }
+        fn_nm[fl] = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '(') {
+            if (is_known_str_fn(fn_nm)) return TY_STR;
+            NexType crt = get_fn_ret_type(fn_nm);
+            if (crt != TY_UNKNOWN) return crt;
+        }
+    }
 
     if (!strncmp(tok, "_ret_", 5)) {
+        if (is_known_str_fn(tok + 5)) return TY_STR;
         NexType rt = get_fn_ret_type(tok + 5);
         if (rt != TY_UNKNOWN) return rt;
     }
+    if (is_known_str_fn(tok)) return TY_STR;
     NexType frt = get_fn_ret_type(tok);
     if (frt != TY_UNKNOWN) return frt;
 
@@ -2045,6 +2177,13 @@ static int desugar_float(const char *in, char *out, size_t cap) {
     return 0;
 }
 
+static int g_need_rt_strcat = 0;
+static int g_need_rt_streq  = 0;
+static int g_need_rt_itoa   = 0;
+static int g_need_rt_atoi   = 0;
+static int g_need_argc      = 0;
+static int g_rt_tmp_counter = 0;
+
 static int desugar_print(const char *in, char *out, size_t cap) {
     char clean[MAXLINE];
     snprintf(clean, sizeof clean, "%s", in);
@@ -2073,8 +2212,36 @@ static int desugar_print(const char *in, char *out, size_t cap) {
         var[vn] = '\0';
         while (*arg == ' ' || *arg == '\t') arg++;
 
-        if (is_float_literal(var) || get_operand_type(cur_fn_name, var) == TY_FLOAT) {
+        NexType vt = get_operand_type(cur_fn_name, var);
+        if (is_float_literal(var) || vt == TY_FLOAT) {
             snprintf(out, cap, "%sprint_float %s%s\n", indent, var, *arg ? arg : "");
+            return 1;
+        }
+        if (vt == TY_STR) {
+            snprintf(out, cap, "%sprint_str %s%s\n", indent, var, *arg ? arg : "");
+            return 1;
+        }
+    } else if (!strncmp(p, "print_raw ", 10) || !strncmp(p, "print_raw\t", 10)) {
+        char *arg = p + 10;
+        while (*arg == ' ' || *arg == '\t') arg++;
+        if (*arg == '"' || *arg == '\0' || *arg == '#' || *arg == ';') return 0;
+
+        char var[128];
+        int vn = 0;
+        while (*arg && *arg != ' ' && *arg != '\t' && *arg != '#' && *arg != ';' && *arg != '\n' && *arg != '\r') {
+            if (vn < 127) var[vn++] = *arg;
+            arg++;
+        }
+        var[vn] = '\0';
+        while (*arg == ' ' || *arg == '\t') arg++;
+
+        NexType vt = get_operand_type(cur_fn_name, var);
+        if (vt != TY_STR && (is_int_literal(var) || vt == TY_INT)) {
+            g_need_rt_itoa = 1;
+            int tid = (g_rt_tmp_counter++) % 16;
+            snprintf(out, cap, "%slet _pr_s_%d = _nx_rt_itoa(%s)\n%sprint_raw _pr_s_%d\n",
+                     indent, tid, var, indent, tid);
+            set_var_type(cur_fn_name, "_pr_s", TY_STR);
             return 1;
         }
     }
@@ -2091,6 +2258,7 @@ static int cur_fn_nlocals = 0;
 
 static void fn_add_local(const char *var) {
     if (!var || !*var) return;
+    if (!strncmp(var, "nx_i", 4) || !strncmp(var, "nx_r", 4)) return;
     if (var[0] == '_' && strncmp(var, "_fcall_", 7) != 0 && strncmp(var, "_ls_", 4) != 0 &&
         strncmp(var, "_tern_", 6) != 0 && strncmp(var, "_nc_", 4) != 0 &&
         strncmp(var, "_paren_", 7) != 0 && strncmp(var, "_prec_", 6) != 0 &&
@@ -2192,7 +2360,13 @@ static int contains_fn_call(const char *s) {
             char id[128];
             memcpy(id, s + start, id_len);
             id[id_len] = '\0';
-            if (is_nexus_keyword(id)) continue;
+            if (is_nexus_keyword(id) &&
+                strcmp(id, "len") != 0 && strcmp(id, "abs") != 0 &&
+                strcmp(id, "itof") != 0 && strcmp(id, "ftoi") != 0 &&
+                strcmp(id, "fsqrt") != 0 && strcmp(id, "fneg") != 0 &&
+                strcmp(id, "os_argv") != 0 && strcmp(id, "os_argc") != 0 &&
+                strcmp(id, "file_open") != 0 && strcmp(id, "file_create") != 0 &&
+                strcmp(id, "file_read") != 0 && strcmp(id, "file_write") != 0) continue;
             int j = i;
             while (j < len && (s[j] == ' ' || s[j] == '\t')) j++;
             if (j < len && s[j] == '(') return 1;
@@ -2218,7 +2392,7 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
 
     /* 1. Evaluate arguments to temporaries before saving caller frame */
     for (int i = 0; i < nargs; i++) {
-        arg_tmp_indices[i] = call_tmp_counter++;
+        arg_tmp_indices[i] = i;
         snprintf(line_buf, sizeof line_buf, "%slet _c_arg_%d = %s\n",
                  indent, arg_tmp_indices[i], args[i]);
         strncat(out, line_buf, cap - strlen(out) - 1);
@@ -2252,10 +2426,34 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    /* 3. Pass evaluated arguments to callee argument slots */
+    int reg_idx = fn_registry_find(fn_name);
+    int is_sub = (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine);
+    int uses_nx = (reg_idx >= 0 && fn_registry[reg_idx].uses_nx_abi);
+
+    /* Propagate argument types to callee parameters */
+    FnSigEntry *sig = find_or_create_fn_sig(fn_name);
     for (int i = 0; i < nargs; i++) {
-        snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = _c_arg_%d\n",
-                 indent, fn_name, i, arg_tmp_indices[i]);
+        NexType at = get_operand_type(cur_fn_name, args[i]);
+        char c_arg_nm[64];
+        snprintf(c_arg_nm, sizeof c_arg_nm, "_c_arg_%d", arg_tmp_indices[i]);
+        if (at != TY_UNKNOWN) {
+            set_var_type(cur_fn_name, c_arg_nm, at);
+            if (sig && i < 32) sig->param_types[i] = at;
+            if (!is_sub && reg_idx >= 0 && i < fn_registry[reg_idx].nparams) {
+                set_var_type(fn_name, fn_registry[reg_idx].params[i], at);
+            }
+        }
+    }
+
+    /* 3. Pass evaluated arguments to callee argument slots (or nx_i0..nx_i7 for subroutines) */
+    for (int i = 0; i < nargs; i++) {
+        if (is_sub) {
+            snprintf(line_buf, sizeof line_buf, "%slet nx_i%d = _c_arg_%d\n",
+                     indent, i, arg_tmp_indices[i]);
+        } else {
+            snprintf(line_buf, sizeof line_buf, "%slet _arg_%s_%d = _c_arg_%d\n",
+                     indent, fn_name, i, arg_tmp_indices[i]);
+        }
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
@@ -2281,10 +2479,22 @@ static void emit_scoped_call(const char *indent, const char *fn_name, char args[
         strncat(out, line_buf, cap - strlen(out) - 1);
     }
 
-    /* 6. Assign destination variable directly from _ret_<fn> */
+    /* 6. Assign destination variable directly from _ret_<fn> (or nx_r0 for stdlib subroutines) */
     if (dest && dest[0]) {
-        snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s\n",
-                 indent, dest, fn_name);
+        NexType rt = get_fn_ret_type(fn_name);
+        if (is_known_str_fn(fn_name)) rt = TY_STR;
+        if (rt != TY_UNKNOWN) {
+            set_var_type(cur_fn_name, dest, rt);
+            const char *base_d = strip_ls_prefix(dest);
+            if (base_d != dest) set_var_type(cur_fn_name, base_d, rt);
+        }
+        if (is_sub && (uses_nx || nargs > 0)) {
+            snprintf(line_buf, sizeof line_buf, "%slet %s = nx_r0\n",
+                     indent, dest);
+        } else {
+            snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s\n",
+                     indent, dest, fn_name);
+        }
         strncat(out, line_buf, cap - strlen(out) - 1);
         if (cur_fn_is_scoped) {
             fn_add_local(dest);
@@ -2334,7 +2544,9 @@ static int desugar_print_parens(const char *in, char *out, size_t cap) {
         snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
     }
 
-    if (!strncmp(p, "print(", 6) || !strncmp(p, "print (", 7)) {
+    int is_praw = (!strncmp(p, "print_raw(", 10) || !strncmp(p, "print_raw (", 11));
+    const char *pkw = is_praw ? "print_raw" : "print";
+    if (is_praw || !strncmp(p, "print(", 6) || !strncmp(p, "print (", 7)) {
         char *open_p = strchr(p, '(');
         int match_off = open_p ? find_matching_paren(open_p, 0) : -1;
         char *close_p = (match_off > 0) ? (open_p + match_off) : NULL;
@@ -2361,11 +2573,11 @@ static int desugar_print_parens(const char *in, char *out, size_t cap) {
                 }
                 int tmp_id = call_tmp_counter++;
                 if (comment_saved[0]) {
-                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%sprint _p_tmp_%d %s\n",
-                             indent, tmp_id, expr_buf, indent, tmp_id, comment_saved);
+                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%s%s _p_tmp_%d %s\n",
+                             indent, tmp_id, expr_buf, indent, pkw, tmp_id, comment_saved);
                 } else {
-                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%sprint _p_tmp_%d\n",
-                             indent, tmp_id, expr_buf, indent, tmp_id);
+                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%s%s _p_tmp_%d\n",
+                             indent, tmp_id, expr_buf, indent, pkw, tmp_id);
                 }
                 return 1;
             }
@@ -2395,18 +2607,18 @@ static int desugar_print_parens(const char *in, char *out, size_t cap) {
             if (has_op) {
                 int tmp_id = call_tmp_counter++;
                 if (comment) {
-                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%sprint _p_tmp_%d %s\n",
-                             indent, tmp_id, i_start, indent, tmp_id, comment);
+                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%s%s _p_tmp_%d %s\n",
+                             indent, tmp_id, i_start, indent, pkw, tmp_id, comment);
                 } else {
-                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%sprint _p_tmp_%d\n",
-                             indent, tmp_id, i_start, indent, tmp_id);
+                    snprintf(out, cap, "%slet _p_tmp_%d = %s\n%s%s _p_tmp_%d\n",
+                             indent, tmp_id, i_start, indent, pkw, tmp_id);
                 }
                 return 1;
             } else {
                 if (comment) {
-                    snprintf(out, cap, "%sprint %s %s\n", indent, i_start, comment);
+                    snprintf(out, cap, "%s%s %s %s\n", indent, pkw, i_start, comment);
                 } else {
-                    snprintf(out, cap, "%sprint %s\n", indent, i_start);
+                    snprintf(out, cap, "%s%s %s\n", indent, pkw, i_start);
                 }
                 return 1;
             }
@@ -2538,6 +2750,8 @@ static int hoist_embedded_calls(const char *in, char *out, size_t cap) {
                     int tmp_id = call_tmp_counter++;
                     char tmp_var[64];
                     snprintf(tmp_var, sizeof tmp_var, "_fcall_%d", tmp_id);
+                    NexType ct = get_operand_type(cur_fn_name, call_expr);
+                    if (ct != TY_UNKNOWN) set_var_type(cur_fn_name, tmp_var, ct);
 
                     char mod_line[MAXLINE];
                     snprintf(mod_line, sizeof mod_line, "%.*s%s%s",
@@ -2615,8 +2829,16 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                             }
                         }
                     }
+                    FnSigEntry *sig = find_or_create_fn_sig(fn_name);
                     for (int i = 0; i < nparams; i++) {
                         fn_add_local(fn_registry[reg_idx].params[i]);
+                        if (sig && i < 32 && sig->param_types[i] != TY_UNKNOWN) {
+                            set_var_type(fn_name, fn_registry[reg_idx].params[i], sig->param_types[i]);
+                            char arg_slot[160];
+                            snprintf(arg_slot, sizeof arg_slot, "_arg_%s_%d", fn_name, i);
+                            set_var_type(fn_name, arg_slot, sig->param_types[i]);
+                            set_var_type("", arg_slot, sig->param_types[i]);
+                        }
                         if (cur_impl_st >= 0 && i == 0) {
                             track_obj(fn_registry[reg_idx].params[i], cur_impl_st);
                         }
@@ -2643,7 +2865,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
             } else if (*q == '{' || *q == '\0' || *q == '#' || *q == ';') {
                 /* Parameterless function: fn name { */
                 char raw_params[1][512];
-                fn_registry_add_full(fn_name, raw_params, 0);
+                fn_registry_add_ex(fn_name, raw_params, 0, 1);
                 if (cur_fn_is_scoped && !strcmp(cur_fn_name, fn_name)) {
                     /* Re-entrant emission of desugared fn header, keep scoped state */
                     return 0;
@@ -2710,6 +2932,16 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     strncat(out, line_buf, cap - strlen(out) - 1);
                 } else {
                     /* Single return value: backward-compatible _ret_fn */
+                    NexType rt = get_operand_type(target_fn, ret_expr);
+                    if (rt != TY_UNKNOWN) {
+                        set_fn_ret_type(target_fn, rt);
+                        char rslot[160];
+                        snprintf(rslot, sizeof rslot, "_ret_%s", target_fn);
+                        set_var_type(target_fn, rslot, rt);
+                        set_var_type("", rslot, rt);
+                    }
+                    int r_idx = fn_registry_find(target_fn);
+                    if (r_idx >= 0) fn_registry[r_idx].uses_nx_abi = 0;
                     snprintf(out, cap, "%slet _ret_%s = %s\n%sreturn\n",
                              indent, target_fn, ret_expr, indent);
                 }
@@ -2781,7 +3013,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                              * Detect if any arg has the form 'name=value'.
                              * If so, reorder them to match the registered signature. */
                             int reg_idx = fn_registry_find(fn_name);
-                            if (reg_idx >= 0) {
+                            if (reg_idx >= 0 && !fn_registry[reg_idx].is_subroutine) {
                                 int reg_nparams = fn_registry[reg_idx].nparams;
                                 char ordered[32][512];
                                 for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
@@ -2840,7 +3072,13 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                                     snprintf(args[i], 512, "%s", ordered[i]);
                                 }
                                 nargs = reg_nparams;
-                            } else if (g_lambda_count > 0 && nargs <= 4) {
+                            } else if (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine) {
+                                /* Registered subroutine (e.g. stdlib nx_* function): keep caller args */
+                            } else if (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine) {
+                        out[0] = '\0';
+                        emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
+                        return 1;
+                    } else if (g_lambda_count > 0 && nargs <= 4) {
                                 /* Closure call via _nx_dispatch_closure_N */
                                 g_dispatch_needed[nargs] = 1;
                                 char disp_fn[64];
@@ -2899,9 +3137,15 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                                 out[0] = '\0';
                                 emit_scoped_call(indent, fn_name, args, nargs, NULL, out, cap);
                                 char line_buf[MAXLINE];
+                                int is_sub_mr = (reg_idx >= 0 && fn_registry[reg_idx].is_subroutine && fn_registry[reg_idx].uses_nx_abi);
                                 for (int i = 0; i < ndest; i++) {
-                                    snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s_%d\n",
-                                             indent, dest_parts[i], fn_name, i);
+                                    if (is_sub_mr) {
+                                        snprintf(line_buf, sizeof line_buf, "%slet %s = nx_r%d\n",
+                                                 indent, dest_parts[i], i);
+                                    } else {
+                                        snprintf(line_buf, sizeof line_buf, "%slet %s = _ret_%s_%d\n",
+                                                 indent, dest_parts[i], fn_name, i);
+                                    }
                                     strncat(out, line_buf, cap - strlen(out) - 1);
                                     if (cur_fn_is_scoped) fn_add_local(dest_parts[i]);
                                 }
@@ -2959,7 +3203,7 @@ static int desugar_fn(const char *in, char *out, size_t cap) {
                     int nargs = split_args(arg_str, args, 32);
 
                     int reg_idx = fn_registry_find(fn_name);
-                    if (reg_idx >= 0) {
+                    if (reg_idx >= 0 && !fn_registry[reg_idx].is_subroutine) {
                         int reg_nparams = fn_registry[reg_idx].nparams;
                         char ordered[32][512];
                         for (int i = 0; i < reg_nparams; i++) ordered[i][0] = '\0';
@@ -3746,6 +3990,9 @@ static int desugar_ternary(const char *in, char *out, size_t cap) {
              repl_start, clean, tmp_var, clean + repl_end);
 
     int is_fl = is_operand_float(cur_fn_name, val_true) || is_operand_float(cur_fn_name, val_false);
+    int is_st = (get_operand_type(cur_fn_name, val_true) == TY_STR) || (get_operand_type(cur_fn_name, val_false) == TY_STR);
+    if (is_st) set_var_type(cur_fn_name, tmp_var, TY_STR);
+    else if (is_fl) set_var_type(cur_fn_name, tmp_var, TY_FLOAT);
     const char *init_val = is_fl ? "0.0" : "0";
 
     snprintf(out, cap, "%slet %s = %s\n%sif %s {\n%s    let %s = %s\n%s} else {\n%s    let %s = %s\n%s}\n%s\n",
@@ -5713,6 +5960,165 @@ static void emit_lambdas_and_dispatchers(FILE *out) {
     }
 }
 
+static void emit_runtime_helpers(FILE *out) {
+    if (g_need_rt_strcat) {
+        fprintf(out,
+            "fn _nx_rt_strcat {\n"
+            "    let _sa = _arg__nx_rt_strcat_0\n"
+            "    let _sb = _arg__nx_rt_strcat_1\n"
+            "    if _sa == 0 {\n"
+            "        let _sa = \"\"\n"
+            "    }\n"
+            "    if _sb == 0 {\n"
+            "        let _sb = \"\"\n"
+            "    }\n"
+            "    let _la = len _sa\n"
+            "    let _lb = len _sb\n"
+            "    let _tot = _la + _lb\n"
+            "    let _tot1 = _tot + 1\n"
+            "    let _buf = alloc _tot1\n"
+            "    let _i = 0\n"
+            "    while _i < _la {\n"
+            "        let _ch = load [_sa + _i]\n"
+            "        store [_buf + _i] _ch\n"
+            "        let _i = _i + 1\n"
+            "    }\n"
+            "    let _j = 0\n"
+            "    while _j < _lb {\n"
+            "        let _ch = load [_sb + _j]\n"
+            "        let _dst = _la + _j\n"
+            "        store [_buf + _dst] _ch\n"
+            "        let _j = _j + 1\n"
+            "    }\n"
+            "    store [_buf + _tot] 0\n"
+            "    let _ret__nx_rt_strcat = _buf\n"
+            "    return\n"
+            "}\n");
+    }
+    if (g_need_rt_streq) {
+        fprintf(out,
+            "fn _nx_rt_streq {\n"
+            "    let _sa = _arg__nx_rt_streq_0\n"
+            "    let _sb = _arg__nx_rt_streq_1\n"
+            "    if _sa == _sb {\n"
+            "        let _ret__nx_rt_streq = 1\n"
+            "        return\n"
+            "    }\n"
+            "    if _sa == 0 {\n"
+            "        let _ret__nx_rt_streq = 0\n"
+            "        return\n"
+            "    }\n"
+            "    if _sb == 0 {\n"
+            "        let _ret__nx_rt_streq = 0\n"
+            "        return\n"
+            "    }\n"
+            "    let _la = len _sa\n"
+            "    let _lb = len _sb\n"
+            "    if _la != _lb {\n"
+            "        let _ret__nx_rt_streq = 0\n"
+            "        return\n"
+            "    }\n"
+            "    let _i = 0\n"
+            "    while _i < _la {\n"
+            "        let _ca = load [_sa + _i]\n"
+            "        let _cb = load [_sb + _i]\n"
+            "        if _ca != _cb {\n"
+            "            let _ret__nx_rt_streq = 0\n"
+            "            return\n"
+            "        }\n"
+            "        let _i = _i + 1\n"
+            "    }\n"
+            "    let _ret__nx_rt_streq = 1\n"
+            "    return\n"
+            "}\n");
+    }
+    if (g_need_rt_itoa) {
+        fprintf(out,
+            "fn _nx_rt_itoa {\n"
+            "    let _val = _arg__nx_rt_itoa_0\n"
+            "    let _buf = alloc 32\n"
+            "    if _val == 0 {\n"
+            "        store [_buf + 0] 48\n"
+            "        store [_buf + 1] 0\n"
+            "        let _ret__nx_rt_itoa = _buf\n"
+            "        return\n"
+            "    }\n"
+            "    let _neg = 0\n"
+            "    if _val < 0 {\n"
+            "        let _neg = 1\n"
+            "        let _val = 0 - _val\n"
+            "    }\n"
+            "    let _tmp = alloc 32\n"
+            "    let _tp = 0\n"
+            "    while _val > 0 {\n"
+            "        let _rem = _val % 10\n"
+            "        let _ch = _rem + 48\n"
+            "        store [_tmp + _tp] _ch\n"
+            "        let _tp = _tp + 1\n"
+            "        let _val = _val / 10\n"
+            "    }\n"
+            "    let _bp = 0\n"
+            "    if _neg == 1 {\n"
+            "        store [_buf + 0] 45\n"
+            "        let _bp = 1\n"
+            "    }\n"
+            "    while _tp > 0 {\n"
+            "        let _tp = _tp - 1\n"
+            "        let _ch = load [_tmp + _tp]\n"
+            "        store [_buf + _bp] _ch\n"
+            "        let _bp = _bp + 1\n"
+            "    }\n"
+            "    store [_buf + _bp] 0\n"
+            "    let _ret__nx_rt_itoa = _buf\n"
+            "    return\n"
+            "}\n");
+    }
+    if (g_need_rt_atoi) {
+        fprintf(out,
+            "fn _nx_rt_atoi {\n"
+            "    let _str = _arg__nx_rt_atoi_0\n"
+            "    if _str == 0 {\n"
+            "        let _ret__nx_rt_atoi = 0\n"
+            "        return\n"
+            "    }\n"
+            "    let _i = 0\n"
+            "    let _c = load [_str + _i]\n"
+            "    while _c == 32 {\n"
+            "        let _i = _i + 1\n"
+            "        let _c = load [_str + _i]\n"
+            "    }\n"
+            "    let _sign = 1\n"
+            "    if _c == 45 {\n"
+            "        let _sign = 0 - 1\n"
+            "        let _i = _i + 1\n"
+            "    } else {\n"
+            "        if _c == 43 {\n"
+            "            let _i = _i + 1\n"
+            "        }\n"
+            "    }\n"
+            "    let _res = 0\n"
+            "    let _scanning = 1\n"
+            "    while _scanning == 1 {\n"
+            "        let _c = load [_str + _i]\n"
+            "        if _c >= 48 {\n"
+            "            if _c <= 57 {\n"
+            "                let _d = _c - 48\n"
+            "                let _res = _res * 10\n"
+            "                let _res = _res + _d\n"
+            "                let _i = _i + 1\n"
+            "            } else {\n"
+            "                let _scanning = 0\n"
+            "            }\n"
+            "        } else {\n"
+            "            let _scanning = 0\n"
+            "        }\n"
+            "    }\n"
+            "    let _ret__nx_rt_atoi = _res * _sign\n"
+            "    return\n"
+            "}\n");
+    }
+}
+
 /* --------------------------------------------------------------------------
  * Feature #37: Compile-Time Constants (const NAME = <val>)
  * -------------------------------------------------------------------------- */
@@ -6171,6 +6577,18 @@ static int desugar_null_coalescing(const char *in, char *out, size_t cap) {
 
     nc_tmp_counter++;
     int id = nc_tmp_counter;
+    {
+        NexType lt = get_operand_type(cur_fn_name, lhs);
+        NexType rt = get_operand_type(cur_fn_name, rhs);
+        NexType mt = (rt == TY_STR || lt == TY_STR) ? TY_STR : ((rt == TY_FLOAT || lt == TY_FLOAT) ? TY_FLOAT : (rt != TY_UNKNOWN ? rt : lt));
+        if (mt != TY_UNKNOWN) {
+            char ncv[64], ncr[64];
+            snprintf(ncv, sizeof ncv, "_nc_%d", id);
+            snprintf(ncr, sizeof ncr, "_nc_res_%d", id);
+            set_var_type(cur_fn_name, ncv, mt);
+            set_var_type(cur_fn_name, ncr, mt);
+        }
+    }
 
     char pre[MAXLINE];
     snprintf(pre, sizeof pre, "%.*s", lhs_start, clean);
@@ -6991,6 +7409,21 @@ static int desugar_match_block(const char *in, FILE *out) {
     memcpy(body, open_br + 1, blen);
     body[blen] = '\0';
 
+    int has_str_pat = (get_operand_type(cur_fn_name, scrutinee) == TY_STR);
+    if (!has_str_pat) {
+        for (int k = 0; k < blen; k++) {
+            if (body[k] == '"') { has_str_pat = 1; break; }
+        }
+    }
+    char mdone[64] = "";
+    if (has_str_pat) {
+        set_var_type(cur_fn_name, mvar, TY_STR);
+        snprintf(mdone, sizeof mdone, "_match_done_%d", mid);
+        char dline[256];
+        snprintf(dline, sizeof dline, "%slet %s = 0", indent, mdone);
+        emit_line(dline, out);
+    }
+
     int pos = 0;
     int first_branch = 1;
     while (pos < blen) {
@@ -7067,13 +7500,21 @@ static int desugar_match_block(const char *in, FILE *out) {
         int is_wildcard = (!strcmp(pat_raw, "_") || !strcmp(pat_raw, "else") || !strcmp(pat_raw, "default"));
         if (is_wildcard) {
             char hdr[256];
-            if (first_branch) {
-                snprintf(hdr, sizeof hdr, "%sif 1 == 1 {", indent);
+            if (has_str_pat) {
+                snprintf(hdr, sizeof hdr, "%sif %s == 0 {", indent, mdone);
+                emit_line(hdr, out);
+                char setd[256];
+                snprintf(setd, sizeof setd, "%s    let %s = 1", indent, mdone);
+                emit_line(setd, out);
             } else {
-                snprintf(hdr, sizeof hdr, "%s} else {", indent);
+                if (first_branch) {
+                    snprintf(hdr, sizeof hdr, "%sif 1 == 1 {", indent);
+                } else {
+                    snprintf(hdr, sizeof hdr, "%s} else {", indent);
+                }
+                emit_line(hdr, out);
+                first_branch = 0;
             }
-            emit_line(hdr, out);
-            first_branch = 0;
 
             char *ab = arm_body;
             while (*ab) {
@@ -7085,6 +7526,11 @@ static int desugar_match_block(const char *in, FILE *out) {
                 if (tr[0]) emit_line(ab, out);
                 if (!nx) break;
                 ab = nx + 1;
+            }
+            if (has_str_pat) {
+                char cl[256];
+                snprintf(cl, sizeof cl, "%s}", indent);
+                emit_line(cl, out);
             }
         } else {
             /* Split pat_raw on '|' for multi-pattern arms */
@@ -7104,13 +7550,23 @@ static int desugar_match_block(const char *in, FILE *out) {
                 if (!single_pat[0]) continue;
 
                 char hdr[512];
-                if (first_branch) {
-                    snprintf(hdr, sizeof hdr, "%sif %s == %s {", indent, mvar, single_pat);
-                    first_branch = 0;
+                if (has_str_pat) {
+                    snprintf(hdr, sizeof hdr, "%sif %s == 0 {", indent, mdone);
+                    emit_line(hdr, out);
+                    snprintf(hdr, sizeof hdr, "%s    if %s == %s {", indent, mvar, single_pat);
+                    emit_line(hdr, out);
+                    char setd[256];
+                    snprintf(setd, sizeof setd, "%s        let %s = 1", indent, mdone);
+                    emit_line(setd, out);
                 } else {
-                    snprintf(hdr, sizeof hdr, "%s} else if %s == %s {", indent, mvar, single_pat);
+                    if (first_branch) {
+                        snprintf(hdr, sizeof hdr, "%sif %s == %s {", indent, mvar, single_pat);
+                        first_branch = 0;
+                    } else {
+                        snprintf(hdr, sizeof hdr, "%s} else if %s == %s {", indent, mvar, single_pat);
+                    }
+                    emit_line(hdr, out);
                 }
-                emit_line(hdr, out);
 
                 char arm_copy[MAXLINE * 4];
                 snprintf(arm_copy, sizeof arm_copy, "%s", arm_body);
@@ -7125,10 +7581,17 @@ static int desugar_match_block(const char *in, FILE *out) {
                     if (!nx) break;
                     ab = nx + 1;
                 }
+                if (has_str_pat) {
+                    char cl[256];
+                    snprintf(cl, sizeof cl, "%s    }", indent);
+                    emit_line(cl, out);
+                    snprintf(cl, sizeof cl, "%s}", indent);
+                    emit_line(cl, out);
+                }
             }
         }
     }
-    if (!first_branch) {
+    if (!has_str_pat && !first_branch) {
         char close_line[256];
         snprintf(close_line, sizeof close_line, "%s}", indent);
         emit_line(close_line, out);
@@ -7207,6 +7670,878 @@ static int desugar_single_line_block(const char *in, char *out, size_t cap) {
     return 1;
 }
 
+/* --------------------------------------------------------------------------
+ * v1.0 Complete Loop Desugaring:
+ *   - os_argc anywhere -> _nx_argc_
+ *   - str(x) -> _nx_rt_itoa(x), int(s) -> _nx_rt_atoi(s)
+ *   - Parenthesized builtins: file_open(p), file_create(p), file_read(f,b,n),
+ *     file_write(f,b,n), file_close(f), os_argv(i), exit(c)
+ *   - String concatenation: a + b (+ c ...) -> _nx_rt_strcat(a, b)
+ *   - String equality: a == b / a != b -> _nx_rt_streq(a, b)
+ *   - Logical operators && (and), || (or), ! (not), relational RHS in let,
+ *     and complex conditions in if / while (e.g., if a * a > n {)
+ * -------------------------------------------------------------------------- */
+static void rewrite_os_argc_and_casts(char *line) {
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!strncmp(p, "let _nx_argc_ = os_argc", 23)) return;
+
+    char buf[MAXLINE * 2];
+    int bi = 0;
+    int len = (int)strlen(line);
+    int in_str = 0;
+
+    for (int i = 0; i < len; ) {
+        if (in_str) {
+            if (line[i] == '\\' && i + 1 < len) {
+                if (bi < (int)sizeof(buf) - 2) { buf[bi++] = line[i++]; buf[bi++] = line[i++]; }
+                else i += 2;
+                continue;
+            }
+            if (line[i] == '"') in_str = 0;
+            if (bi < (int)sizeof(buf) - 1) buf[bi++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '"') {
+            in_str = 1;
+            if (bi < (int)sizeof(buf) - 1) buf[bi++] = line[i++];
+            else i++;
+            continue;
+        }
+        if (line[i] == '#' || line[i] == ';') {
+            while (i < len && bi < (int)sizeof(buf) - 1) buf[bi++] = line[i++];
+            break;
+        }
+        if (is_ident0((unsigned char)line[i]) && (i == 0 || !is_ident1((unsigned char)line[i-1]))) {
+            int start = i;
+            char tok[128]; int tlen = 0;
+            while (i < len && is_ident1((unsigned char)line[i])) {
+                if (tlen < 127) tok[tlen++] = line[i];
+                i++;
+            }
+            tok[tlen] = '\0';
+            int prec_dot = (start > 0 && line[start - 1] == '.');
+            int j = i;
+            while (j < len && (line[j] == ' ' || line[j] == '\t')) j++;
+
+            if (!prec_dot && !strcmp(tok, "os_argc")) {
+                if (j + 1 < len && line[j] == '(' && line[j+1] == ')') {
+                    i = j + 2;
+                }
+                char *lp = line;
+                while (*lp == ' ' || *lp == '\t') lp++;
+                int is_direct_let = 0;
+                if (!strncmp(lp, "let ", 4)) {
+                    char *eq = strchr(lp, '=');
+                    if (eq && eq < line + start) {
+                        const char *after = line + i;
+                        while (*after == ' ' || *after == '\t' || *after == '\r' || *after == '\n') after++;
+                        const char *before = eq + 1;
+                        while (*before == ' ' || *before == '\t') before++;
+                        if (before == line + start && (*after == '\0' || *after == '#' || *after == ';')) {
+                            is_direct_let = 1;
+                        }
+                    }
+                }
+                if (!is_direct_let) {
+                    g_need_argc = 1;
+                    const char *rep = "_nx_argc_";
+                    for (int k = 0; rep[k] && bi < (int)sizeof(buf) - 1; k++) buf[bi++] = rep[k];
+                    continue;
+                }
+            }
+            if (!prec_dot && !strcmp(tok, "str") && j < len && line[j] == '(') {
+                int b = start - 1;
+                while (b >= 0 && (line[b] == ' ' || line[b] == '\t')) b--;
+                if (!(b >= 1 && line[b-1] == 'f' && line[b] == 'n')) {
+                    g_need_rt_itoa = 1;
+                    const char *rep = "_nx_rt_itoa";
+                    for (int k = 0; rep[k] && bi < (int)sizeof(buf) - 1; k++) buf[bi++] = rep[k];
+                    continue;
+                }
+            }
+            if (!prec_dot && !strcmp(tok, "int") && j < len && line[j] == '(') {
+                int b = start - 1;
+                while (b >= 0 && (line[b] == ' ' || line[b] == '\t')) b--;
+                if (!(b >= 1 && line[b-1] == 'f' && line[b] == 'n')) {
+                    g_need_rt_atoi = 1;
+                    const char *rep = "_nx_rt_atoi";
+                    for (int k = 0; rep[k] && bi < (int)sizeof(buf) - 1; k++) buf[bi++] = rep[k];
+                    continue;
+                }
+            }
+            for (int k = 0; k < tlen && bi < (int)sizeof(buf) - 1; k++) buf[bi++] = tok[k];
+            continue;
+        }
+        if (bi < (int)sizeof(buf) - 1) buf[bi++] = line[i++];
+        else i++;
+    }
+    buf[bi] = '\0';
+    snprintf(line, MAXLINE, "%s", buf);
+}
+
+static int desugar_builtin_parens(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    if (!strncmp(p, "file_close(", 11) || !strncmp(p, "file_close (", 12)) {
+        char *op = strchr(p, '(');
+        int cl = op ? find_matching_paren(op, 0) : -1;
+        if (op && cl > 0) {
+            char arg[256];
+            snprintf(arg, sizeof arg, "%.*s", cl - 1, op + 1);
+            trim_ws(arg);
+            snprintf(out, cap, "%sfile_close %s\n", indent, arg);
+            return 1;
+        }
+    }
+    if (!strncmp(p, "exit(", 5) || !strncmp(p, "exit (", 6) || !strncmp(p, "exit ", 5) || !strncmp(p, "exit\t", 5)) {
+        char *arg_p = p + 4;
+        while (*arg_p == ' ' || *arg_p == '\t') arg_p++;
+        char arg[256] = "";
+        if (*arg_p == '(') {
+            int cl = find_matching_paren(arg_p, 0);
+            if (cl > 0) {
+                snprintf(arg, sizeof arg, "%.*s", cl - 1, arg_p + 1);
+                trim_ws(arg);
+            }
+        } else {
+            snprintf(arg, sizeof arg, "%s", arg_p);
+            char *cm = strchr(arg, '#'); if (cm) *cm = '\0';
+            char *sc = strchr(arg, ';'); if (sc) *sc = '\0';
+            trim_ws(arg);
+            if (is_simple_val(arg)) return 0;
+        }
+        if (arg[0]) {
+            if (is_simple_val(arg)) {
+                snprintf(out, cap, "%sexit %s\n", indent, arg);
+            } else {
+                int tid = (g_rt_tmp_counter++) % 16;
+                snprintf(out, cap, "%slet _ex_tmp_%d = %s\n%sexit _ex_tmp_%d\n", indent, tid, arg, indent, tid);
+            }
+            return 1;
+        }
+    }
+    if (!strncmp(p, "file_write(", 11) || !strncmp(p, "file_write (", 12)) {
+        char *op = strchr(p, '(');
+        int cl = op ? find_matching_paren(op, 0) : -1;
+        if (op && cl > 0) {
+            char astr[MAXLINE];
+            snprintf(astr, sizeof astr, "%.*s", cl - 1, op + 1);
+            char args[4][512];
+            int na = split_args(astr, args, 4);
+            if (na == 3) {
+                out[0] = '\0';
+                char a_use[3][128];
+                for (int k = 0; k < 3; k++) {
+                    if (is_simple_val(args[k])) {
+                        snprintf(a_use[k], sizeof a_use[k], "%s", args[k]);
+                    } else {
+                        int tid = (g_rt_tmp_counter++) % 16;
+                        snprintf(a_use[k], sizeof a_use[k], "_bi_arg_%d", tid);
+                        char lbuf[MAXLINE];
+                        snprintf(lbuf, sizeof lbuf, "%slet %s = %s\n", indent, a_use[k], args[k]);
+                        strncat(out, lbuf, cap - strlen(out) - 1);
+                    }
+                }
+                char fbuf[MAXLINE];
+                snprintf(fbuf, sizeof fbuf, "%sfile_write %s %s %s\n", indent, a_use[0], a_use[1], a_use[2]);
+                strncat(out, fbuf, cap - strlen(out) - 1);
+                return 1;
+            }
+        }
+    }
+
+    if (!strncmp(p, "let ", 4) || !strncmp(p, "let\t", 4)) {
+        char *eq = strchr(p, '=');
+        if (eq && eq[1] != '=') {
+            char dest[128];
+            int dlen = (int)(eq - (p + 4));
+            if (dlen >= (int)sizeof(dest)) dlen = (int)sizeof(dest) - 1;
+            snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
+            trim_ws(dest);
+
+            char *rhs = eq + 1;
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+
+            if (!strncmp(rhs, "os_argv ", 8) || !strncmp(rhs, "os_argv\t", 8)) {
+                set_var_type(cur_fn_name, dest, TY_STR);
+                const char *bd = strip_ls_prefix(dest);
+                if (bd != dest) set_var_type(cur_fn_name, bd, TY_STR);
+                char arg[256];
+                snprintf(arg, sizeof arg, "%s", rhs + 8);
+                char *cm = strchr(arg, '#'); if (cm) *cm = '\0';
+                char *sc = strchr(arg, ';'); if (sc) *sc = '\0';
+                trim_ws(arg);
+                if (!is_simple_val(arg)) {
+                    int tid = (g_rt_tmp_counter++) % 16;
+                    snprintf(out, cap, "%slet _bi_arg_%d = %s\n%slet %s = os_argv _bi_arg_%d\n",
+                             indent, tid, arg, indent, dest, tid);
+                    return 1;
+                }
+                return 0;
+            }
+
+            char bname[128] = ""; int bl = 0;
+            char *scan = rhs;
+            while (*scan && is_ident1((unsigned char)*scan)) {
+                if (bl < 127) bname[bl++] = *scan;
+                scan++;
+            }
+            bname[bl] = '\0';
+            while (*scan == ' ' || *scan == '\t') scan++;
+            if (bl > 0 && *scan == '(') {
+                int cl = find_matching_paren(scan, 0);
+                if (cl > 0) {
+                    char *tail = scan + cl + 1;
+                    while (*tail == ' ' || *tail == '\t') tail++;
+                    if (*tail == '\0' || *tail == '#' || *tail == ';' || *tail == '\n' || *tail == '\r') {
+                        char astr[MAXLINE];
+                        snprintf(astr, sizeof astr, "%.*s", cl - 1, scan + 1);
+                        trim_ws(astr);
+
+                        if (!strcmp(bname, "os_argv")) {
+                            set_var_type(cur_fn_name, dest, TY_STR);
+                            const char *bd = strip_ls_prefix(dest);
+                            if (bd != dest) set_var_type(cur_fn_name, bd, TY_STR);
+                            if (is_simple_val(astr)) {
+                                snprintf(out, cap, "%slet %s = os_argv %s\n", indent, dest, astr);
+                            } else {
+                                int tid = (g_rt_tmp_counter++) % 16;
+                                snprintf(out, cap, "%slet _bi_arg_%d = %s\n%slet %s = os_argv _bi_arg_%d\n",
+                                         indent, tid, astr, indent, dest, tid);
+                            }
+                            return 1;
+                        }
+                        if (!strcmp(bname, "file_open") || !strcmp(bname, "file_create")) {
+                            if (astr[0] == '"' || is_simple_val(astr)) {
+                                snprintf(out, cap, "%slet %s = %s %s\n", indent, dest, bname, astr);
+                            } else {
+                                int tid = (g_rt_tmp_counter++) % 16;
+                                set_var_type(cur_fn_name, "_bi_arg", TY_STR);
+                                snprintf(out, cap, "%slet _bi_arg_%d = %s\n%slet %s = %s _bi_arg_%d\n",
+                                         indent, tid, astr, indent, dest, bname, tid);
+                            }
+                            return 1;
+                        }
+                        if (!strcmp(bname, "file_close")) {
+                            if (is_simple_val(astr)) {
+                                snprintf(out, cap, "%sfile_close %s\n%slet %s = 0\n", indent, astr, indent, dest);
+                            } else {
+                                int tid = (g_rt_tmp_counter++) % 16;
+                                snprintf(out, cap, "%slet _bi_arg_%d = %s\n%sfile_close _bi_arg_%d\n%slet %s = 0\n",
+                                         indent, tid, astr, indent, tid, indent, dest);
+                            }
+                            return 1;
+                        }
+                        if (!strcmp(bname, "file_read") || !strcmp(bname, "file_write")) {
+                            char args[4][512];
+                            int na = split_args(astr, args, 4);
+                            if (na == 3) {
+                                out[0] = '\0';
+                                char a_use[3][128];
+                                for (int k = 0; k < 3; k++) {
+                                    if (is_simple_val(args[k])) {
+                                        snprintf(a_use[k], sizeof a_use[k], "%s", args[k]);
+                                    } else {
+                                        int tid = (g_rt_tmp_counter++) % 16;
+                                        snprintf(a_use[k], sizeof a_use[k], "_bi_arg_%d", tid);
+                                        char lbuf[MAXLINE];
+                                        snprintf(lbuf, sizeof lbuf, "%slet %s = %s\n", indent, a_use[k], args[k]);
+                                        strncat(out, lbuf, cap - strlen(out) - 1);
+                                    }
+                                }
+                                char fbuf[MAXLINE];
+                                if (!strcmp(bname, "file_read")) {
+                                    snprintf(fbuf, sizeof fbuf, "%slet %s = file_read %s %s %s\n",
+                                             indent, dest, a_use[0], a_use[1], a_use[2]);
+                                } else {
+                                    snprintf(fbuf, sizeof fbuf, "%sfile_write %s %s %s\n%slet %s = %s\n",
+                                             indent, a_use[0], a_use[1], a_use[2], indent, dest, a_use[2]);
+                                }
+                                strncat(out, fbuf, cap - strlen(out) - 1);
+                                return 1;
+                            }
+                        }
+                        if (!strcmp(bname, "len") || !strcmp(bname, "abs") ||
+                            !strcmp(bname, "itof") || !strcmp(bname, "ftoi") ||
+                            !strcmp(bname, "fsqrt") || !strcmp(bname, "fneg")) {
+                            if (astr[0] == '"' || is_simple_val(astr) || is_int_literal(astr) || is_float_literal(astr)) {
+                                snprintf(out, cap, "%slet %s = %s %s\n", indent, dest, bname, astr);
+                            } else {
+                                int tid = (g_rt_tmp_counter++) % 16;
+                                snprintf(out, cap, "%slet _bi_arg_%d = %s\n%slet %s = %s _bi_arg_%d\n",
+                                         indent, tid, astr, indent, dest, bname, tid);
+                            }
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int split_top_level_plus(const char *expr, char parts[][512], int max_parts) {
+    int count = 0;
+    int len = (int)strlen(expr);
+    int start = 0, in_str = 0, pdepth = 0, bdepth = 0;
+
+    for (int i = 0; i <= len; i++) {
+        char c = expr[i];
+        if (in_str && c == '\\' && expr[i + 1]) { i++; continue; }
+        if (c == '"') in_str = !in_str;
+        if (!in_str) {
+            if (c == '(') pdepth++;
+            else if (c == ')' && pdepth > 0) pdepth--;
+            else if (c == '[') bdepth++;
+            else if (c == ']' && bdepth > 0) bdepth--;
+        }
+        int is_plus = (!in_str && pdepth == 0 && bdepth == 0 && c == '+' &&
+                       expr[i+1] != '+' && expr[i+1] != '=' && expr[i+1] != '.' &&
+                       (i == 0 || (expr[i-1] != '+' && expr[i-1] != 'e' && expr[i-1] != 'E')));
+        if (is_plus || c == '\0') {
+            if (count >= max_parts) return 0;
+            int n = i - start;
+            if (n <= 0 || n >= 512) return 0;
+            snprintf(parts[count], 512, "%.*s", n, expr + start);
+            trim_ws(parts[count]);
+            if (!parts[count][0]) return 0;
+            count++;
+            start = i + 1;
+        }
+    }
+    return count;
+}
+
+static int desugar_string_concat(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    {
+        int in_s = 0;
+        for (int i = 0; p[i]; i++) {
+            if (in_s && p[i] == '\\' && p[i+1]) { i++; continue; }
+            if (p[i] == '"') { in_s = !in_s; continue; }
+            if (!in_s && (p[i] == '#' || p[i] == ';')) {
+                p[i] = '\0';
+                break;
+            }
+        }
+    }
+
+    if (!strncmp(p, "print ", 6) || !strncmp(p, "print\t", 6) ||
+        !strncmp(p, "print_raw ", 10) || !strncmp(p, "print_raw\t", 10) ||
+        !strncmp(p, "return ", 7) || !strncmp(p, "return\t", 7)) {
+        int kwl = (!strncmp(p, "print_raw", 9)) ? 9 : ((!strncmp(p, "return", 6)) ? 6 : 5);
+        char kw[16];
+        snprintf(kw, sizeof kw, "%.*s", kwl, p);
+        char *rhs = p + kwl;
+        while (*rhs == ' ' || *rhs == '\t') rhs++;
+        char rhs_clean[MAXLINE];
+        snprintf(rhs_clean, sizeof rhs_clean, "%s", rhs);
+        trim_ws(rhs_clean);
+
+        char parts[32][512];
+        int np = split_top_level_plus(rhs_clean, parts, 32);
+        if (np >= 2) {
+            int any_str = 0;
+            for (int k = 0; k < np; k++) {
+                if (parts[k][0] == '"' || get_operand_type(cur_fn_name, parts[k]) == TY_STR) {
+                    any_str = 1;
+                    break;
+                }
+            }
+            if (any_str) {
+                int tid = (g_rt_tmp_counter++) % 16;
+                char tvar[64];
+                snprintf(tvar, sizeof tvar, "_scat_p_%d", tid);
+                set_var_type(cur_fn_name, tvar, TY_STR);
+                snprintf(out, cap, "%slet %s = %s\n%s%s %s\n",
+                         indent, tvar, rhs_clean, indent, kw, tvar);
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if (strncmp(p, "let ", 4) != 0 && strncmp(p, "let\t", 4) != 0) return 0;
+    char *eq = NULL;
+    {
+        int in_s = 0;
+        for (char *s = p + 4; *s; s++) {
+            if (in_s && *s == '\\' && s[1]) { s++; continue; }
+            if (*s == '"') { in_s = !in_s; continue; }
+            if (!in_s && *s == '=' && s[1] != '=' && s[-1] != '!' && s[-1] != '<' && s[-1] != '>') {
+                eq = s;
+                break;
+            }
+        }
+    }
+    if (!eq) return 0;
+
+    char dest[128];
+    int dlen = (int)(eq - (p + 4));
+    if (dlen >= (int)sizeof(dest)) dlen = (int)sizeof(dest) - 1;
+    snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
+    trim_ws(dest);
+    if (!dest[0] || strchr(dest, ',')) return 0;
+
+    char rhs[MAXLINE];
+    snprintf(rhs, sizeof rhs, "%s", eq + 1);
+    trim_ws(rhs);
+
+    if (rhs[0] == '"') {
+        int i = 1;
+        while (rhs[i] && rhs[i] != '"') {
+            if (rhs[i] == '\\' && rhs[i+1]) i += 2;
+            else i++;
+        }
+        if (rhs[i] == '"' && rhs[i+1] == '\0') {
+            set_var_type(cur_fn_name, dest, TY_STR);
+            const char *bd = strip_ls_prefix(dest);
+            if (bd != dest) set_var_type(cur_fn_name, bd, TY_STR);
+            return 0;
+        }
+    }
+
+    char parts[32][512];
+    int np = split_top_level_plus(rhs, parts, 32);
+    if (np < 2) {
+        NexType rt = get_operand_type(cur_fn_name, rhs);
+        if (rt == TY_STR) {
+            set_var_type(cur_fn_name, dest, TY_STR);
+            const char *bd = strip_ls_prefix(dest);
+            if (bd != dest) set_var_type(cur_fn_name, bd, TY_STR);
+        }
+        return 0;
+    }
+
+    int any_lit_str = 0;
+    int all_str = 1;
+    int str_count = 0;
+    for (int k = 0; k < np; k++) {
+        NexType pt = get_operand_type(cur_fn_name, parts[k]);
+        if (parts[k][0] == '"') { any_lit_str = 1; str_count++; }
+        else if (pt == TY_STR) { str_count++; }
+        else { all_str = 0; }
+    }
+
+    if (!any_lit_str && !(all_str && str_count == np)) return 0;
+
+    g_need_rt_strcat = 1;
+    set_var_type(cur_fn_name, dest, TY_STR);
+    const char *bd = strip_ls_prefix(dest);
+    if (bd != dest) set_var_type(cur_fn_name, bd, TY_STR);
+
+    out[0] = '\0';
+    char pvars[32][128];
+    for (int k = 0; k < np; k++) {
+        NexType pt = get_operand_type(cur_fn_name, parts[k]);
+        int tid = (g_rt_tmp_counter++) % 16;
+        snprintf(pvars[k], sizeof pvars[k], "_sc_op_%d", tid);
+        set_var_type(cur_fn_name, pvars[k], TY_STR);
+        char lbuf[MAXLINE];
+        if (parts[k][0] == '"' || pt == TY_STR) {
+            snprintf(lbuf, sizeof lbuf, "%slet %s = %s\n", indent, pvars[k], parts[k]);
+        } else {
+            g_need_rt_itoa = 1;
+            snprintf(lbuf, sizeof lbuf, "%slet %s = _nx_rt_itoa(%s)\n", indent, pvars[k], parts[k]);
+        }
+        strncat(out, lbuf, cap - strlen(out) - 1);
+    }
+
+    char cur_acc[128];
+    snprintf(cur_acc, sizeof cur_acc, "%s", pvars[0]);
+    for (int k = 1; k < np; k++) {
+        char target[128];
+        if (k == np - 1) {
+            snprintf(target, sizeof target, "%s", dest);
+        } else {
+            int tid = (g_rt_tmp_counter++) % 16;
+            snprintf(target, sizeof target, "_sc_acc_%d", tid);
+            set_var_type(cur_fn_name, target, TY_STR);
+        }
+        char lbuf[MAXLINE];
+        snprintf(lbuf, sizeof lbuf, "%slet %s = _nx_rt_strcat(%s, %s)\n",
+                 indent, target, cur_acc, pvars[k]);
+        strncat(out, lbuf, cap - strlen(out) - 1);
+        snprintf(cur_acc, sizeof cur_acc, "%s", target);
+    }
+    return 1;
+}
+
+static int find_top_level_binop(const char *s, const char *op, int word_bound) {
+    int len = (int)strlen(s);
+    int olen = (int)strlen(op);
+    int in_str = 0, pdepth = 0, bdepth = 0;
+    for (int i = 0; i <= len - olen; i++) {
+        if (in_str && s[i] == '\\' && s[i+1]) { i++; continue; }
+        if (s[i] == '"') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (s[i] == '(') pdepth++;
+        else if (s[i] == ')' && pdepth > 0) pdepth--;
+        else if (s[i] == '[') bdepth++;
+        else if (s[i] == ']' && bdepth > 0) bdepth--;
+        else if (pdepth == 0 && bdepth == 0) {
+            if (!strncmp(s + i, op, olen)) {
+                if (word_bound) {
+                    int ok_l = (i == 0 || (!is_ident1((unsigned char)s[i-1])));
+                    int ok_r = (s[i+olen] == ' ' || s[i+olen] == '\t' || s[i+olen] == '(');
+                    if (ok_l && ok_r) return i;
+                } else {
+                    return i;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+static int find_top_level_relop(const char *s, int *out_len, char *out_op) {
+    int len = (int)strlen(s);
+    int in_str = 0, pdepth = 0, bdepth = 0;
+    for (int i = 0; i < len; i++) {
+        if (in_str && s[i] == '\\' && s[i+1]) { i++; continue; }
+        if (s[i] == '"') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (s[i] == '(') pdepth++;
+        else if (s[i] == ')' && pdepth > 0) pdepth--;
+        else if (s[i] == '[') bdepth++;
+        else if (s[i] == ']' && bdepth > 0) bdepth--;
+        else if (pdepth == 0 && bdepth == 0) {
+            int rl = 0;
+            const char *cop = NULL;
+            if (is_relop_f(s + i, &rl, &cop)) return -1;
+            if (!strncmp(s + i, "==", 2) || !strncmp(s + i, "!=", 2) ||
+                !strncmp(s + i, "<=", 2) || !strncmp(s + i, ">=", 2)) {
+                *out_len = 2;
+                memcpy(out_op, s + i, 2);
+                out_op[2] = '\0';
+                return i;
+            }
+            if ((s[i] == '<' && s[i+1] != '<') || (s[i] == '>' && s[i+1] != '>')) {
+                if (i > 0 && (s[i-1] == '<' || s[i-1] == '>' || s[i-1] == '=' || s[i-1] == '-')) continue;
+                *out_len = 1;
+                out_op[0] = s[i];
+                out_op[1] = '\0';
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+static int is_canonical_cond_rhs(const char *s) {
+    if (!*s) return 0;
+    if (is_int_literal(s)) return 1;
+    if (!is_ident0((unsigned char)*s)) return 0;
+    for (const char *p = s + 1; *p; p++) {
+        if (!is_ident1((unsigned char)*p)) return 0;
+    }
+    return !is_nexus_keyword(s);
+}
+
+static int is_canonical_cond_lhs(const char *s) {
+    if (!*s || !is_ident0((unsigned char)*s)) return 0;
+    for (const char *p = s + 1; *p; p++) {
+        if (!is_ident1((unsigned char)*p)) return 0;
+    }
+    return !is_nexus_keyword(s);
+}
+
+static int desugar_bool_and_complex_cond(const char *in, char *out, size_t cap) {
+    char clean[MAXLINE];
+    snprintf(clean, sizeof clean, "%s", in);
+    char *p = clean;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
+
+    if (!strncmp(p, "if_f ", 5) || !strncmp(p, "if_f\t", 5) ||
+        !strncmp(p, "while_f ", 8) || !strncmp(p, "while_f\t", 8) ||
+        strstr(p, "else if_f ") || strstr(p, "else if_f\t")) {
+        return 0;
+    }
+
+    int indent_len = (int)(p - clean);
+    char indent[128] = "";
+    if (indent_len > 0) {
+        if (indent_len >= (int)sizeof(indent)) indent_len = (int)sizeof(indent) - 1;
+        snprintf(indent, sizeof(indent), "%.*s", indent_len, clean);
+    }
+
+    {
+        int in_s = 0;
+        for (int i = 0; p[i]; i++) {
+            if (in_s && p[i] == '\\' && p[i+1]) { i++; continue; }
+            if (p[i] == '"') { in_s = !in_s; continue; }
+            if (!in_s && (p[i] == '#' || p[i] == ';')) {
+                p[i] = '\0';
+                break;
+            }
+        }
+    }
+
+    int is_if = (!strncmp(p, "if ", 3) || !strncmp(p, "if\t", 3));
+    int is_while = (!strncmp(p, "while ", 6) || !strncmp(p, "while\t", 6));
+    if (is_if || is_while) {
+        char *cond_start = p + (is_if ? 3 : 6);
+        char *brace = NULL;
+        int in_s = 0;
+        for (char *c = cond_start; *c; c++) {
+            if (in_s && *c == '\\' && c[1]) { c++; continue; }
+            if (*c == '"') { in_s = !in_s; continue; }
+            if (!in_s && *c == '{') { brace = c; break; }
+        }
+        if (brace) {
+            char cond[MAXLINE];
+            snprintf(cond, sizeof cond, "%.*s", (int)(brace - cond_start), cond_start);
+            trim_ws(cond);
+            trim_outer_parens(cond);
+
+            int has_or = (find_top_level_binop(cond, "||", 0) >= 0 || find_top_level_binop(cond, "or", 1) >= 0);
+            int has_and = (find_top_level_binop(cond, "&&", 0) >= 0 || find_top_level_binop(cond, "and", 1) >= 0);
+            int has_not = (cond[0] == '!' || !strncmp(cond, "not ", 4) || !strncmp(cond, "not\t", 4));
+
+            int rlen = 0; char rop[4] = "";
+            int rpos = find_top_level_relop(cond, &rlen, rop);
+            int needs_complex = (has_or || has_and || has_not);
+
+            if (!needs_complex && rpos >= 0) {
+                char lhs[512], rhs[512];
+                snprintf(lhs, sizeof lhs, "%.*s", rpos, cond);
+                trim_ws(lhs);
+                snprintf(rhs, sizeof rhs, "%s", cond + rpos + rlen);
+                trim_ws(rhs);
+
+                if (is_operand_float(cur_fn_name, lhs) || is_operand_float(cur_fn_name, rhs)) {
+                    return 0;
+                }
+                int is_str_cmp = ((!strcmp(rop, "==") || !strcmp(rop, "!=")) &&
+                                  ((lhs[0] == '"' || rhs[0] == '"' ||
+                                    (get_operand_type(cur_fn_name, lhs) == TY_STR &&
+                                     get_operand_type(cur_fn_name, rhs) == TY_STR)) &&
+                                   strcmp(lhs, "0") != 0 && strcmp(rhs, "0") != 0));
+                if (is_str_cmp) {
+                    needs_complex = 1;
+                } else {
+                    int64_t cv1 = 0, cv2 = 0;
+                    const char *cep1 = NULL, *cep2 = NULL;
+                    int c1 = (eval_int_chain(lhs, &cep1, &cv1) || parse_int64_tok(lhs, &cep1, &cv1)) && cep1 && *cep1 == '\0';
+                    int c2 = (eval_int_chain(rhs, &cep2, &cv2) || parse_int64_tok(rhs, &cep2, &cv2)) && cep2 && *cep2 == '\0';
+                    if (!(c1 && c2) && (!is_canonical_cond_lhs(lhs) || !is_canonical_cond_rhs(rhs))) {
+                        needs_complex = 1;
+                    }
+                }
+            } else if (!needs_complex && rpos < 0) {
+                int64_t cv = 0; const char *cep = NULL;
+                int is_const_truth = (eval_int_chain(cond, &cep, &cv) || parse_int64_tok(cond, &cep, &cv)) && cep && *cep == '\0';
+                if (!is_const_truth && !is_canonical_cond_lhs(cond) && !strchr(cond, '.')) {
+                    needs_complex = 1;
+                }
+            }
+
+            if (needs_complex) {
+                int tid = (g_rt_tmp_counter++) % 16;
+                if (is_if) {
+                    snprintf(out, cap, "%slet _icond_%d = %s\n%sif _icond_%d != 0 %s\n",
+                             indent, tid, cond, indent, tid, brace);
+                } else {
+                    snprintf(out, cap, "%swhile 1 == 1 {\n%s    let _wcond_%d = %s\n%s    if _wcond_%d == 0 {\n%s        break\n%s    }\n",
+                             indent, indent, tid, cond, indent, tid, indent, indent);
+                }
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if (strncmp(p, "let ", 4) != 0 && strncmp(p, "let\t", 4) != 0) return 0;
+    char *eq = NULL;
+    {
+        int in_s = 0;
+        for (char *s = p + 4; *s; s++) {
+            if (in_s && *s == '\\' && s[1]) { s++; continue; }
+            if (*s == '"') { in_s = !in_s; continue; }
+            if (!in_s && *s == '=' && s[1] != '=' && s[-1] != '!' && s[-1] != '<' && s[-1] != '>') {
+                eq = s;
+                break;
+            }
+        }
+    }
+    if (!eq) return 0;
+
+    char dest[128];
+    int dlen = (int)(eq - (p + 4));
+    if (dlen >= (int)sizeof(dest)) dlen = (int)sizeof(dest) - 1;
+    snprintf(dest, sizeof dest, "%.*s", dlen, p + 4);
+    trim_ws(dest);
+    if (!dest[0] || strchr(dest, ',')) return 0;
+
+    char rhs[MAXLINE];
+    snprintf(rhs, sizeof rhs, "%s", eq + 1);
+    trim_ws(rhs);
+    trim_outer_parens(rhs);
+
+    int or_pos = find_top_level_binop(rhs, "||", 0);
+    int or_len = 2;
+    if (or_pos < 0) {
+        or_pos = find_top_level_binop(rhs, "or", 1);
+        or_len = 2;
+    }
+    if (or_pos > 0) {
+        char lhs_e[MAXLINE], rhs_e[MAXLINE];
+        snprintf(lhs_e, sizeof lhs_e, "%.*s", or_pos, rhs);
+        trim_ws(lhs_e);
+        snprintf(rhs_e, sizeof rhs_e, "%s", rhs + or_pos + or_len);
+        trim_ws(rhs_e);
+        int tid = (g_rt_tmp_counter++) % 16;
+        set_var_type(cur_fn_name, dest, TY_INT);
+        snprintf(out, cap,
+                 "%slet _or_a_%d = %s\n"
+                 "%slet %s = 1\n"
+                 "%sif _or_a_%d == 0 {\n"
+                 "%s    let _or_b_%d = %s\n"
+                 "%s    if _or_b_%d == 0 {\n"
+                 "%s        let %s = 0\n"
+                 "%s    }\n"
+                 "%s}\n",
+                 indent, tid, lhs_e,
+                 indent, dest,
+                 indent, tid,
+                 indent, tid, rhs_e,
+                 indent, tid,
+                 indent, dest,
+                 indent, indent);
+        return 1;
+    }
+
+    int and_pos = find_top_level_binop(rhs, "&&", 0);
+    int and_len = 2;
+    if (and_pos < 0) {
+        and_pos = find_top_level_binop(rhs, "and", 1);
+        and_len = 3;
+    }
+    if (and_pos > 0) {
+        char lhs_e[MAXLINE], rhs_e[MAXLINE];
+        snprintf(lhs_e, sizeof lhs_e, "%.*s", and_pos, rhs);
+        trim_ws(lhs_e);
+        snprintf(rhs_e, sizeof rhs_e, "%s", rhs + and_pos + and_len);
+        trim_ws(rhs_e);
+        int tid = (g_rt_tmp_counter++) % 16;
+        set_var_type(cur_fn_name, dest, TY_INT);
+        snprintf(out, cap,
+                 "%slet _and_a_%d = %s\n"
+                 "%slet %s = 0\n"
+                 "%sif _and_a_%d != 0 {\n"
+                 "%s    let _and_b_%d = %s\n"
+                 "%s    if _and_b_%d != 0 {\n"
+                 "%s        let %s = 1\n"
+                 "%s    }\n"
+                 "%s}\n",
+                 indent, tid, lhs_e,
+                 indent, dest,
+                 indent, tid,
+                 indent, tid, rhs_e,
+                 indent, tid,
+                 indent, dest,
+                 indent, indent);
+        return 1;
+    }
+
+    if (rhs[0] == '!' || !strncmp(rhs, "not ", 4) || !strncmp(rhs, "not\t", 4)) {
+        char *inner = (rhs[0] == '!') ? (rhs + 1) : (rhs + 4);
+        while (*inner == ' ' || *inner == '\t') inner++;
+        if (*inner) {
+            int tid = (g_rt_tmp_counter++) % 16;
+            set_var_type(cur_fn_name, dest, TY_INT);
+            snprintf(out, cap,
+                     "%slet _not_%d = %s\n"
+                     "%slet %s = 0\n"
+                     "%sif _not_%d == 0 {\n"
+                     "%s    let %s = 1\n"
+                     "%s}\n",
+                     indent, tid, inner,
+                     indent, dest,
+                     indent, tid,
+                     indent, dest,
+                     indent);
+            return 1;
+        }
+    }
+
+    int rlen = 0; char rop[4] = "";
+    int rpos = find_top_level_relop(rhs, &rlen, rop);
+    if (rpos > 0) {
+        char lhs_e[512], rhs_e[512];
+        snprintf(lhs_e, sizeof lhs_e, "%.*s", rpos, rhs);
+        trim_ws(lhs_e);
+        snprintf(rhs_e, sizeof rhs_e, "%s", rhs + rpos + rlen);
+        trim_ws(rhs_e);
+
+        if (lhs_e[0] && rhs_e[0]) {
+            int is_str_cmp = ((!strcmp(rop, "==") || !strcmp(rop, "!=")) &&
+                              ((lhs_e[0] == '"' || rhs_e[0] == '"' ||
+                                (get_operand_type(cur_fn_name, lhs_e) == TY_STR &&
+                                 get_operand_type(cur_fn_name, rhs_e) == TY_STR)) &&
+                               strcmp(lhs_e, "0") != 0 && strcmp(rhs_e, "0") != 0));
+            set_var_type(cur_fn_name, dest, TY_INT);
+            if (is_str_cmp) {
+                g_need_rt_streq = 1;
+                if (!strcmp(rop, "==")) {
+                    snprintf(out, cap, "%slet %s = _nx_rt_streq(%s, %s)\n",
+                             indent, dest, lhs_e, rhs_e);
+                } else {
+                    int tid = (g_rt_tmp_counter++) % 16;
+                    snprintf(out, cap, "%slet _seq_%d = _nx_rt_streq(%s, %s)\n%slet %s = 1 - _seq_%d\n",
+                             indent, tid, lhs_e, rhs_e, indent, dest, tid);
+                }
+                return 1;
+            }
+            int tid = (g_rt_tmp_counter++) % 16;
+            int is_fl = is_operand_float(cur_fn_name, lhs_e) || is_operand_float(cur_fn_name, rhs_e);
+            const char *if_kw = is_fl ? "if_f" : "if";
+            snprintf(out, cap,
+                     "%slet _rel_l_%d = %s\n"
+                     "%slet _rel_r_%d = %s\n"
+                     "%slet %s = 0\n"
+                     "%s%s _rel_l_%d %s _rel_r_%d {\n"
+                     "%s    let %s = 1\n"
+                     "%s}\n",
+                     indent, tid, lhs_e,
+                     indent, tid, rhs_e,
+                     indent, dest,
+                     indent, if_kw, tid, rop, tid,
+                     indent, dest,
+                     indent);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void emit_line(const char *raw, FILE *out) {
     char slb_buf[MAXLINE * 3];
     if (desugar_single_line_block(raw, slb_buf, sizeof slb_buf)) {
@@ -7275,6 +8610,7 @@ static void emit_line(const char *raw, FILE *out) {
     normalize_octal_literals(oct_buf);
     normalize_char_literals(oct_buf);
     normalize_bool_literals(oct_buf);
+    rewrite_os_argc_and_casts(oct_buf);
     raw = oct_buf;
 
     char mcall_desugared[MAXLINE * 2];
@@ -7339,6 +8675,45 @@ static void emit_line(const char *raw, FILE *out) {
     char v_desugared[MAXLINE];
     if (desugar_var_decl(raw, v_desugared, sizeof v_desugared)) {
         emit_line(v_desugared, out);
+        return;
+    }
+
+    char bp_desugared[MAXLINE * 4];
+    if (desugar_builtin_parens(raw, bp_desugared, sizeof bp_desugared)) {
+        char *p = bp_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char bool_desugared[MAXLINE * 4];
+    if (desugar_bool_and_complex_cond(raw, bool_desugared, sizeof bool_desugared)) {
+        char *p = bool_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
+        return;
+    }
+
+    char scat_desugared[MAXLINE * 4];
+    if (desugar_string_concat(raw, scat_desugared, sizeof scat_desugared)) {
+        char *p = scat_desugared;
+        while (*p) {
+            char *next = strchr(p, '\n');
+            if (next) *next = '\0';
+            if (*p) emit_line(p, out);
+            if (!next) break;
+            p = next + 1;
+        }
         return;
     }
 
@@ -7796,47 +9171,66 @@ static void scan_line_for_types(const char *line, const char *cur_fn, int *scan_
                 set_var_type(cur_fn, dstart, TY_FLOAT);
             } else if (is_int_literal(rhs_clean)) {
                 set_var_type(cur_fn, dstart, TY_INT);
-            } else if (rhs_clean[0] == '"' || !strncmp(rhs_clean, "alloc", 5) || rhs_clean[0] == '[') {
+            } else if (rhs_clean[0] == '"' || !strncmp(rhs_clean, "os_argv", 7) || !strncmp(rhs_clean, "str(", 4)) {
+                set_var_type(cur_fn, dstart, TY_STR);
+            } else if (!strncmp(rhs_clean, "alloc", 5) || rhs_clean[0] == '[') {
                 set_var_type(cur_fn, dstart, TY_PTR);
             } else if (!strncmp(rhs_clean, "fadd", 4) || !strncmp(rhs_clean, "fsub", 4) ||
                        !strncmp(rhs_clean, "fmul", 4) || !strncmp(rhs_clean, "fdiv", 4) ||
                        !strncmp(rhs_clean, "fsqrt", 5) || !strncmp(rhs_clean, "fneg", 4) ||
                        !strncmp(rhs_clean, "itof", 4)) {
                 set_var_type(cur_fn, dstart, TY_FLOAT);
-            } else if (!strncmp(rhs_clean, "ftoi", 4)) {
+            } else if (!strncmp(rhs_clean, "ftoi", 4) || !strncmp(rhs_clean, "int(", 4)) {
                 set_var_type(cur_fn, dstart, TY_INT);
-            } else if (!strncmp(rhs_clean, "call ", 5) || !strncmp(rhs_clean, "call\t", 5)) {
-                char *target = rhs_clean + 5;
-                while (*target == ' ' || *target == '\t') target++;
+            } else {
+                char *target = rhs_clean;
+                int had_call_kw = 0;
+                if (!strncmp(target, "call ", 5) || !strncmp(target, "call\t", 5)) {
+                    had_call_kw = 1;
+                    target += 5;
+                    while (*target == ' ' || *target == '\t') target++;
+                }
                 char cfn[128] = ""; int cl = 0;
-                while (*target && is_ident1((unsigned char)*target)) {
-                    if (cl < 127) cfn[cl++] = *target;
-                    target++;
+                char *tscan = target;
+                while (*tscan && is_ident1((unsigned char)*tscan)) {
+                    if (cl < 127) cfn[cl++] = *tscan;
+                    tscan++;
                 }
                 cfn[cl] = '\0';
-                NexType rt = get_fn_ret_type(cfn);
-                if (rt != TY_UNKNOWN) set_var_type(cur_fn, dstart, rt);
-
-                while (*target == ' ' || *target == '\t') target++;
-                if (*target == '(') {
-                    char *cp = strrchr(target, ')');
-                    if (cp) {
-                        char astr[MAXLINE];
-                        int al = (int)(cp - (target + 1));
-                        if (al >= (int)sizeof(astr)) al = (int)sizeof(astr) - 1;
-                        snprintf(astr, sizeof astr, "%.*s", al, target + 1);
-                        char args[32][512];
-                        int na = split_args(astr, args, 32);
-                        FnSigEntry *sig = find_or_create_fn_sig(cfn);
-                        for (int k = 0; k < na; k++) {
-                            NexType at = get_operand_type(cur_fn, args[k]);
-                            if (at != TY_UNKNOWN && sig && k < 32) {
-                                sig->param_types[k] = at;
+                while (*tscan == ' ' || *tscan == '\t') tscan++;
+                if (cl > 0 && !is_nexus_keyword(cfn) && (had_call_kw || *tscan == '(')) {
+                    NexType rt = is_known_str_fn(cfn) ? TY_STR : get_fn_ret_type(cfn);
+                    if (rt != TY_UNKNOWN) set_var_type(cur_fn, dstart, rt);
+                    if (*tscan == '(') {
+                        char *cp = strrchr(tscan, ')');
+                        if (cp) {
+                            char astr[MAXLINE];
+                            int al = (int)(cp - (tscan + 1));
+                            if (al >= (int)sizeof(astr)) al = (int)sizeof(astr) - 1;
+                            snprintf(astr, sizeof astr, "%.*s", al, tscan + 1);
+                            char args[32][512];
+                            int na = split_args(astr, args, 32);
+                            FnSigEntry *sig = find_or_create_fn_sig(cfn);
+                            for (int k = 0; k < na; k++) {
+                                NexType at = get_operand_type(cur_fn, args[k]);
+                                if (at != TY_UNKNOWN && sig && k < 32) {
+                                    sig->param_types[k] = at;
+                                }
                             }
                         }
                     }
+                } else {
+                    FToken tokens[64];
+                    int ntok = tokenize_fexpr(rhs_clean, tokens, 64);
+                    if (is_fexpr_tokens(cur_fn, tokens, ntok)) {
+                        set_var_type(cur_fn, dstart, TY_FLOAT);
+                    } else {
+                        NexType vt = get_operand_type(cur_fn, rhs_clean);
+                        if (vt != TY_UNKNOWN) set_var_type(cur_fn, dstart, vt);
+                    }
                 }
-            } else {
+            }
+            if (0) {
                 FToken tokens[64];
                 int ntok = tokenize_fexpr(rhs_clean, tokens, 64);
                 if (is_fexpr_tokens(cur_fn, tokens, ntok)) {
@@ -7848,6 +9242,42 @@ static void scan_line_for_types(const char *line, const char *cur_fn, int *scan_
             }
         }
         return;
+    }
+
+    /* track bare function call statements: greet("NEXUS") or call greet("NEXUS") */
+    if (strncmp(p, "fn ", 3) != 0 && strncmp(p, "fn\t", 3) != 0) {
+        char *ct = p;
+        if (!strncmp(ct, "call ", 5) || !strncmp(ct, "call\t", 5)) {
+            ct += 5;
+            while (*ct == ' ' || *ct == '\t') ct++;
+        }
+        if (is_ident0((unsigned char)*ct)) {
+            char cfn[128] = ""; int cl = 0;
+            while (*ct && is_ident1((unsigned char)*ct)) {
+                if (cl < 127) cfn[cl++] = *ct;
+                ct++;
+            }
+            cfn[cl] = '\0';
+            while (*ct == ' ' || *ct == '\t') ct++;
+            if (cl > 0 && !is_nexus_keyword(cfn) && *ct == '(') {
+                char *cp = strrchr(ct, ')');
+                if (cp) {
+                    char astr[MAXLINE];
+                    int al = (int)(cp - (ct + 1));
+                    if (al >= (int)sizeof(astr)) al = (int)sizeof(astr) - 1;
+                    snprintf(astr, sizeof astr, "%.*s", al, ct + 1);
+                    char args[32][512];
+                    int na = split_args(astr, args, 32);
+                    FnSigEntry *sig = find_or_create_fn_sig(cfn);
+                    for (int k = 0; k < na; k++) {
+                        NexType at = get_operand_type(cur_fn, args[k]);
+                        if (at != TY_UNKNOWN && sig && k < 32) {
+                            sig->param_types[k] = at;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /* track compound assignment */
@@ -7915,10 +9345,8 @@ static void scan_file_for_types(const char *path) {
                 while (*p && *p != '"' && r < MAXLINE - 1) rel[r++] = *p++;
                 rel[r] = '\0';
                 if (*p == '"') {
-                    char cand[MAXLINE * 3];
-                    snprintf(cand, sizeof cand, "%s/%s", curdir, rel);
                     char canon_cand[MAXLINE * 2];
-                    if (realpath(cand, canon_cand)) {
+                    if (resolve_include_path(curdir, rel, canon_cand, sizeof canon_cand)) {
                         scan_file_for_types(canon_cand);
                     }
                 }
@@ -7952,8 +9380,38 @@ static void scan_file_for_types(const char *path) {
                     if (sig) {
                         sig->nparams = np;
                         for (int k = 0; k < np; k++) {
+                            char pclean[128];
+                            snprintf(pclean, sizeof pclean, "%s", params[k]);
+                            char *eq_p = strchr(pclean, '=');
+                            if (eq_p) {
+                                char *def_v = eq_p + 1;
+                                while (*def_v == ' ' || *def_v == '\t') def_v++;
+                                if (*def_v == '"' && sig->param_types[k] == TY_UNKNOWN) sig->param_types[k] = TY_STR;
+                                else if (is_float_literal(def_v) && sig->param_types[k] == TY_UNKNOWN) sig->param_types[k] = TY_FLOAT;
+                                *eq_p = '\0';
+                            }
+                            char *col_p = strchr(pclean, ':');
+                            if (col_p) {
+                                char *ty_s = col_p + 1;
+                                while (*ty_s == ' ' || *ty_s == '\t') ty_s++;
+                                if (!strncmp(ty_s, "str", 3)) sig->param_types[k] = TY_STR;
+                                else if (!strncmp(ty_s, "float", 5) || !strncmp(ty_s, "f64", 3)) sig->param_types[k] = TY_FLOAT;
+                                else if (!strncmp(ty_s, "int", 3) || !strncmp(ty_s, "i64", 3)) sig->param_types[k] = TY_INT;
+                                *col_p = '\0';
+                            }
+                            char *ps = pclean;
+                            while (*ps == ' ' || *ps == '\t') ps++;
+                            if (*ps == '&') {
+                                ps++;
+                                while (*ps == ' ' || *ps == '\t') ps++;
+                                if (!strncmp(ps, "mut ", 4) || !strncmp(ps, "mut\t", 4)) {
+                                    ps += 4;
+                                    while (*ps == ' ' || *ps == '\t') ps++;
+                                }
+                            }
+                            trim_ws(ps);
                             if (sig->param_types[k] != TY_UNKNOWN) {
-                                set_var_type(scan_fn, params[k], sig->param_types[k]);
+                                set_var_type(scan_fn, ps, sig->param_types[k]);
                             }
                         }
                     }
@@ -7987,8 +9445,17 @@ static void scan_file_for_types(const char *path) {
 }
 
 static void run_type_inference_pass(const char *canon_path) {
+    set_fn_ret_type("_nx_rt_strcat", TY_STR);
+    set_fn_ret_type("_nx_rt_streq", TY_INT);
+    set_fn_ret_type("_nx_rt_itoa", TY_STR);
+    set_fn_ret_type("_nx_rt_atoi", TY_INT);
+    ntype_seen = 0;
     reset_user_consts();
     scan_file_for_types(canon_path);
+    ntype_seen = 0;
+    reset_user_consts();
+    scan_file_for_types(canon_path);
+    ntype_seen = 0;
     reset_user_consts();
     scan_file_for_types(canon_path);
 }
@@ -8206,7 +9673,7 @@ static int p2_parse_cont(const char *line, const char *dest, char *op, char *kto
 static int p2_is_canonical_keyword(const char *tok) {
     static const char *cks[] = {
         "let", "fn", "call", "return", "if", "if_f", "else", "while", "while_f",
-        "for", "break", "continue", "print", "print_str", "print_float", "read",
+        "for", "break", "continue", "print", "print_str", "print_float", "print_raw", "exit", "read",
         "alloc", "load", "load8", "load16", "load32", "load64",
         "store", "store8", "store16", "store32", "store64", "fload", "fstore",
         "fadd", "fsub", "fmul", "fdiv", "fsqrt", "fneg", "itof", "ftoi",
@@ -9741,6 +11208,23 @@ static void process_file(const char *path, FILE *out) {
 }
 
 int main(int argc, char **argv) {
+    if (argv[0] && argv[0][0]) {
+        char pbuf[MAXLINE * 2];
+        if (realpath(argv[0], pbuf)) {
+            char *sl = find_last_path_separator(pbuf);
+            if (sl) { *sl = '\0'; snprintf(g_prog_dir, sizeof g_prog_dir, "%s", pbuf); }
+        }
+#ifndef _WIN32
+        if (!g_prog_dir[0]) {
+            ssize_t r = readlink("/proc/self/exe", pbuf, sizeof(pbuf) - 1);
+            if (r > 0) {
+                pbuf[r] = '\0';
+                char *sl = find_last_path_separator(pbuf);
+                if (sl) { *sl = '\0'; snprintf(g_prog_dir, sizeof g_prog_dir, "%s", pbuf); }
+            }
+        }
+#endif
+    }
     const char *out_path = NULL;
     int argi = 1;
     while (argi < argc) {
@@ -9782,9 +11266,9 @@ int main(int argc, char **argv) {
         if (deps_out) fclose(deps_out);
         return 0;
     }
-    run_type_inference_pass(canon);
     init_closure_dispatch_sigs();
     scan_signatures_in_file(canon);
+    run_type_inference_pass(canon);
 
     ls_init();
 
@@ -9837,7 +11321,11 @@ int main(int argc, char **argv) {
         if (need_stack) fprintf(dest_out, "let _nx_call_stack = alloc 1048576\nlet _nx_sp = _nx_call_stack\nlet _nx_fp = _nx_call_stack\n");
         if (need_closure) fprintf(dest_out, "let _nx_cur_closure = 0\n");
     }
+    if (g_need_argc) {
+        fprintf(dest_out, "let _nx_argc_ = os_argc\n");
+    }
     emit_lambdas_and_dispatchers(dest_out);
+    emit_runtime_helpers(dest_out);
 
     for (int li = 0; li < P2n; li++) {
         fputs(P2[li], dest_out);

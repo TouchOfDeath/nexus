@@ -1,0 +1,150 @@
+# ==============================================================================
+#           NEXUS v1.0.0 Complete Language Loop & Ecosystem Regression Suite
+# ==============================================================================
+# Verifies:
+#   1. First-class string variables, string concatenation (+), string equality (==, !=)
+#   2. str(int) and int(str) type conversion builtins
+#   3. String allocating helpers (nx_str_slice, nx_str_concat_new, nx_str_trim_new)
+#   4. High-level file I/O (nx_write_file, nx_read_file, nx_file_exists, nx_append_file)
+#   5. Boolean operators (&&, ||, !) and relational let assignments
+#   6. Unified Parameterized Stdlib ABI (calling nx_* subroutines with arguments)
+#   7. Upgraded HashMap with capacity doubling, tombstone removal, and string keys
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+fn main {
+    # --------------------------------------------------------------------------
+    # 1. First-Class String Operations & Concatenation
+    # --------------------------------------------------------------------------
+    let s1 = "NEXUS"
+    let s2 = " v1.0.0"
+    let s3 = s1 + s2
+    assert_eq s3, "NEXUS v1.0.0"
+
+    let is_eq = s3 == "NEXUS v1.0.0"
+    assert_eq is_eq, 1
+
+    let is_ne = s3 != "other"
+    assert_eq is_ne, 1
+
+    # Conversions
+    let num_str = str(42)
+    assert_eq num_str, "42"
+
+    let parsed_num = int("12345")
+    assert_eq parsed_num, 12345
+
+    # String slicing & trimming
+    let raw_source = "  hello world  "
+    let trimmed = nx_str_trim_new(raw_source)
+    assert_eq trimmed, "hello world"
+
+    let sliced = nx_str_slice(trimmed, 0, 5)
+    assert_eq sliced, "hello"
+
+    let joined = nx_str_concat_new(sliced, "!")
+    assert_eq joined, "hello!"
+
+    # --------------------------------------------------------------------------
+    # 2. Boolean Operators & Relational Expressions
+    # --------------------------------------------------------------------------
+    let cond1 = 10 > 5 && 20 < 30
+    assert_eq cond1, 1
+
+    let cond2 = 10 < 5 || 50 == 50
+    assert_eq cond2, 1
+
+    let cond3 = !(100 == 200)
+    assert_eq cond3, 1
+
+    let cond4 = 25 >= 20
+    assert_eq cond4, 1
+
+    # --------------------------------------------------------------------------
+    # 3. High-Level File I/O
+    # --------------------------------------------------------------------------
+    let test_path = "/tmp/nexus_v1_loop_test.txt"
+    let payload = "line1: alpha\nline2: beta\n"
+    let written = nx_write_file(test_path, payload)
+    assert_eq written, 25
+
+    let exists = nx_file_exists(test_path)
+    assert_eq exists, 1
+
+    let read_back = nx_read_file(test_path)
+    assert_eq read_back, "line1: alpha\nline2: beta\n"
+
+    let app_len = nx_append_file(test_path, "line3: gamma\n")
+    assert_eq app_len, 13
+
+    let appended_content = nx_read_file(test_path)
+    assert_eq appended_content, "line1: alpha\nline2: beta\nline3: gamma\n"
+
+    # Line reader test
+    let first_line = nx_read_line(appended_content, 0)
+    assert_eq first_line, "line1: alpha"
+
+    # --------------------------------------------------------------------------
+    # 4. Unified Parameterized Stdlib ABI
+    # --------------------------------------------------------------------------
+    let m_val = nx_max(45, 99)
+    assert_eq m_val, 99
+
+    let min_val = nx_min(15, 8)
+    assert_eq min_val, 8
+
+    let pow_val = nx_pow(2, 12)
+    assert_eq pow_val, 4096
+
+    let clamp_val = nx_clamp(250, 0, 100)
+    assert_eq clamp_val, 100
+
+    # --------------------------------------------------------------------------
+    # 5. Upgraded Dynamic HashMap (Doubling, Tombstones & String Keys)
+    # --------------------------------------------------------------------------
+    let hm = nx_hashmap_new(16)
+    assert_eq nx_hashmap_len(hm), 0
+
+    # Insert 40 integer keys (including key 0) to trigger automatic doubling (16 -> 32 -> 64 -> 128)
+    for i in 0..40 {
+        let v = i * 10
+        nx_hashmap_put(hm, i, v)
+    }
+    assert_eq nx_hashmap_len(hm), 40
+    let cap = nx_hashmap_cap(hm)
+    let cap_ok = cap >= 64
+    assert_eq cap_ok, 1
+
+    # Verify lookups including key 0
+    for i in 0..40 {
+        let expected = i * 10
+        let actual = nx_hashmap_get(hm, i)
+        assert_eq actual, expected
+    }
+
+    # Test tombstone removal
+    nx_hashmap_remove(hm, 15)
+    assert_eq nx_hashmap_len(hm), 39
+    assert_eq nx_hashmap_contains(hm, 15), 0
+    assert_eq nx_hashmap_contains(hm, 16), 1
+
+    # String keys in HashMap
+    nx_hashmap_put_str(hm, "user_alice", 1001)
+    nx_hashmap_put_str(hm, "user_bob", 2002)
+    nx_hashmap_put_str(hm, "user_carol", 3003)
+
+    assert_eq nx_hashmap_get_str(hm, "user_alice"), 1001
+    assert_eq nx_hashmap_get_str(hm, "user_bob"), 2002
+    assert_eq nx_hashmap_get_str(hm, "user_carol"), 3003
+    assert_eq nx_hashmap_contains_str(hm, "user_bob"), 1
+
+    nx_hashmap_remove_str(hm, "user_bob")
+    assert_eq nx_hashmap_contains_str(hm, "user_bob"), 0
+    assert_eq nx_hashmap_get_str(hm, "user_alice"), 1001
+
+    print "V1_COMPLETE_LOOP_TEST_PASS"
+    call nx_assert_summary
+}
+
+call main

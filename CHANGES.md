@@ -1,6 +1,27 @@
 # CHANGES.md — NEXUS Ecosystem Changelog
 
-## v8.9 — HYDRON Phase 5 Ultra Engine (12 Active Turbines, ~1 Billion Physical Iters/Sec & Sub-Microsecond O(1) Loop Collapse) (current)
+## v1.0.0 — Formal Language Release: Complete Loop Ecosystem, First-Class Strings, High-Level File I/O, Unified Stdlib ABI & 5/5 Domain Applications (current)
+
+### 1. Self-Hosted Compiler (`compiler/nexc.nex`) & Stage 5 Fixed-Point Bootstrap
+- **Variable-Path `file_open` & `file_create`**: Added variable pointer resolution (`call parse_ident; call resolve_var; call ld_rcx`) to `file_open` (CASE 3) and `file_create` (CASE 4) so programs can open/create paths stored in variables, function parameters, or `os_argv(i)`.
+- **`print_raw` & `exit` Statements**: Added `print_raw <str_or_var>` (writes string to stdout without trailing `\r\n`) and `exit <code_or_var>` (terminates process with status code via `ExitProcess` / Linux `sys_exit`).
+- **Slot-0 Shadow Space Corruption Bugfix**: Moved variable slot 0 from `[rbp + 48]` (`0x30`) to `[rbp + 56]` (`0x38`) in `resolve_var`, eliminating a bug where `CreateFileA` and `print_str` overwrote variable 0 via `[rsp + 0x30]`.
+- **`len` / `abs` Unparenthesized Newline Bugfix**: Changed `call skip_ws` to `call skip_sp` at the end of `CASE 7` (`len`) and `CASE 8` (`abs`) so unparenthesized `let n = len s` never consumes the trailing newline.
+- **Stage 5 Convergence**: Re-bootstrapped `nexc.exe`, `nexc.elf`, `nexc2..4.*`, and `nexc.hex` with 0 byte differences across all stages.
+
+### 2. Preprocessor, Type Inference & Language Ergonomics (`tools/nexprep.c`)
+- **First-Class String Type (`TY_STR`)**: Added `TY_STR` to `NexType`, fixed 3-pass `run_type_inference_pass` (`ntype_seen = 0`), stripped `_ls_<N>_` lexical-scoping prefixes in `get_var_type`, and propagated `TY_STR` across function parameters, return values, `??`, and `?:` so `print s` and `print(s)` print string contents instead of raw memory addresses.
+- **String Concatenation (`+`), String Equality (`==`, `!=`), `str(int)`, and `int(str)`**: Added on-demand native helpers (`_nx_rt_strcat`, `_nx_rt_streq`, `_nx_rt_itoa`, `_nx_rt_atoi`) and full string pattern matching in `match`.
+- **Unified Stdlib Parameterized Call Syntax**: Increased `MAXFNS` and `MAX_FN_SIGS` to `2048` and enabled calling all 250+ `stdlib/*.nex` subroutines (`fn nx_... {`) via standard `nx_fn(arg0, arg1, ...)` call syntax.
+- **Boolean Operators & Complex Conditions**: Added `&&` (`and`), `||` (`or`), `!` (`not`), relational expressions in `let` (`let ok = a > b`), parenthesized built-ins (`file_open(p)`, `file_create(p)`, `file_read(f,b,n)`, `file_write(f,b,n)`, `file_close(f)`, `os_argv(i)`, `os_argc`, `exit(c)`), and parenthesized comma-safe `assert_eq`/`assert_ne`.
+
+### 3. Standard Library, CLI Toolchain & Documentation (`stdlib/`, `nexus`, `docs/`)
+- **New `stdlib/io.nex` Module**: Added `nx_read_file`, `nx_write_file`, `nx_write_file_bytes`, `nx_append_file`, `nx_file_exists`, `nx_read_line`, and `nx_eprint`, bundled in `stdlib/nstdlib.nex`.
+- **Upgraded `stdlib/hashmap.nex` & `stdlib/strings.nex`**: Added dynamic capacity doubling (`nx_hashmap_grow`), tombstone deletion (`nx_hashmap_remove`), string-keyed map functions (`nx_hashmap_put_str`, `nx_hashmap_get_str`, `nx_hashmap_contains_str`, `nx_hashmap_remove_str`), and allocating string helpers (`nx_str_slice`, `nx_str_concat_new`, `nx_str_trim_new`, `nx_int_to_str_new`, `nx_str_from_char`).
+- **Completed 5/5 Real-World Domain Applications (`docs/LANGUAGE_AUDIT.md`)**: Implemented and verified `examples/cli_tool_grep_wc.nex` (Test 1), `examples/csv_processor.nex` (Test 2), `examples/data_structures_showcase.nex` (Test 3), and `examples/http_protocol_demo.nex` (Test 4) alongside `examples/neural_network.nex` (Test 5).
+- **Formal Specification (`docs/SPECIFICATION.md`)**: Authored the complete NEXUS v1.0.0 Language Specification.
+
+## v8.9 — HYDRON Phase 5 Ultra Engine (12 Active Turbines, ~1 Billion Physical Iters/Sec & Sub-Microsecond O(1) Loop Collapse)
 
 ### 1. Native x86-64 Self-Hosting Codegen Superoptimizations (`compiler/nexc.nex`)
 - **Turbine 2 Upgrade — 3-Cycle Signed Division by 2 (`cqo; sub rax, rdx; sar rax, 1`)**: Replaced the 16-byte, 4-cycle `cqo; and rdx, 1; add rax, rdx; sar rax, 1` sequence with the 9-byte, 3-cycle `48 99 48 29 D0 48 C1 F8 01` sequence (`rax - rdx` after `cqo` adds `1` iff `rax < 0`, preserving exact C99 truncating division for all 64-bit signed integers).

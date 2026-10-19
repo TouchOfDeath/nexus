@@ -591,6 +591,22 @@ class NexusInterpreter:
                     self.stdout.append(val)
                     continue
 
+                if line.startswith('print_raw '):
+                    arg = line[10:].strip()
+                    if arg.startswith('"') and arg.endswith('"'):
+                        val = arg[1:-1].encode('utf-8').decode('unicode_escape')
+                    else:
+                        ptr = self.eval_atom(arg)
+                        val = self.read_str_from_mem(int(ptr))
+                    print(val, end="")
+                    self.stdout.append(val)
+                    continue
+
+                if line.startswith('exit ') or line == 'exit':
+                    code_arg = line[4:].strip()
+                    ec = int(self.eval_atom(code_arg)) if code_arg else 0
+                    sys.exit(ec)
+
                 # Memory store: store [ptr + offset] val
                 m = re.match(r'^(store|store8|store16|store32|store64)\s*\[(.*)\]\s+(.*)$', line)
                 if m:

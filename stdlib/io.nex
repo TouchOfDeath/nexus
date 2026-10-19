@@ -1,0 +1,243 @@
+# ==============================================================================
+#                     NEXUS STANDARD LIBRARY - MODULE: io.nex
+#              High-Level File I/O & Process Diagnostics Utilities
+# ==============================================================================
+#
+# Provides idiomatic high-level file reading, writing, appending, existence
+# checking, line iteration, and diagnostic printing for NEXUS v1.0.0.
+#
+# Functions provided:
+#   nx_read_file(path)                  -> string pointer (null-terminated) or 0
+#   nx_write_file(path, str)            -> bytes written (>= 0) or -1 on error
+#   nx_write_file_bytes(path, buf, len) -> bytes written (>= 0) or -1 on error
+#   nx_append_file(path, str)           -> bytes appended (>= 0) or -1 on error
+#   nx_file_exists(path)                -> 1 if file exists, 0 otherwise
+#   nx_read_line(buf, start_offset)     -> newly allocated line string or 0 at EOF
+#   nx_eprint(msg)                      -> prints string to standard error (fd 2)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# fn nx_file_exists : checks if file at nx_i0 exists and can be opened
+#                     Returns 1 if exists, 0 otherwise in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_file_exists {
+    let _io_fe_path = nx_i0
+    if _io_fe_path == 0 {
+        let nx_r0 = 0
+        return
+    }
+    let _io_fe_fd = file_open _io_fe_path
+    if _io_fe_fd < 0 {
+        let nx_r0 = 0
+        return
+    }
+    file_close _io_fe_fd
+    let nx_r0 = 1
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_read_file : reads entire content of file at path nx_i0 into heap
+#                   Returns pointer to null-terminated string, or 0 on error.
+# ------------------------------------------------------------------------------
+fn nx_read_file {
+    let _io_rf_path = nx_i0
+    if _io_rf_path == 0 {
+        let nx_r0 = 0
+        return
+    }
+    let _io_rf_fd = file_open _io_rf_path
+    if _io_rf_fd < 0 {
+        let nx_r0 = 0
+        return
+    }
+    let _io_rf_cap = 1048576
+    let _io_rf_buf = alloc _io_rf_cap
+    let _io_rf_len = file_read _io_rf_fd _io_rf_buf 1048570
+    file_close _io_rf_fd
+    if _io_rf_len < 0 {
+        let nx_r0 = 0
+        return
+    }
+    store [_io_rf_buf + _io_rf_len] 0
+    let nx_r0 = _io_rf_buf
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_write_file : writes null-terminated string nx_i1 to file path nx_i0
+#                    Returns bytes written (>= 0), or -1 on error in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_write_file {
+    let _io_wf_path = nx_i0
+    let _io_wf_str = nx_i1
+    if _io_wf_path == 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+    let _io_wf_fd = file_create _io_wf_path
+    if _io_wf_fd < 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+    let _io_wf_len = 0
+    if _io_wf_str != 0 {
+        let _io_wf_len = len _io_wf_str
+    }
+    if _io_wf_len > 0 {
+        file_write _io_wf_fd _io_wf_str _io_wf_len
+    }
+    file_close _io_wf_fd
+    let nx_r0 = _io_wf_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_write_file_bytes : writes nx_i2 raw bytes from buffer nx_i1 to path nx_i0
+#                          Returns bytes written (>= 0), or -1 on error in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_write_file_bytes {
+    let _io_wfb_path = nx_i0
+    let _io_wfb_buf = nx_i1
+    let _io_wfb_len = nx_i2
+    if _io_wfb_path == 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+    let _io_wfb_fd = file_create _io_wfb_path
+    if _io_wfb_fd < 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+    if _io_wfb_len > 0 {
+        file_write _io_wfb_fd _io_wfb_buf _io_wfb_len
+    }
+    file_close _io_wfb_fd
+    let nx_r0 = _io_wfb_len
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_append_file : appends string nx_i1 to file at path nx_i0
+#                     Returns bytes appended (>= 0), or -1 on error in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_append_file {
+    let _io_af_path = nx_i0
+    let _io_af_str = nx_i1
+    if _io_af_path == 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+    let _io_af_prev = 0
+    let _io_af_plen = 0
+    let nx_i0 = _io_af_path
+    call nx_file_exists
+    let _io_af_exists = nx_r0
+    if _io_af_exists == 1 {
+        let nx_i0 = _io_af_path
+        call nx_read_file
+        let _io_af_prev = nx_r0
+        if _io_af_prev != 0 {
+            let _io_af_plen = len _io_af_prev
+        }
+    }
+    let _io_af_nlen = 0
+    if _io_af_str != 0 {
+        let _io_af_nlen = len _io_af_str
+    }
+    let _io_af_tot = _io_af_plen + _io_af_nlen
+    let _io_af_cap = _io_af_tot + 1
+    let _io_af_buf = alloc _io_af_cap
+    let _io_af_i = 0
+    while _io_af_i < _io_af_plen {
+        let _io_af_ch = load [_io_af_prev + _io_af_i]
+        store [_io_af_buf + _io_af_i] _io_af_ch
+        let _io_af_i = _io_af_i + 1
+    }
+    let _io_af_j = 0
+    while _io_af_j < _io_af_nlen {
+        let _io_af_ch = load [_io_af_str + _io_af_j]
+        let _io_af_pos = _io_af_plen + _io_af_j
+        store [_io_af_buf + _io_af_pos] _io_af_ch
+        let _io_af_j = _io_af_j + 1
+    }
+    store [_io_af_buf + _io_af_tot] 0
+    let _io_af_fd = file_create _io_af_path
+    if _io_af_fd < 0 {
+        let nx_r0 = 0 - 1
+        return
+    }
+    if _io_af_tot > 0 {
+        file_write _io_af_fd _io_af_buf _io_af_tot
+    }
+    file_close _io_af_fd
+    let nx_r0 = _io_af_nlen
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_read_line : extracts next line from buffer nx_i0 starting at offset nx_i1
+#                   Returns newly allocated null-terminated string in nx_r0.
+#                   If offset >= total length, returns 0 in nx_r0.
+# ------------------------------------------------------------------------------
+fn nx_read_line {
+    let _io_rl_buf = nx_i0
+    let _io_rl_start = nx_i1
+    if _io_rl_buf == 0 {
+        let nx_r0 = 0
+        return
+    }
+    let _io_rl_tot = len _io_rl_buf
+    if _io_rl_start >= _io_rl_tot {
+        let nx_r0 = 0
+        return
+    }
+    let _io_rl_end = _io_rl_start
+    let _io_rl_done = 0
+    while _io_rl_done == 0 {
+        if _io_rl_end >= _io_rl_tot {
+            let _io_rl_done = 1
+        } else {
+            let _io_rl_c = load [_io_rl_buf + _io_rl_end]
+            if _io_rl_c == 10 {
+                let _io_rl_done = 1
+            } else {
+                let _io_rl_end = _io_rl_end + 1
+            }
+        }
+    }
+    # Check if line ends with CRLF (\r\n) and strip \r
+    let _io_rl_tail = _io_rl_end
+    if _io_rl_tail > _io_rl_start {
+        let _io_rl_prev_pos = _io_rl_tail - 1
+        let _io_rl_prev_c = load [_io_rl_buf + _io_rl_prev_pos]
+        if _io_rl_prev_c == 13 {
+            let _io_rl_tail = _io_rl_tail - 1
+        }
+    }
+    let _io_rl_len = _io_rl_tail - _io_rl_start
+    let _io_rl_cap = _io_rl_len + 1
+    let _io_rl_out = alloc _io_rl_cap
+    let _io_rl_k = 0
+    while _io_rl_k < _io_rl_len {
+        let _io_rl_pos = _io_rl_start + _io_rl_k
+        let _io_rl_ch = load [_io_rl_buf + _io_rl_pos]
+        store [_io_rl_out + _io_rl_k] _io_rl_ch
+        let _io_rl_k = _io_rl_k + 1
+    }
+    store [_io_rl_out + _io_rl_len] 0
+    let nx_r0 = _io_rl_out
+}
+
+# ------------------------------------------------------------------------------
+# fn nx_eprint : writes string message nx_i0 to stderr (file descriptor 2)
+# ------------------------------------------------------------------------------
+fn nx_eprint {
+    let _io_ep_msg = nx_i0
+    if _io_ep_msg == 0 {
+        return
+    }
+    let _io_ep_len = len _io_ep_msg
+    if _io_ep_len > 0 {
+        file_write 2 _io_ep_msg _io_ep_len
+        let _io_ep_nl = alloc 2
+        store [_io_ep_nl + 0] 10
+        store [_io_ep_nl + 1] 0
+        file_write 2 _io_ep_nl 1
+    }
+}

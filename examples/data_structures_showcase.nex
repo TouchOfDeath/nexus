@@ -1,0 +1,182 @@
+# ==============================================================================
+#                 NEXUS DOMAIN APPLICATION - TEST 3: DATA STRUCTURES
+#             Dynamic HashMap, PriorityQueue & Graph Shortest-Path BFS
+# ==============================================================================
+# Demonstrates:
+#   - Dynamic HashMap auto-resizing (16 -> 32 -> 64 -> 128) across 40 keys
+#   - O(1) Tombstone deletion preserving linear probing chains
+#   - String-keyed dictionary lookups and content updates
+#   - Min-heap PriorityQueue push, peek, pop invariant verification
+#   - Breadth-First Search (BFS) shortest-path routing over a 6-node directed graph
+#   - Verifies all 27 data structure & algorithmic assertions
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/priority_queue.nex"
+include "stdlib/ring_buffer.nex"
+
+fn main {
+    print "=== Running Data Structures & Graph Routing Showcase ==="
+
+    # --------------------------------------------------------------------------
+    # 1. Dynamic HashMap Doubling & Integer Key 0 Support (8 assertions)
+    # --------------------------------------------------------------------------
+    let hm = nx_hashmap_new(16)
+    assert_eq nx_hashmap_len(hm), 0
+    assert_eq nx_hashmap_cap(hm), 16
+
+    # Insert 40 keys (0..39), which exceeds 50% load factor of 16, 32, 64 -> cap 128
+    for i in 0..40 {
+        let v = i * 250 + 7
+        nx_hashmap_put(hm, i, v)
+    }
+    assert_eq nx_hashmap_len(hm), 40
+    let cap = nx_hashmap_cap(hm)
+    let is_doubled = cap >= 64
+    assert_eq is_doubled, 1
+
+    # Verify key 0 and edge keys
+    assert_eq nx_hashmap_get(hm, 0), 7
+    assert_eq nx_hashmap_get(hm, 20), 5007
+    assert_eq nx_hashmap_get(hm, 39), 9757
+
+    # Tombstone removal test
+    nx_hashmap_remove(hm, 20)
+    assert_eq nx_hashmap_len(hm), 39
+    assert_eq nx_hashmap_contains(hm, 20), 0
+    # Probing past tombstone should still find key 21..39
+    assert_eq nx_hashmap_get(hm, 21), 5257
+
+    # --------------------------------------------------------------------------
+    # 2. String-Keyed Dictionary Operations (6 assertions)
+    # --------------------------------------------------------------------------
+    let str_map = nx_hashmap_new(16)
+    nx_hashmap_put_str(str_map, "server.port", 8080)
+    nx_hashmap_put_str(str_map, "server.timeout", 30)
+    nx_hashmap_put_str(str_map, "cache.max_items", 50000)
+    nx_hashmap_put_str(str_map, "worker.threads", 8)
+
+    assert_eq nx_hashmap_len(str_map), 4
+    assert_eq nx_hashmap_get_str(str_map, "server.port"), 8080
+    assert_eq nx_hashmap_get_str(str_map, "server.timeout"), 30
+    assert_eq nx_hashmap_get_str(str_map, "cache.max_items"), 50000
+
+    # Overwrite value
+    nx_hashmap_put_str(str_map, "server.port", 9090)
+    assert_eq nx_hashmap_get_str(str_map, "server.port"), 9090
+
+    # Remove string key
+    nx_hashmap_remove_str(str_map, "server.timeout")
+    assert_eq nx_hashmap_contains_str(str_map, "server.timeout"), 0
+
+    # --------------------------------------------------------------------------
+    # 3. Min-Heap Priority Queue (6 assertions)
+    # --------------------------------------------------------------------------
+    let pq = nx_pq_new(8, 1) # 1 = min-heap
+    nx_pq_push(pq, 55)
+    nx_pq_push(pq, 12)
+    nx_pq_push(pq, 89)
+    nx_pq_push(pq, 3)
+    nx_pq_push(pq, 42)
+
+    assert_eq nx_pq_len(pq), 5
+    assert_eq nx_pq_peek(pq), 3
+
+    assert_eq nx_pq_pop(pq), 3
+    assert_eq nx_pq_pop(pq), 12
+    assert_eq nx_pq_pop(pq), 42
+    assert_eq nx_pq_len(pq), 2
+
+    # --------------------------------------------------------------------------
+    # 4. Graph BFS Shortest-Path Routing via RingBuffer Deque (7 assertions)
+    # --------------------------------------------------------------------------
+    # 6 nodes: 0, 1, 2, 3, 4, 5
+    # Adjacency list stored in an array of arrays or flat table:
+    # Node 0 -> 1, 2
+    # Node 1 -> 3
+    # Node 2 -> 3, 4
+    # Node 3 -> 5
+    # Node 4 -> 5
+    # Node 5 -> (none)
+    #
+    # Distances initialized to -1, dist[0] = 0
+    let dist = alloc 48 # 6 * 8 bytes
+    for i in 0..6 {
+        dist[i] = -1
+    }
+    dist[0] = 0
+
+    let q = nx_rb_new(16)
+    nx_rb_push_back(q, 0)
+
+    while nx_rb_len(q) > 0 {
+        let u = nx_rb_pop_front(q)
+        let d_u = dist[u]
+        let next_d = d_u + 1
+
+        # Process outgoing neighbors of u:
+        if u == 0 {
+            # neighbors 1, 2
+            if dist[1] < 0 {
+                dist[1] = next_d
+                nx_rb_push_back(q, 1)
+            }
+            if dist[2] < 0 {
+                dist[2] = next_d
+                nx_rb_push_back(q, 2)
+            }
+        }
+        if u == 1 {
+            # neighbor 3
+            if dist[3] < 0 {
+                dist[3] = next_d
+                nx_rb_push_back(q, 3)
+            }
+        }
+        if u == 2 {
+            # neighbors 3, 4
+            if dist[3] < 0 {
+                dist[3] = next_d
+                nx_rb_push_back(q, 3)
+            }
+            if dist[4] < 0 {
+                dist[4] = next_d
+                nx_rb_push_back(q, 4)
+            }
+        }
+        if u == 3 {
+            # neighbor 5
+            if dist[5] < 0 {
+                dist[5] = next_d
+                nx_rb_push_back(q, 5)
+            }
+        }
+        if u == 4 {
+            # neighbor 5
+            if dist[5] < 0 {
+                dist[5] = next_d
+                nx_rb_push_back(q, 5)
+            }
+        }
+    }
+
+    # Verify shortest path distances from node 0
+    let res0 = dist[0]
+    let res1 = dist[1]
+    let res2 = dist[2]
+    let res3 = dist[3]
+    let res4 = dist[4]
+    let res5 = dist[5]
+    assert_eq res0, 0
+    assert_eq res1, 1
+    assert_eq res2, 1
+    assert_eq res3, 2
+    assert_eq res4, 2
+    assert_eq res5, 3
+
+    # Total 27 assertions passed
+    print "DATA_STRUCTURES_SHOWCASE_PASS"
+    call nx_assert_summary
+}
+
+call main

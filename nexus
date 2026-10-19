@@ -6,6 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export NEXUS_HOME="$SCRIPT_DIR"
 COMPILER_DIR="$SCRIPT_DIR/compiler"
 BIN_DIR="$SCRIPT_DIR/bin"
 TOOLS_DIR="$SCRIPT_DIR/tools"
@@ -247,7 +248,27 @@ PYBUILD
         fi
         [ ! -f "$COMPILER_DIR/app.elf" ] && "$NEXELF" "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf" > /dev/null
         # Direct execution on bare-metal Linux kernel (0% loader, 0% C runtime):
-        "$COMPILER_DIR/app.elf"
+        "$COMPILER_DIR/app.elf" "${@:3}"
+        ;;
+    check)
+        [ -z "${2:-}" ] && usage
+        src="$(realpath "$2")"
+        "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
+        rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
+        if [ -f "$COMPILER_DIR/nexc.elf" ]; then
+            comp_out=$(cd "$COMPILER_DIR" && ./nexc.elf)
+        else
+            comp_out=$(cd "$COMPILER_DIR" && "$NEXLOAD" "$COMPILER_DIR/nexc.exe")
+        fi
+        if [ ! -f "$COMPILER_DIR/app.exe" ]; then
+            echo "$comp_out"
+            echo "[-] Check failed: compilation error in $2"
+            exit 1
+        fi
+        echo "[+] Syntax & type check passed: $2"
+        ;;
+    version|--version|-v)
+        echo "NEXUS v1.0.0 (Self-Hosted Native x86-64 / ARM64 Toolchain — Stage 5 Fixed-Point Verified)"
         ;;
     compile)
         shift
@@ -1043,7 +1064,8 @@ v87_suites = [
     ("tests/test_line_index.nex", "LINE_INDEX_TEST_PASS", "Line offset index suite: Feature #84 (line <-> byte lookup)"),
     ("tests/test_interner.nex", "INTERNER_TEST_PASS", "String interner suite: Feature #95 (O(1) symbol deduplication)"),
     ("tests/test_segment_tree.nex", "SEGMENT_TREE_TEST_PASS", "Segment tree suite: Feature #104 (range sum, min & max)"),
-    ("tests/test_fuzzy_glob.nex", "FUZZY_GLOB_TEST_PASS", "Fuzzy, ANSI, URL & Glob suite: Features #141, #142, #145, #151")
+    ("tests/test_fuzzy_glob.nex", "FUZZY_GLOB_TEST_PASS", "Fuzzy, ANSI, URL & Glob suite: Features #141, #142, #145, #151"),
+    ("tests/test_v1_complete_loop.nex", "V1_COMPLETE_LOOP_TEST_PASS", "NEXUS v1.0.0 Complete Loop Suite (strings, io, bools, stdlib ABI, hashmap)")
 ]
 v87_ok = True
 for rel_p, marker, desc in v87_suites:

@@ -1,7 +1,7 @@
-# NEXUS: Standalone Native AOT Compiler & Toolchain (v8.6 Stage 5)
+# NEXUS: Standalone Native AOT Compiler & Toolchain (v1.0.0)
 ### Self-Hosted Compiler Core | Tri-Platform (Linux ELF64, Windows PE32+, macOS ARM64) | 0% libc | HYDRON Engine
 
-[![Version](https://img.shields.io/badge/version-v8.6-blue.svg)](PROJECT_STATE.md)
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](PROJECT_STATE.md)
 [![CI](https://github.com/TouchOfDeath/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/TouchOfDeath/nexus/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Compiler](https://img.shields.io/badge/compiler-Self--Hosted%20Core-brightgreen.svg)](compiler/nexc.nex)
@@ -22,7 +22,18 @@ NEXUS emits true native binaries across three major operating systems:
 
 ---
 
-## 🚀 Recent Release Highlights (v8.0 – v8.6)
+## 🚀 Recent Release Highlights (v8.9 – v1.0.0)
+
+- **v1.0.0 — Formal Language Release & Ecosystem Completion (2026-10-19)**:
+  - **First-Class Strings & Ergonomics (`TY_STR`)**: String concatenation with `+`, content equality (`==`, `!=`), `str(int)` / `int(str)` type casting, and string pattern matching in `match`.
+  - **High-Level File I/O (`stdlib/io.nex`)**: Idiomatic `nx_read_file`, `nx_write_file`, `nx_append_file`, `nx_file_exists`, `nx_read_line`, and `nx_eprint`.
+  - **Compiler Core & Process Control**: Variable-path `file_open`/`file_create`, native `print_raw` (inline output without CRLF), `exit(code)`, and slot-0 shadow space bugfix.
+  - **Unified Parameterized Stdlib Calling ABI**: Direct invocation of all 250+ `stdlib/*.nex` functions (`nx_fn(a, b, ...)`).
+  - **Dynamic Collections**: Upgraded `HashMap` with automatic 50% load factor doubling, tombstone deletions, and string keys.
+  - **Formal Language Specification**: Authored complete specification in [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) and completed all 5 domain applications in [`docs/LANGUAGE_AUDIT.md`](docs/LANGUAGE_AUDIT.md).
+- **v8.9 — HYDRON Phase 5 Ultra Engine (2026-10-18)**:
+  - **12 Mathematical Loop Turbines**: Multi-accumulator linear induction, invariant conditional accumulators, dual-manifold SCEV recurrence attractors, extended Gauss triangular summation, geometric doubling, and O(1) bitwise shift strength reduction.
+  - **Codegen Peephole Superoptimizations**: 3-cycle signed division by 2, dead-store rewind on `%rax`, shift-divide fusion, and direct memory RMW (`addq`/`subq`/`cmpq [rbp+slot], imm32`), shrinking binary size and expanding `.text` headroom.
 
 - **v8.6 — 15 Foundational Standard Library Features & Compiler Hardening (2026-10-17)**:
   - **Memory & Buffers**: Fast memory move/set/zero with overlap-safe `nx_memmove` (`stdlib/memory.nex`), growable Little-Endian `ByteBuffer` for binary wire protocols (`stdlib/byte_buffer.nex`), and LSB-first `BitStream` reader/writer (`stdlib/bit_stream.nex`).
@@ -109,6 +120,7 @@ nexus_project/
 │   ├── hashmap.nex            <- Associative hash map with linear probing & string keys
 │   ├── hashset.nex            <- Hash set (int/string elements) with probing & rehash (Feature #71)
 │   ├── http.nex               <- Native HTTP/1.1 web server & JSON engine
+│   ├── io.nex                 <- High-level file & console I/O (nx_read_file, nx_write_file, nx_file_exists)
 │   ├── linalg.nex             <- Vector & matrix linear algebra
 │   ├── linked_list.nex        <- Doubly-linked list (Feature #77)
 │   ├── lru_cache.nex          <- Fixed-capacity LRU cache (Feature #94)
@@ -175,6 +187,7 @@ nexus_project/
 │
 └── docs/                      <- Documentation Hub (docs/README.md)
     ├── README.md              <- Documentation index & navigation hub
+    ├── SPECIFICATION.md       <- Formal NEXUS v1.0.0 Language Specification (EBNF, Types, ABI)
     ├── LANGUAGE_REFERENCE.md  <- Complete grammar, semantics & gotchas
     ├── TUTORIAL.md            <- Hands-on tutorial from Hello World to stdlib
     ├── BUILTINS.md            <- Built-in operations & standard library API reference
@@ -432,7 +445,7 @@ nx_rb_push_front(rb, 50)
 let front_val = nx_rb_pop_front(rb)    # 50
 
 # 2. Min/Max Priority Queue (Binary Heap)
-let pq = nx_pq_new(16, 0)              # min-heap
+let pq = nx_pq_new(16, 1)              # min-heap
 nx_pq_push(pq, 42)
 nx_pq_push(pq, 10)
 let min_val = nx_pq_pop(pq)            # 10

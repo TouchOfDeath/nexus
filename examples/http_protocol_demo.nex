@@ -1,0 +1,110 @@
+# ==============================================================================
+#                 NEXUS DOMAIN APPLICATION - TEST 4: HTTP PROTOCOL
+#          HTTP/1.1 Protocol Parser, Route Dispatcher & JSON API Engine
+# ==============================================================================
+# Demonstrates:
+#   - Parsing raw HTTP/1.1 request frames (Method, URI, Query Params, Headers)
+#   - String slicing, URL query decoding, and string-keyed HashMap population
+#   - Pattern matching on URI route paths via match
+#   - Constructing complete HTTP/1.1 200 OK responses with Content-Length and JSON
+#   - Verifies 8 protocol correctness & routing assertions
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+
+fn main {
+    print "=== Running HTTP/1.1 Protocol Parser & JSON API Engine ==="
+
+    let req_frame = "GET /api/v1/telemetry?node=7&limit=25 HTTP/1.1\r\nHost: api.nexus.internal:8080\r\nUser-Agent: NexusClient/1.0\r\nAccept: application/json\r\n\r\n"
+
+    # 1. Parse Request Line: Method, Full URI, Protocol Version
+    let sp1 = nx_str_index_of(req_frame, " ")
+    assert_eq sp1 > 0, 1
+
+    let method = nx_str_slice(req_frame, 0, sp1)
+    assert_eq method, "GET"
+
+    let frame_len = len req_frame
+    let rest_req = nx_str_slice(req_frame, sp1 + 1, frame_len)
+    let sp2 = nx_str_index_of(rest_req, " ")
+    let full_uri = nx_str_slice(rest_req, 0, sp2)
+
+    # 2. Split Route Path and Query Parameters
+    let q_pos = nx_str_index_of(full_uri, "?")
+    let uri_len = len full_uri
+    let route_path = full_uri
+    let query_str = ""
+
+    if q_pos >= 0 {
+        let route_path = nx_str_slice(full_uri, 0, q_pos)
+        let query_str = nx_str_slice(full_uri, q_pos + 1, uri_len)
+    }
+
+    assert_eq route_path, "/api/v1/telemetry"
+
+    # 3. Parse Query Parameters into String-Keyed HashMap
+    let query_params = nx_hashmap_new(16)
+    let q_len = len query_str
+    let q_off = 0
+
+    while q_off < q_len {
+        let amp_pos = nx_str_index_of(nx_str_slice(query_str, q_off, q_len), "&")
+        let pair_end = q_len
+        if amp_pos >= 0 {
+            let pair_end = q_off + amp_pos
+        }
+        let pair = nx_str_slice(query_str, q_off, pair_end)
+        let eq_pos = nx_str_index_of(pair, "=")
+        if eq_pos >= 0 {
+            let plen = len pair
+            let k = nx_str_slice(pair, 0, eq_pos)
+            let v = nx_str_slice(pair, eq_pos + 1, plen)
+            let v_int = int(v)
+            nx_hashmap_put_str(query_params, k, v_int)
+        }
+        let q_off = pair_end + 1
+    }
+
+    assert_eq nx_hashmap_get_str(query_params, "node"), 7
+    assert_eq nx_hashmap_get_str(query_params, "limit"), 25
+
+    # 4. Route Dispatch via Pattern Matching
+    let handler_id = 0
+    match route_path {
+        "/api/v1/telemetry" => {
+            let handler_id = 1
+        }
+        "/api/v1/health" => {
+            let handler_id = 2
+        }
+        _ => {
+            let handler_id = 99
+        }
+    }
+    assert_eq handler_id, 1
+
+    # 5. Build JSON API Response
+    let node_val = nx_hashmap_get_str(query_params, "node")
+    let limit_val = nx_hashmap_get_str(query_params, "limit")
+    let node_s = str(node_val)
+    let limit_s = str(limit_val)
+
+    # JSON Body: {"status":"ok","node":7,"limit":25,"uptime":3600}
+    let json_body = "{\"status\":\"ok\",\"node\":" + node_s + ",\"limit\":" + limit_s + ",\"uptime\":3600}"
+    let body_len = len json_body
+    let clen_s = str(body_len)
+
+    # HTTP/1.1 Response Frame
+    let resp_frame = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + clen_s + "\r\nConnection: close\r\n\r\n" + json_body
+
+    let clen_test = nx_str_contains(resp_frame, "Content-Length: 49")
+    assert_eq clen_test, 1
+
+    let json_status_test = nx_str_contains(resp_frame, "\"status\":\"ok\"")
+    assert_eq json_status_test, 1
+
+    print "HTTP_PROTOCOL_DEMO_PASS"
+    call nx_assert_summary
+}
+
+call main

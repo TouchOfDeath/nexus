@@ -1,10 +1,41 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-10-18  
-> **Current Version**: v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures (#11–#13, #16–#17, #31, #72–#73, #82, #84, #95, #104, #141–#142, #145, #151)  
-> **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Surrounding bootstrap and tooling ecosystem includes native C, Python, C#, and shell components.
+> **Last Updated**: 2026-10-19  
+> **Current Version**: v1.0.0 — Formal Language Specification, Complete Loop Ecosystem, First-Class Strings & I/O, Unified Stdlib Parameterized ABI, and 5/5 Real-World Domain Applications  
+> **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Stage 5 bit-for-bit fixed-point convergence verified (`0` byte differences across 49,152 PE32+ bytes and 57,951 ELF64 bytes).
 
 ---
+
+## 0.5 v1.0.0 — Formal Release: Complete Language Loop, First-Class Strings, High-Level I/O & 5/5 Domain Applications (2026-10-19)
+- **Self-Hosted Compiler Core Upgrades (`compiler/nexc.nex`)**:
+  - **Variable-Path File I/O**: `file_open <var>` and `file_create <var>` now accept string pointer variables in addition to string literals.
+  - **`print_raw <str_or_var>`**: Added native inline output without trailing `\r\n`.
+  - **`exit <code_or_var>`**: Added native process exit statement emitting `ExitProcess` / Linux `sys_exit`.
+  - **Critical Slot-0 Shadow Space Bugfix**: Shifted variable slot 0 from `[rbp + 48]` (`0x30`) to `[rbp + 56]` (`0x38`) so Windows x64 shadow space (`[rsp + 0x20..0x30]`) used by `CreateFileA` (`file_open`/`file_create`) and `print_str` (`0x0A0D` CRLF buffer) never corrupts variable 0.
+  - **`len` / `abs` Line-Eating Bugfix**: Changed `call skip_ws` to `call skip_sp` after unparenthesized `len <var>` and `abs <var>` so trailing newlines are never consumed prematurely.
+  - **Stage 5 Fixed-Point Verification**: Re-bootstrapped `nexc.exe`, `nexc.elf`, `nexc[2-4].*`, and `nexc.hex` (`Gen1 == Gen2 == Gen3 == Gen4`, 0 byte diffs).
+- **Preprocessor, Type Inference & Ergonomics Engine (`tools/nexprep.c`)**:
+  - **First-Class String Type (`TY_STR`)**: Full multi-pass type inference (`ntype_seen = 0` reset across 3 passes, `_ls_<N>_` prefix stripping, parameter/return/`??`/`?:` propagation) so `print s` and `print(s)` automatically emit `print_str` for string variables, parameters, and return values.
+  - **String Concatenation (`+`), Equality (`==`, `!=`), `str(int)`, and `int(str)`**: Added on-demand native runtime helpers (`_nx_rt_strcat`, `_nx_rt_streq`, `_nx_rt_itoa`, `_nx_rt_atoi`), plus string pattern matching in `match`.
+  - **Unified Stdlib Calling Convention**: Expanded `MAXFNS` and `MAX_FN_SIGS` to `2048` and enabled calling all 250+ `stdlib/*.nex` subroutines (`fn nx_... {`) directly via parameterized syntax `nx_fn(arg0, arg1, ...)` while preserving `nx_i0..nx_r0` compatibility.
+  - **Boolean Logic & Complex Conditions**: Added `&&` (`and`), `||` (`or`), `!` (`not`), relational RHS in `let` (`let ok = a > b`), and complex expressions in `if` and `while` (`while d * d <= n && found == 0`).
+  - **Bounded Temporary Slot Reuse**: Reused `_as_l`/`_as_r`/`_as_ok`, `_c_arg_0..7`, and modulo-16 expression temporaries, saving 300+ stack slots in large programs.
+- **Standard Library & Toolchain Completion**:
+  - Created `stdlib/io.nex` (`nx_read_file`, `nx_write_file`, `nx_write_file_bytes`, `nx_append_file`, `nx_file_exists`, `nx_read_line`, `nx_eprint`) and bundled it in `stdlib/nstdlib.nex`.
+  - Upgraded `stdlib/hashmap.nex` with automatic capacity doubling (`nx_hashmap_grow`), tombstone deletion (`nx_hashmap_remove`), and string-keyed dictionary operations (`nx_hashmap_put_str`, `nx_hashmap_get_str`, `nx_hashmap_contains_str`, `nx_hashmap_remove_str`).
+  - Added allocating string helpers to `stdlib/strings.nex` (`nx_str_slice`, `nx_str_concat_new`, `nx_str_trim_new`, `nx_int_to_str_new`, `nx_str_from_char`).
+  - Completed all 5 real-world domain applications in `docs/LANGUAGE_AUDIT.md` (`examples/cli_tool_grep_wc.nex`, `examples/csv_processor.nex`, `examples/data_structures_showcase.nex`, `examples/http_protocol_demo.nex`, `examples/neural_network.nex`) and authored the formal specification `docs/SPECIFICATION.md`.
+
+## 0.4.5 v8.9 — HYDRON Phase 5 Ultra Engine: 12 Turbines, Codegen Peepholes & O(1) Bitwise Shifts (2026-10-18)
+- **Compiler Codegen Superoptimizations (`compiler/nexc.nex`)**:
+  - Turbine 2: 3-cycle signed division by 2 (`cqo; sub rax, rdx; sar rax, 1`).
+  - Turbine 3: Dead-store rewind operating directly on `%rax`.
+  - Turbine 4: Hardware peephole shift-divide fusion & direct memory RMW (`addq`/`subq`/`cmpq [rbp+slot], imm32`).
+  - Factored `st_rax` and `check_p2`, shrinking machine code by 1,050 bytes (+1,053 bytes `.text` headroom).
+- **HYDRON Loop Solvers (`tools/nexprep.c`, `tools/nexir.c`, `tools/nexarm64.c`, `stdlib/bitwise.nex`)**:
+  - Turbines 5-8: O(1) multi-accumulator linear induction, invariant conditional accumulator, dual-manifold SCEV recurrence attractor, and extended Gauss triangular summation.
+  - Turbines 9-12: Mixed-precedence sub-term folding, geometric doubling/affine recurrence, O(1) binary shift decomposition, and lazy runtime deduplication.
+  - Sub-microsecond timer in `--bench`, 146,000x loop speedup, and 100% bit-for-bit Stage 5 convergence.
 
 ## 0.4 v8.8 — Struct Methods (`impl`), Struct Literals, Enums, `match`, 64-Bit Struct Bugfix, HYDRON Turbine 9 & IDE Data Structures (2026-10-18)
 - **Critical 64-Bit Struct Field Load/Store Bugfix (`tools/nexprep.c`)**:
