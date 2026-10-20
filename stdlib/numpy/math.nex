@@ -1,0 +1,640 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — MATHEMATICAL FUNCTIONS
+# ==============================================================================
+# High-accuracy IEEE-754 scalar and element-wise array mathematical functions:
+# abs, sign, sqrt, square, power, exp, log, log2, log10, floor, ceil, round,
+# trunc, sin, cos, tan, arcsin, arccos, arctan, arctan2, sinh, cosh, tanh,
+# deg2rad, rad2deg, hypot, isnan, isinf, isfinite, logspace.
+# ==============================================================================
+
+include "stdlib/numpy/creation.nex"
+
+# --- Scalar Elementary Functions ---
+
+fn np_abs_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 {
+        return np_nan()
+    }
+    if x < 0.0 {
+        let neg_x = fneg x
+        return neg_x
+    }
+    return x
+}
+
+fn np_sign_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 {
+        return np_nan()
+    }
+    if x > 0.0 { return 1.0 }
+    if x < 0.0 { return -1.0 }
+    return 0.0
+}
+
+fn np_sqrt_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 {
+        return np_nan()
+    }
+    if x < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let s = fsqrt x
+    return s
+}
+
+fn np_square_scalar(x: float) -> float {
+    return x * x
+}
+
+fn np_trunc_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        return x
+    }
+    np_ensure_init()
+    store64 [_np_ctx + 248] x
+    let b6 = load [_np_ctx + 254]
+    let b7 = load [_np_ctx + 255]
+    let exp11 = (b7 % 128) * 16 + (b6 / 16)
+    if exp11 >= 1075 {
+        return x
+    }
+    let iv = ftoi x
+    let fv = itof iv
+    return fv
+}
+
+fn np_floor_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        return x
+    }
+    let t = np_trunc_scalar(x)
+    if x < t {
+        return t - 1.0
+    }
+    return t
+}
+
+fn np_ceil_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        return x
+    }
+    let t = np_trunc_scalar(x)
+    if x > t {
+        return t + 1.0
+    }
+    return t
+}
+
+fn np_round_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        return x
+    }
+    let fl = np_floor_scalar(x)
+    let diff = x - fl
+    if diff < 0.5 {
+        return fl
+    }
+    if diff > 0.5 {
+        return fl + 1.0
+    }
+    # Round half to even (NumPy convention)
+    let iv = ftoi fl
+    let rem = iv % 2
+    if rem == 0 {
+        return fl
+    }
+    return fl + 1.0
+}
+
+fn np_fmod_scalar(x: float, y: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if np_isnan_scalar(y) == 1 { return np_nan() }
+    if y == 0.0 {
+        _np_err(NP_ERR_DIV_ZERO)
+        return np_nan()
+    }
+    let q = np_trunc_scalar(x / y)
+    return x - q * y
+}
+
+fn np_mod_scalar(x: float, y: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if np_isnan_scalar(y) == 1 { return np_nan() }
+    if y == 0.0 {
+        _np_err(NP_ERR_DIV_ZERO)
+        return np_nan()
+    }
+    let q = np_floor_scalar(x / y)
+    return x - q * y
+}
+
+# --- Exponential & Logarithmic Scalar Functions ---
+
+fn np_exp_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if np_isinf_scalar(x) == 1 {
+        if x > 0.0 { return np_inf() }
+        return 0.0
+    }
+    if x > 709.782712893384 {
+        return np_inf()
+    }
+    if x < -745.133219101941 {
+        return 0.0
+    }
+    if x == 0.0 { return 1.0 }
+
+    let ln2 = 0.69314718055994530942
+    let inv_ln2 = 1.44269504088896340736
+    let kf = np_round_scalar(x * inv_ln2)
+    let k = ftoi kf
+    let r = x - kf * ln2
+
+    # 10-term Taylor series for exp(r) on |r| <= 0.3466 using exact factorial reciprocals
+    let p = 1.0 + r
+    let term = r
+    let idx_k = 2
+    while idx_k <= 12 {
+        let fk = itof idx_k
+        term = (term * r) / fk
+        p = p + term
+        idx_k = idx_k + 1
+    }
+
+    # Scale by 2^k using binary exponentiation
+    let scale = 1.0
+    let base2 = 2.0
+    let exp_k = k
+    if exp_k < 0 {
+        base2 = 0.5
+        exp_k = 0 - exp_k
+    }
+    while exp_k > 0 {
+        if exp_k % 2 == 1 {
+            scale = scale * base2
+        }
+        base2 = base2 * base2
+        exp_k = exp_k / 2
+    }
+    return p * scale
+}
+
+fn np_log_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if x < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if x == 0.0 {
+        _np_err(NP_ERR_DIV_ZERO)
+        return np_neg_inf()
+    }
+    if np_isinf_scalar(x) == 1 {
+        return np_inf()
+    }
+    if x == 1.0 { return 0.0 }
+
+    # O(1) IEEE-754 exponent/mantissa extraction via [_np_ctx + 248]
+    np_ensure_init()
+    store64 [_np_ctx + 248] x
+    let b6 = load [_np_ctx + 254]
+    let b7 = load [_np_ctx + 255]
+    let exp11 = (b7 % 128) * 16 + (b6 / 16)
+    let k = 0
+    let m = x
+    if exp11 > 0 {
+        k = exp11 - 1023
+        store [_np_ctx + 254] (240 + (b6 % 16))
+        store [_np_ctx + 255] 63
+        m = load64 [_np_ctx + 248]
+    } else {
+        # Subnormal fallback
+        while m < 1.0 {
+            m = m * 2.0
+            k = k - 1
+        }
+    }
+    if m > 1.4142135623730951 {
+        m = m * 0.5
+        k = k + 1
+    }
+
+    let u = (m - 1.0) / (m + 1.0)
+    let u2 = u * u
+    let term = u
+    let acc = u
+    let idx_k = 1
+    while idx_k <= 8 {
+        term = term * u2
+        let denom = itof (2 * idx_k + 1)
+        acc = acc + (term / denom)
+        idx_k = idx_k + 1
+    }
+    let ln_m = 2.0 * acc
+    let fk = itof k
+    return fk * 0.69314718055994530942 + ln_m
+}
+
+fn np_log2_scalar(x: float) -> float {
+    let l = np_log_scalar(x)
+    return l * 1.44269504088896340736
+}
+
+fn np_log10_scalar(x: float) -> float {
+    let l = np_log_scalar(x)
+    return l * 0.43429448190325182765
+}
+
+fn np_pow_scalar(base: float, exp_val: float) -> float {
+    if exp_val == 0.0 { return 1.0 }
+    if np_isnan_scalar(base) == 1 { return np_nan() }
+    if np_isnan_scalar(exp_val) == 1 { return np_nan() }
+    if base == 1.0 { return 1.0 }
+
+    # Check if exponent is an exact integer in [-1024, 1024]
+    if np_isfinite_scalar(exp_val) == 1 {
+        if exp_val >= -1024.0 {
+            if exp_val <= 1024.0 {
+                let ie = ftoi exp_val
+                let fie = itof ie
+                if fie == exp_val {
+                    if base == 0.0 {
+                        if ie < 0 {
+                            _np_err(NP_ERR_DIV_ZERO)
+                            return np_inf()
+                        }
+                        return 0.0
+                    }
+                    let res = 1.0
+                    let b = base
+                    let n = ie
+                    if n < 0 {
+                        b = 1.0 / b
+                        n = 0 - n
+                    }
+                    while n > 0 {
+                        if n % 2 == 1 {
+                            res = res * b
+                        }
+                        b = b * b
+                        n = n / 2
+                    }
+                    return res
+                }
+            }
+        }
+    }
+
+    if base == 0.0 {
+        if exp_val > 0.0 { return 0.0 }
+        _np_err(NP_ERR_DIV_ZERO)
+        return np_inf()
+    }
+    if base < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    return np_exp_scalar(exp_val * np_log_scalar(base))
+}
+
+# --- Trigonometric & Hyperbolic Scalar Functions ---
+
+fn _np_reduce_angle(x: float) -> float {
+    let two_pi = 6.28318530717958647692
+    let inv_two_pi = 0.15915494309189533577
+    let k = np_round_scalar(x * inv_two_pi)
+    return x - k * two_pi
+}
+
+fn np_sin_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let r = _np_reduce_angle(x)
+    let pi = 3.14159265358979323846
+    let half_pi = 1.57079632679489661923
+    let sign = 1.0
+    if r < 0.0 {
+        sign = -1.0
+        r = 0.0 - r
+    }
+    if r > pi {
+        r = r - pi
+        sign = 0.0 - sign
+    }
+    if r > half_pi {
+        r = pi - r
+    }
+    let r2 = r * r
+    let term = r
+    let acc = r
+    let idx_k = 1
+    while idx_k <= 7 {
+        let d1 = itof (2 * idx_k)
+        let d2 = itof (2 * idx_k + 1)
+        term = (0.0 - term) * r2 / (d1 * d2)
+        acc = acc + term
+        idx_k = idx_k + 1
+    }
+    return sign * acc
+}
+
+fn two_pi_wrap(r: float) -> float {
+    return 6.28318530717958647692 - r
+}
+
+fn np_cos_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let r = _np_reduce_angle(x)
+    if r < 0.0 { r = 0.0 - r }
+    let pi = 3.14159265358979323846
+    let half_pi = 1.57079632679489661923
+    let sign = 1.0
+    if r > pi {
+        r = two_pi_wrap(r)
+    }
+    if r > half_pi {
+        r = pi - r
+        sign = -1.0
+    }
+    let r2 = r * r
+    let term = 1.0
+    let acc = 1.0
+    let idx_k = 1
+    while idx_k <= 7 {
+        let d1 = itof (2 * idx_k - 1)
+        let d2 = itof (2 * idx_k)
+        term = (0.0 - term) * r2 / (d1 * d2)
+        acc = acc + term
+        idx_k = idx_k + 1
+    }
+    return sign * acc
+}
+
+fn np_tan_scalar(x: float) -> float {
+    if np_isfinite_scalar(x) == 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let s = np_sin_scalar(x)
+    let c = np_cos_scalar(x)
+    if c == 0.0 {
+        return np_inf()
+    }
+    return s / c
+}
+
+fn np_arctan_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if np_isinf_scalar(x) == 1 {
+        if x > 0.0 { return 1.57079632679489661923 }
+        return -1.57079632679489661923
+    }
+    let sign = 1.0
+    let a = x
+    if a < 0.0 {
+        sign = -1.0
+        a = 0.0 - a
+    }
+    let inv = 0
+    if a > 1.0 {
+        a = 1.0 / a
+        inv = 1
+    }
+    let offset = 0.0
+    # Range reduction: if a > tan(pi/12), transform by (a*sqrt(3) - 1)/(sqrt(3) + a)
+    if a > 0.2679491924311227 {
+        let sqrt3 = 1.73205080756887729353
+        a = (a * sqrt3 - 1.0) / (sqrt3 + a)
+        offset = 0.52359877559829887308
+    }
+    let a2 = a * a
+    let term = a
+    let acc = a
+    let idx_k = 1
+    while idx_k <= 9 {
+        term = (0.0 - term) * a2
+        let denom = itof (2 * idx_k + 1)
+        acc = acc + (term / denom)
+        idx_k = idx_k + 1
+    }
+    let res = offset + acc
+    if inv == 1 {
+        res = 1.57079632679489661923 - res
+    }
+    return sign * res
+}
+
+fn np_arctan2_scalar(y: float, x: float) -> float {
+    if np_isnan_scalar(y) == 1 { return np_nan() }
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    let pi = 3.14159265358979323846
+    let half_pi = 1.57079632679489661923
+    if x > 0.0 {
+        return np_arctan_scalar(y / x)
+    }
+    if x < 0.0 {
+        if y >= 0.0 {
+            return np_arctan_scalar(y / x) + pi
+        }
+        return np_arctan_scalar(y / x) - pi
+    }
+    if y > 0.0 { return half_pi }
+    if y < 0.0 { return 0.0 - half_pi }
+    return 0.0
+}
+
+fn np_arcsin_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if x < -1.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if x > 1.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let one_minus_x2 = (1.0 - x) * (1.0 + x)
+    let denom = fsqrt one_minus_x2
+    return np_arctan2_scalar(x, denom)
+}
+
+fn np_arccos_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if x < -1.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if x > 1.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let one_minus_x2 = (1.0 - x) * (1.0 + x)
+    let num = fsqrt one_minus_x2
+    return np_arctan2_scalar(num, x)
+}
+
+fn np_sinh_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    let ax = np_abs_scalar(x)
+    if ax < 0.0001 {
+        let x2 = x * x
+        return x * (1.0 + x2 / 6.0)
+    }
+    let ex = np_exp_scalar(x)
+    let emx = np_exp_scalar(0.0 - x)
+    return 0.5 * (ex - emx)
+}
+
+fn np_cosh_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    let ex = np_exp_scalar(x)
+    let emx = np_exp_scalar(0.0 - x)
+    return 0.5 * (ex + emx)
+}
+
+fn np_tanh_scalar(x: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if x > 20.0 { return 1.0 }
+    if x < -20.0 { return -1.0 }
+    let e2x = np_exp_scalar(2.0 * x)
+    return (e2x - 1.0) / (e2x + 1.0)
+}
+
+fn np_deg2rad_scalar(deg: float) -> float {
+    return deg * 0.01745329251994329577
+}
+
+fn np_rad2deg_scalar(rad: float) -> float {
+    return rad * 57.2957795130823208768
+}
+
+fn np_hypot_scalar(x: float, y: float) -> float {
+    if np_isnan_scalar(x) == 1 { return np_nan() }
+    if np_isnan_scalar(y) == 1 { return np_nan() }
+    let ax = np_abs_scalar(x)
+    let ay = np_abs_scalar(y)
+    let hi = ax
+    let lo = ay
+    if ay > ax {
+        hi = ay
+        lo = ax
+    }
+    if hi == 0.0 { return 0.0 }
+    if np_isinf_scalar(hi) == 1 { return np_inf() }
+    let r = lo / hi
+    let s = fsqrt (1.0 + r * r)
+    return hi * s
+}
+
+# --- Vectorized Element-Wise Array Mathematical Functions ---
+
+fn _np_apply_unary(arr, op_code) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let s0 = load64 [arr + 72]
+    let s1 = load64 [arr + 80]
+    let s2 = load64 [arr + 88]
+    let s3 = load64 [arr + 96]
+    let sz = load64 [arr + 32]
+    let out_dt = NP_FLOAT64
+    if op_code >= 30 {
+        out_dt = NP_BOOL
+    }
+    let out = _np_alloc_ndarray_header(nd, s0, s1, s2, s3, out_dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        let y = 0.0
+        if op_code == 1  { y = np_abs_scalar(x) }
+        if op_code == 2  { y = np_sign_scalar(x) }
+        if op_code == 3  { y = np_sqrt_scalar(x) }
+        if op_code == 4  { y = np_square_scalar(x) }
+        if op_code == 5  { y = np_exp_scalar(x) }
+        if op_code == 6  { y = np_log_scalar(x) }
+        if op_code == 7  { y = np_log2_scalar(x) }
+        if op_code == 8  { y = np_log10_scalar(x) }
+        if op_code == 9  { y = np_floor_scalar(x) }
+        if op_code == 10 { y = np_ceil_scalar(x) }
+        if op_code == 11 { y = np_round_scalar(x) }
+        if op_code == 12 { y = np_trunc_scalar(x) }
+        if op_code == 13 { y = np_sin_scalar(x) }
+        if op_code == 14 { y = np_cos_scalar(x) }
+        if op_code == 15 { y = np_tan_scalar(x) }
+        if op_code == 16 { y = np_arcsin_scalar(x) }
+        if op_code == 17 { y = np_arccos_scalar(x) }
+        if op_code == 18 { y = np_arctan_scalar(x) }
+        if op_code == 19 { y = np_sinh_scalar(x) }
+        if op_code == 20 { y = np_cosh_scalar(x) }
+        if op_code == 21 { y = np_tanh_scalar(x) }
+        if op_code == 22 { y = np_deg2rad_scalar(x) }
+        if op_code == 23 { y = np_rad2deg_scalar(x) }
+        if op_code == 24 { y = fneg x }
+        if op_code == 30 { y = itof (np_isnan_scalar(x)) }
+        if op_code == 31 { y = itof (np_isinf_scalar(x)) }
+        if op_code == 32 { y = itof (np_isfinite_scalar(x)) }
+        store64 [dst + i * 8] y
+        i = i + 1
+    }
+    return out
+}
+
+fn np_abs(arr)      { return _np_apply_unary(arr, 1) }
+fn np_sign(arr)     { return _np_apply_unary(arr, 2) }
+fn np_sqrt(arr)     { return _np_apply_unary(arr, 3) }
+fn np_square(arr)   { return _np_apply_unary(arr, 4) }
+fn np_exp(arr)      { return _np_apply_unary(arr, 5) }
+fn np_log(arr)      { return _np_apply_unary(arr, 6) }
+fn np_log2(arr)     { return _np_apply_unary(arr, 7) }
+fn np_log10(arr)    { return _np_apply_unary(arr, 8) }
+fn np_floor(arr)    { return _np_apply_unary(arr, 9) }
+fn np_ceil(arr)     { return _np_apply_unary(arr, 10) }
+fn np_round(arr)    { return _np_apply_unary(arr, 11) }
+fn np_trunc(arr)    { return _np_apply_unary(arr, 12) }
+fn np_sin(arr)      { return _np_apply_unary(arr, 13) }
+fn np_cos(arr)      { return _np_apply_unary(arr, 14) }
+fn np_tan(arr)      { return _np_apply_unary(arr, 15) }
+fn np_arcsin(arr)   { return _np_apply_unary(arr, 16) }
+fn np_arccos(arr)   { return _np_apply_unary(arr, 17) }
+fn np_arctan(arr)   { return _np_apply_unary(arr, 18) }
+fn np_sinh(arr)     { return _np_apply_unary(arr, 19) }
+fn np_cosh(arr)     { return _np_apply_unary(arr, 20) }
+fn np_tanh(arr)     { return _np_apply_unary(arr, 21) }
+fn np_deg2rad(arr)  { return _np_apply_unary(arr, 22) }
+fn np_rad2deg(arr)  { return _np_apply_unary(arr, 23) }
+fn np_radians(arr)  { return _np_apply_unary(arr, 22) }
+fn np_degrees(arr)  { return _np_apply_unary(arr, 23) }
+fn np_neg(arr)      { return _np_apply_unary(arr, 24) }
+fn np_negative(arr) { return _np_apply_unary(arr, 24) }
+fn np_isnan(arr)    { return _np_apply_unary(arr, 30) }
+fn np_isinf(arr)    { return _np_apply_unary(arr, 31) }
+fn np_isfinite(arr) { return _np_apply_unary(arr, 32) }
+
+fn np_logspace_base(start: float, stop: float, count, base: float) {
+    let lin = np_linspace(start, stop, count)
+    if lin == 0 { return 0 }
+    let sz = load64 [lin + 32]
+    let dst = load64 [lin + 8]
+    let i = 0
+    while i < sz {
+        let e = load64 [dst + i * 8]
+        let v = np_pow_scalar(base, e)
+        store64 [dst + i * 8] v
+        i = i + 1
+    }
+    return lin
+}
+
+fn np_logspace(start: float, stop: float, count) {
+    return np_logspace_base(start, stop, count, 10.0)
+}

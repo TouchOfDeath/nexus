@@ -1,0 +1,7 @@
+import numpy
+numpy.random_seed(2026)
+let u = numpy.random_uniform(-1.0, 1.0, 200)
+let g = numpy.random_normal(0.0, 1.0, 200)
+print_float (numpy.mean(u))
+print_float (numpy.std(g))
+print "EXAMPLE_08_OK"

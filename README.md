@@ -1,7 +1,7 @@
-# NEXUS: Standalone Native AOT Compiler & Toolchain (v1.0.0)
+# NEXUS: Standalone Native AOT Compiler & Toolchain (v1.2.0)
 ### Self-Hosted Compiler Core | Tri-Platform (Linux ELF64, Windows PE32+, macOS ARM64) | 0% libc | HYDRON Engine
 
-[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](PROJECT_STATE.md)
+[![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)](PROJECT_STATE.md)
 [![CI](https://github.com/TouchOfDeath/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/TouchOfDeath/nexus/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Compiler](https://img.shields.io/badge/compiler-Self--Hosted%20Core-brightgreen.svg)](compiler/nexc.nex)
@@ -19,6 +19,27 @@ NEXUS emits true native binaries across three major operating systems:
 1. **Linux x86-64 ELF64 (`app.elf`)**: 100% standalone native executable with direct kernel syscalls (**0% libc, 0% ld-linux, 0% Wine, 0% loader**).
 2. **Windows x86-64 PE32+ (`app.exe`)**: Standalone portable executable with direct Kernel32 IAT imports.
 3. **Apple Silicon & Linux ARM64 (`app.macho` / `app.elf`)**: Native ARM64 machine code generation via standalone emitter.
+
+---
+
+## 🔢 NEXUS NUMPY: Multidimensional Arrays, Linear Algebra & Scientific Computing (v1.2.0)
+
+**Nexus NumPy** (`import numpy` / `stdlib/numpy.nex`) is a native numerical computing engine written 100% in pure Nexus with **0% libc, 0% BLAS/LAPACK, and 0% external dependencies**.
+
+### Key Subsystems
+- **Multidimensional `NdArray` Engine (`stdlib/numpy/core.nex`)**: Strided N-D array layout, zero-copy slicing, 2D transpose views, multidimensional indexing syntax (`matrix[i, j]`), and bounds checking.
+- **Array Constructors (`stdlib/numpy/creation.nex`)**: `zeros`, `ones`, `full`, `arange`, `linspace`, `logspace`, `eye`, `diag`, and buffer conversion.
+- **Vectorized Operations & Broadcasting (`stdlib/numpy/ops.nex`)**: Element-wise arithmetic (`+`, `-`, `*`, `/`, `%`), relational masking (`==`, `!=`, `<`, `<=`, `>`, `>=`), and automatic multi-axis broadcasting.
+- **Compensated Reductions (`stdlib/numpy/reduce.nex`)**: High-precision Neumaier summation (`sum`), `mean`, `prod`, `min`, `max`, `ptp`, `argmin`, `argmax`, `cumsum`, and `cumprod`.
+- **Mathematical Universal Functions (`stdlib/numpy/math.nex`)**: Element-wise IEEE-754 ufuncs (`sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `power`, `clip`, `sign`, `round`).
+- **Pure Nexus Linear Algebra (`stdlib/numpy/linalg.nex`)**: `dot`, `outer`, `matmul`, `norm`, `trace`, `det`, `inv`, `solve`, `lu` (with partial pivoting), `qr` (Householder reflections), `cholesky`, `svd`, symmetric `eigvals`, and least-squares regression (`lstsq`).
+- **Statistics & PRNG (`stdlib/numpy/stats.nex`, `stdlib/numpy/random.nex`)**: Variance, standard deviation, median, quantiles/percentiles, covariance, correlation matrices, uniform and Box-Muller Gaussian distributions.
+- **Binary & CSV Serialization (`stdlib/numpy/io.nex`)**: High-performance binary format (`.npy` with magic headers/checksums) and CSV import/export.
+
+Comprehensive documentation:
+- 📖 [Nexus NumPy Architecture & Manual](docs/NUMPY_MANUAL.md)
+- 📋 [Nexus NumPy API Reference](docs/NUMPY_API_REFERENCE.md)
+- ⚡ [Nexus NumPy Performance & Benchmarks](docs/NUMPY_BENCHMARKS.md)
 
 ---
 

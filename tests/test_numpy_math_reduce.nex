@@ -1,0 +1,213 @@
+# ==============================================================================
+# TEST SUITE 2: ARITHMETIC, BROADCASTING, MATHEMATICAL FUNCTIONS & REDUCTIONS
+# ==============================================================================
+
+import numpy
+
+# 1. Element-Wise Array-Array & Array-Scalar Arithmetic + Operator Overloading
+let a = numpy.array([1.0, 2.0, 3.0, 4.0])
+let b = numpy.array([10.0, 20.0, 30.0, 40.0])
+
+let s = a + b
+numpy.assert_near(s[0], 11.0, 0.000001)
+numpy.assert_near(s[3], 44.0, 0.000001)
+
+let d = b - a
+numpy.assert_near(d[1], 18.0, 0.000001)
+
+let p = a * b
+numpy.assert_near(p[2], 90.0, 0.000001)
+
+let q = b / a
+numpy.assert_near(q[0], 10.0, 0.000001)
+numpy.assert_near(q[3], 10.0, 0.000001)
+
+let sc_add = a + 10
+numpy.assert_near(sc_add[0], 11.0, 0.000001)
+numpy.assert_near(sc_add[3], 14.0, 0.000001)
+
+let sc_mul = a * 2.5
+numpy.assert_near(sc_mul[1], 5.0, 0.000001)
+
+let fdiv = numpy.floor_div(b, numpy.array([3.0, 7.0, 8.0, 9.0]))
+numpy.assert_near(fdiv[0], 3.0, 0.000001)
+numpy.assert_near(fdiv[1], 2.0, 0.000001)
+numpy.assert_near(fdiv[2], 3.0, 0.000001)
+numpy.assert_near(fdiv[3], 4.0, 0.000001)
+
+let rem = numpy.mod(b, numpy.array([3.0, 7.0, 8.0, 9.0]))
+numpy.assert_near(rem[0], 1.0, 0.000001)
+numpy.assert_near(rem[1], 6.0, 0.000001)
+numpy.assert_near(rem[2], 6.0, 0.000001)
+numpy.assert_near(rem[3], 4.0, 0.000001)
+
+let pw = numpy.power(a, numpy.array([2.0, 3.0, 2.0, 0.5]))
+numpy.assert_near(pw[0], 1.0, 0.000001)
+numpy.assert_near(pw[1], 8.0, 0.000001)
+numpy.assert_near(pw[2], 9.0, 0.000001)
+numpy.assert_near(pw[3], 2.0, 0.000001)
+
+let mx = numpy.maximum(a, numpy.array([2.5, 1.5, 3.5, 0.5]))
+numpy.assert_near(mx[0], 2.5, 0.000001)
+numpy.assert_near(mx[1], 2.0, 0.000001)
+
+let mn = numpy.minimum(a, numpy.array([2.5, 1.5, 3.5, 0.5]))
+numpy.assert_near(mn[0], 1.0, 0.000001)
+numpy.assert_near(mn[3], 0.5, 0.000001)
+
+let clp = numpy.clip(b, 15.0, 35.0)
+numpy.assert_near(clp[0], 15.0, 0.000001)
+numpy.assert_near(clp[1], 20.0, 0.000001)
+numpy.assert_near(clp[3], 35.0, 0.000001)
+
+# 2. N-D Broadcasting (2D + 1D, (3,1) + (1,3) outer broadcast, broadcast_to view)
+let mat = numpy.array([[1, 2, 3], [4, 5, 6]])
+let off = numpy.array([10, 20, 30])
+let bcast1 = mat + off
+assert_eq bcast1.ndim, 2
+assert_eq bcast1.shape_dim(0), 2
+assert_eq bcast1.shape_dim(1), 3
+numpy.assert_near(bcast1[0, 0], 11.0, 0.000001)
+numpy.assert_near(bcast1[0, 2], 33.0, 0.000001)
+numpy.assert_near(bcast1[1, 1], 25.0, 0.000001)
+
+let col_vec = numpy.reshape(numpy.array([100, 200, 300]), 3, 1)
+let row_vec = numpy.reshape(numpy.array([1, 2, 3]), 1, 3)
+let grid = col_vec + row_vec
+assert_eq grid.shape_dim(0), 3
+assert_eq grid.shape_dim(1), 3
+numpy.assert_near(grid[0, 0], 101.0, 0.000001)
+numpy.assert_near(grid[1, 2], 203.0, 0.000001)
+numpy.assert_near(grid[2, 1], 302.0, 0.000001)
+
+let bv = numpy.broadcast_to(off, 4, 3)
+assert_eq bv.shape_dim(0), 4
+assert_eq bv.shape_dim(1), 3
+numpy.assert_near(bv[3, 1], 20.0, 0.000001)
+
+# 3. Comparisons, Logical Ops, Where & Mask Filtering
+let gt = numpy.greater(a, numpy.array([0.5, 2.5, 2.5, 5.0]))
+numpy.assert_near(gt[0], 1.0, 0.000001)
+numpy.assert_near(gt[1], 0.0, 0.000001)
+numpy.assert_near(gt[2], 1.0, 0.000001)
+numpy.assert_near(gt[3], 0.0, 0.000001)
+
+let l_and = numpy.logical_and(numpy.array([1, 1, 0, 0]), numpy.array([1, 0, 1, 0]))
+numpy.assert_near(l_and[0], 1.0, 0.000001)
+numpy.assert_near(l_and[1], 0.0, 0.000001)
+
+let l_or = numpy.logical_or(numpy.array([1, 1, 0, 0]), numpy.array([1, 0, 1, 0]))
+numpy.assert_near(l_or[2], 1.0, 0.000001)
+numpy.assert_near(l_or[3], 0.0, 0.000001)
+
+let l_xor = numpy.logical_xor(numpy.array([1, 1, 0, 0]), numpy.array([1, 0, 1, 0]))
+numpy.assert_near(l_xor[0], 0.0, 0.000001)
+numpy.assert_near(l_xor[1], 1.0, 0.000001)
+
+let wh = numpy.where(gt, b, a)
+numpy.assert_near(wh[0], 10.0, 0.000001)
+numpy.assert_near(wh[1], 2.0, 0.000001)
+numpy.assert_near(wh[2], 30.0, 0.000001)
+numpy.assert_near(wh[3], 4.0, 0.000001)
+
+let filt = numpy.mask_filter(b, gt)
+assert_eq filt.size, 2
+numpy.assert_near(filt[0], 10.0, 0.000001)
+numpy.assert_near(filt[1], 30.0, 0.000001)
+
+assert_eq numpy.allclose(a, numpy.add_scalar(a, 0.000000001)), 1
+assert_eq numpy.allclose(a, b), 0
+assert_eq numpy.array_equal(a, numpy.copy(a)), 1
+
+# 4. Mathematical Functions (Scalar & Vectorized)
+let x_trig = numpy.array([0.0, 0.5235987755982989, 1.0471975511965979, 1.5707963267948966])
+let s_trig = numpy.sin(x_trig)
+let c_trig = numpy.cos(x_trig)
+numpy.assert_near(s_trig[0], 0.0, 0.000001)
+numpy.assert_near(s_trig[1], 0.5, 0.000001)
+numpy.assert_near(s_trig[3], 1.0, 0.000001)
+numpy.assert_near(c_trig[0], 1.0, 0.000001)
+numpy.assert_near(c_trig[2], 0.5, 0.000001)
+numpy.assert_near(c_trig[3], 0.0, 0.000001)
+
+# Verify sin^2(x) + cos^2(x) == 1 across all points
+let pyth = numpy.add(numpy.square(s_trig), numpy.square(c_trig))
+assert_eq numpy.allclose(pyth, numpy.ones(4)), 1
+
+# Inverse trig round-trip
+let asin_v = numpy.arcsin(s_trig)
+assert_eq numpy.allclose(asin_v, x_trig), 1
+let acos_v = numpy.arccos(c_trig)
+assert_eq numpy.allclose(acos_v, x_trig), 1
+numpy.assert_near(numpy.arctan2_scalar(1.0, 1.0), 0.7853981633974483, 0.000001)
+
+# Exp & Log round-trip
+let exp_a = numpy.exp(a)
+let log_exp_a = numpy.log(exp_a)
+assert_eq numpy.allclose(log_exp_a, a), 1
+numpy.assert_near(numpy.log2_scalar(1024.0), 10.0, 0.000001)
+numpy.assert_near(numpy.log10_scalar(1000.0), 3.0, 0.000001)
+
+# Hyperbolic identity: cosh^2(x) - sinh^2(x) == 1
+let sh = numpy.sinh(a)
+let ch = numpy.cosh(a)
+let hyp_id = numpy.sub(numpy.square(ch), numpy.square(sh))
+assert_eq numpy.allclose(hyp_id, numpy.ones(4)), 1
+numpy.assert_near(numpy.tanh_scalar(0.0), 0.0, 0.000001)
+
+# Rounding, floor, ceil, trunc, sign, hypot
+let r_in = numpy.array([-2.7, -0.5, 1.5, 2.5, 3.5])
+let fl_out = numpy.floor(r_in)
+let cl_out = numpy.ceil(r_in)
+let tr_out = numpy.trunc(r_in)
+let rn_out = numpy.round(r_in)
+numpy.assert_near(fl_out[0], -3.0, 0.000001)
+numpy.assert_near(cl_out[0], -2.0, 0.000001)
+numpy.assert_near(tr_out[0], -2.0, 0.000001)
+# Banker's round-half-to-even: 1.5 -> 2.0, 2.5 -> 2.0, 3.5 -> 4.0
+numpy.assert_near(rn_out[2], 2.0, 0.000001)
+numpy.assert_near(rn_out[3], 2.0, 0.000001)
+numpy.assert_near(rn_out[4], 4.0, 0.000001)
+numpy.assert_near(numpy.hypot_scalar(3.0, 4.0), 5.0, 0.000001)
+
+# 5. Reductions & Axis-Aware Aggregations
+numpy.assert_near(numpy.sum(a), 10.0, 0.000001)
+numpy.assert_near(numpy.prod(a), 24.0, 0.000001)
+numpy.assert_near(numpy.min(a), 1.0, 0.000001)
+numpy.assert_near(numpy.max(a), 4.0, 0.000001)
+numpy.assert_near(numpy.ptp(a), 3.0, 0.000001)
+assert_eq numpy.argmin(a), 0
+assert_eq numpy.argmax(a), 3
+
+let cs = numpy.cumsum(a)
+numpy.assert_near(cs[3], 10.0, 0.000001)
+let cp_arr = numpy.cumprod(a)
+numpy.assert_near(cp_arr[3], 24.0, 0.000001)
+
+let df = numpy.diff(numpy.array([1.0, 4.0, 9.0, 16.0]))
+assert_eq df.size, 3
+numpy.assert_near(df[0], 3.0, 0.000001)
+numpy.assert_near(df[2], 7.0, 0.000001)
+
+# Trapezoidal integration of y = x on [0, 4] with dx = 1 -> area = 8.0
+let y_lin = numpy.array([0.0, 1.0, 2.0, 3.0, 4.0])
+numpy.assert_near(numpy.trapz(y_lin, 1.0), 8.0, 0.000001)
+
+# 2D Axis reductions on [[1, 2, 3], [4, 5, 6]]
+let s_ax0 = numpy.sum_axis(mat, 0)
+let s_ax1 = numpy.sum_axis(mat, 1)
+assert_eq s_ax0.size, 3
+assert_eq s_ax1.size, 2
+numpy.assert_near(s_ax0[0], 5.0, 0.000001)
+numpy.assert_near(s_ax0[2], 9.0, 0.000001)
+numpy.assert_near(s_ax1[0], 6.0, 0.000001)
+numpy.assert_near(s_ax1[1], 15.0, 0.000001)
+
+let min_ax0 = numpy.min_axis(mat, 0)
+let max_ax1 = numpy.max_axis(mat, -1)
+numpy.assert_near(min_ax0[1], 2.0, 0.000001)
+numpy.assert_near(max_ax1[0], 3.0, 0.000001)
+numpy.assert_near(max_ax1[1], 6.0, 0.000001)
+
+call nx_assert_summary
+print "NUMPY_MATH_REDUCE_TEST_PASS"

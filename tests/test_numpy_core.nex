@@ -1,0 +1,252 @@
+# ==============================================================================
+# TEST SUITE 1: NEXUS NUMPY CORE, CONSTRUCTORS, DTYPES, VIEWS & SHAPE OPS
+# ==============================================================================
+
+import numpy
+
+# 1. 1D & 2D Array Literals and Properties
+let a = numpy.array([1, 2, 3, 4, 5])
+assert_eq a.ndim, 1
+assert_eq a.size, 5
+assert_eq a.dtype, numpy.INT64
+assert_eq a.itemsize, 8
+assert_eq a.nbytes, 40
+numpy.assert_near(a[0], 1.0, 0.000001)
+numpy.assert_near(a[4], 5.0, 0.000001)
+numpy.assert_near(numpy.get(a, -1), 5.0, 0.000001)
+assert_eq numpy.get_int(a, 2), 3
+
+let af = numpy.array([1.5, 2.5, 3.5])
+assert_eq af.dtype, numpy.FLOAT64
+numpy.assert_near(af[1], 2.5, 0.000001)
+
+let m = numpy.array([[1, 2, 3], [4, 5, 6]])
+assert_eq m.ndim, 2
+assert_eq m.size, 6
+assert_eq m.shape_dim(0), 2
+assert_eq m.shape_dim(1), 3
+assert_eq m.stride_dim(0), 3
+assert_eq m.stride_dim(1), 1
+numpy.assert_near(m[0, 1], 2.0, 0.000001)
+numpy.assert_near(m[1, 2], 6.0, 0.000001)
+numpy.assert_near(numpy.get2(m, -1, -2), 5.0, 0.000001)
+
+# 2. Constructors: zeros, ones, full, empty, arange, linspace, logspace, identity, eye, diag
+let z0 = numpy.zeros(0)
+assert_eq z0.ndim, 1
+assert_eq z0.size, 0
+
+let z1 = numpy.zeros(4)
+assert_eq z1.size, 4
+numpy.assert_near(z1[0], 0.0, 0.000001)
+numpy.assert_near(z1[3], 0.0, 0.000001)
+
+let o2 = numpy.ones_2d(2, 3)
+assert_eq o2.ndim, 2
+assert_eq o2.size, 6
+numpy.assert_near(o2[1, 1], 1.0, 0.000001)
+
+let f2 = numpy.full_2d(2, 2, 7.5)
+numpy.assert_near(f2[0, 1], 7.5, 0.000001)
+numpy.assert_near(f2[1, 0], 7.5, 0.000001)
+
+let emp = numpy.empty(3)
+assert_eq emp.size, 3
+numpy.assert_near(emp[2], 0.0, 0.000001)
+
+let ar1 = numpy.arange(0.0, 10.0, 2.0)
+assert_eq ar1.size, 5
+numpy.assert_near(ar1[0], 0.0, 0.000001)
+numpy.assert_near(ar1[4], 8.0, 0.000001)
+
+let ar_neg = numpy.arange(5.0, 0.0, -1.0)
+assert_eq ar_neg.size, 5
+numpy.assert_near(ar_neg[0], 5.0, 0.000001)
+numpy.assert_near(ar_neg[4], 1.0, 0.000001)
+
+let lin = numpy.linspace(0.0, 1.0, 5)
+assert_eq lin.size, 5
+numpy.assert_near(lin[0], 0.0, 0.000001)
+numpy.assert_near(lin[2], 0.5, 0.000001)
+numpy.assert_near(lin[4], 1.0, 0.000001)
+
+let lspace = numpy.logspace(0.0, 3.0, 4)
+assert_eq lspace.size, 4
+numpy.assert_near(lspace[0], 1.0, 0.0001)
+numpy.assert_near(lspace[1], 10.0, 0.001)
+numpy.assert_near(lspace[2], 100.0, 0.01)
+numpy.assert_near(lspace[3], 1000.0, 0.1)
+
+let id3 = numpy.identity(3)
+assert_eq id3.ndim, 2
+assert_eq id3.size, 9
+numpy.assert_near(id3[0, 0], 1.0, 0.000001)
+numpy.assert_near(id3[0, 1], 0.0, 0.000001)
+numpy.assert_near(id3[2, 2], 1.0, 0.000001)
+
+let eye23 = numpy.eye(2, 3)
+assert_eq eye23.shape_dim(0), 2
+assert_eq eye23.shape_dim(1), 3
+numpy.assert_near(eye23[1, 1], 1.0, 0.000001)
+numpy.assert_near(eye23[1, 2], 0.0, 0.000001)
+
+let d_vec = numpy.array([10, 20, 30])
+let d_mat = numpy.diag(d_vec)
+assert_eq d_mat.ndim, 2
+numpy.assert_near(d_mat[0, 0], 10.0, 0.000001)
+numpy.assert_near(d_mat[1, 1], 20.0, 0.000001)
+numpy.assert_near(d_mat[2, 2], 30.0, 0.000001)
+numpy.assert_near(d_mat[0, 2], 0.0, 0.000001)
+
+let d_ext = numpy.diag(d_mat)
+assert_eq d_ext.ndim, 1
+assert_eq d_ext.size, 3
+numpy.assert_near(d_ext[1], 20.0, 0.000001)
+
+# 3. 3D Tensor Construction & Indexing
+let t3 = numpy.zeros_3d(2, 3, 4)
+assert_eq t3.ndim, 3
+assert_eq t3.size, 24
+numpy.set3(t3, 1, 2, 3, 42.5)
+numpy.assert_near(numpy.get3(t3, 1, 2, 3), 42.5, 0.000001)
+numpy.assert_near(numpy.get3(t3, -1, -1, -1), 42.5, 0.000001)
+
+# 4. Data Type Conversion (astype) & Coercion
+let fl_arr = numpy.array([1.9, -2.7, 0.0, 5.1])
+let i_arr = numpy.astype(fl_arr, numpy.INT64)
+assert_eq i_arr.dtype, numpy.INT64
+numpy.assert_near(i_arr[0], 1.0, 0.000001)
+numpy.assert_near(i_arr[1], -2.0, 0.000001)
+numpy.assert_near(i_arr[3], 5.0, 0.000001)
+
+let b_arr = numpy.astype(fl_arr, numpy.BOOL)
+assert_eq b_arr.dtype, numpy.BOOL
+numpy.assert_near(b_arr[0], 1.0, 0.000001)
+numpy.assert_near(b_arr[2], 0.0, 0.000001)
+
+# 5. Slicing, Views vs Copies, Mutation Semantics
+let base = numpy.arange(0.0, 10.0, 1.0)
+let sl = numpy.slice(base, 2, 7)
+assert_eq sl.size, 5
+assert_eq numpy.is_view(sl), 1
+numpy.assert_near(sl[0], 2.0, 0.000001)
+numpy.assert_near(sl[4], 6.0, 0.000001)
+
+# Mutating view updates base array
+numpy.set(sl, 1, 99.0)
+numpy.assert_near(base[3], 99.0, 0.000001)
+
+# Mutating copy does NOT update base array
+let cp = numpy.copy(base)
+assert_eq numpy.is_view(cp), 0
+numpy.set(cp, 3, -55.0)
+numpy.assert_near(base[3], 99.0, 0.000001)
+numpy.assert_near(cp[3], -55.0, 0.000001)
+
+# Stepped slice and 2D submatrix view
+let sl_step = numpy.slice_step(base, 0, 10, 2)
+assert_eq sl_step.size, 5
+numpy.assert_near(sl_step[2], 4.0, 0.000001)
+
+let sub2d = numpy.slice_2d(m, 0, 2, 1, 3)
+assert_eq sub2d.shape_dim(0), 2
+assert_eq sub2d.shape_dim(1), 2
+numpy.assert_near(sub2d[0, 0], 2.0, 0.000001)
+numpy.assert_near(sub2d[1, 1], 6.0, 0.000001)
+
+let rview = numpy.row_view(m, 1)
+assert_eq rview.size, 3
+numpy.assert_near(rview[0], 4.0, 0.000001)
+let cview = numpy.col_view(m, 2)
+assert_eq cview.size, 2
+numpy.assert_near(cview[0], 3.0, 0.000001)
+numpy.assert_near(cview[1], 6.0, 0.000001)
+
+# 6. Reshape, Flatten, Transpose, Expand, Squeeze, Concat, Stack, Split
+let r6 = numpy.arange(1.0, 7.0, 1.0)
+let m23 = r6.reshape(2, 3)
+assert_eq m23.ndim, 2
+assert_eq m23.shape_dim(0), 2
+assert_eq m23.shape_dim(1), 3
+numpy.assert_near(m23[1, 2], 6.0, 0.000001)
+
+# Reshape with -1 inference
+let m32 = m23.reshape(3, -1)
+assert_eq m32.shape_dim(0), 3
+assert_eq m32.shape_dim(1), 2
+numpy.assert_near(m32[2, 1], 6.0, 0.000001)
+
+let mt = m23.transpose()
+assert_eq mt.shape_dim(0), 3
+assert_eq mt.shape_dim(1), 2
+numpy.assert_near(mt[0, 1], 4.0, 0.000001)
+numpy.assert_near(mt[2, 0], 3.0, 0.000001)
+
+let fl = mt.flatten()
+assert_eq fl.ndim, 1
+assert_eq fl.size, 6
+numpy.assert_near(fl[1], 4.0, 0.000001)
+
+let exp_a = numpy.expand_dims(d_vec, 0)
+assert_eq exp_a.ndim, 2
+assert_eq exp_a.shape_dim(0), 1
+assert_eq exp_a.shape_dim(1), 3
+let sq_a = numpy.squeeze(exp_a)
+assert_eq sq_a.ndim, 1
+assert_eq sq_a.size, 3
+
+let c1 = numpy.array([1, 2])
+let c2 = numpy.array([3, 4, 5])
+let cat = numpy.concat(c1, c2)
+assert_eq cat.size, 5
+numpy.assert_near(cat[0], 1.0, 0.000001)
+numpy.assert_near(cat[4], 5.0, 0.000001)
+
+let v1 = numpy.array([1, 2, 3])
+let v2 = numpy.array([4, 5, 6])
+let vs = numpy.vstack(v1, v2)
+assert_eq vs.ndim, 2
+assert_eq vs.shape_dim(0), 2
+assert_eq vs.shape_dim(1), 3
+numpy.assert_near(vs[1, 1], 5.0, 0.000001)
+
+let hs = numpy.hstack(vs, vs)
+assert_eq hs.shape_dim(0), 2
+assert_eq hs.shape_dim(1), 6
+numpy.assert_near(hs[0, 4], 2.0, 0.000001)
+
+let sp1 = numpy.split_first(cat, 2)
+let sp2 = numpy.split_second(cat, 2)
+assert_eq sp1.size, 2
+assert_eq sp2.size, 3
+numpy.assert_near(sp2[0], 3.0, 0.000001)
+
+# 7. View Mutation & Reference-Counted Shared Storage Lifetimes
+let base_arr = numpy.array([10.0, 20.0, 30.0, 40.0])
+assert_eq numpy.refcount(base_arr), 1
+let sub_view = numpy.slice(base_arr, 1, 3)
+assert_eq numpy.refcount(base_arr), 2
+assert_eq numpy.refcount(sub_view), 1
+
+# Mutating through view updates base_arr
+numpy.set(sub_view, 0, 222.0)
+numpy.assert_near(base_arr[1], 222.0, 0.000001)
+
+# Releasing base_arr while sub_view is alive preserves shared storage and sub_view validity
+assert_eq numpy.free(base_arr), 1
+assert_eq numpy.is_valid(sub_view), 1
+numpy.assert_near(sub_view[0], 222.0, 0.000001)
+numpy.assert_near(sub_view[1], 30.0, 0.000001)
+
+# Releasing sub_view drops both view and base refcounts to 0 and invalidates both
+assert_eq numpy.free(sub_view), 0
+assert_eq numpy.is_valid(sub_view), 0
+assert_eq numpy.is_valid(base_arr), 0
+
+# Shape mismatch check in allclose & array_equal (2x3 vs 3x2)
+assert_eq numpy.allclose(m23, m32), 0
+assert_eq numpy.array_equal(m23, m32), 0
+
+
+call nx_assert_summary
+print "NUMPY_CORE_TEST_PASS"

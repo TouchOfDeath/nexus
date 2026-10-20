@@ -1,0 +1,8 @@
+import numpy
+let A = numpy.array([[3.0, 1.0, -1.0], [2.0, 4.0, 1.0], [-1.0, 2.0, 5.0]])
+let b = numpy.array([4.0, 1.0, 1.0])
+let x = numpy.solve(A, b)
+let Ainv = numpy.inv(A)
+numpy.print(x)
+numpy.print(Ainv)
+print "EXAMPLE_09_OK"

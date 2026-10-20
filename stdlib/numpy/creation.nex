@@ -1,0 +1,743 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — ARRAY CONSTRUCTION & JOINING
+# ==============================================================================
+# Constructors: array, zeros, ones, full, empty, arange, linspace, identity,
+# eye, diag/diagonal, from_buffer, from_ints, and structural joining/splitting.
+# ==============================================================================
+
+include "stdlib/numpy/core.nex"
+
+fn np_from_buffer_1d(buf, n, dtype) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let dt = dtype
+    if dt < 1 { dt = NP_FLOAT64 }
+    if dt > 4 { dt = NP_FLOAT64 }
+    let out = _np_alloc_ndarray_header(1, n, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < n {
+        let v = load64 [buf + i * 8]
+        let cv = np_coerce_scalar_for_dtype(v, dt)
+        store64 [dst + i * 8] cv
+        i = i + 1
+    }
+    return out
+}
+
+fn np_from_buffer_2d(buf, rows, cols, dtype) {
+    if rows < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if cols < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let dt = dtype
+    if dt < 1 { dt = NP_FLOAT64 }
+    if dt > 4 { dt = NP_FLOAT64 }
+    let out = _np_alloc_ndarray_header(2, rows, cols, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let total = rows * cols
+    let i = 0
+    while i < total {
+        let v = load64 [buf + i * 8]
+        let cv = np_coerce_scalar_for_dtype(v, dt)
+        store64 [dst + i * 8] cv
+        i = i + 1
+    }
+    return out
+}
+
+fn np_from_buffer(buf, n) {
+    if buf == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    return np_from_buffer_1d(buf, n, NP_FLOAT64)
+}
+
+fn np_from_ints(buf, n) {
+    if buf == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = _np_alloc_ndarray_header(1, n, 0, 0, 0, NP_INT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < n {
+        let iv = load64 [buf + i * 8]
+        let fv = itof iv
+        store64 [dst + i * 8] fv
+        i = i + 1
+    }
+    return out
+}
+
+fn np_to_int_buffer(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let alloc_words = sz
+    if alloc_words <= 0 { alloc_words = 1 }
+    let alloc_bytes = alloc_words * 8
+    let buf = alloc alloc_bytes
+    let i = 0
+    while i < sz {
+        let fv = np_flat_get(arr, i)
+        let iv = ftoi fv
+        store64 [buf + i * 8] iv
+        i = i + 1
+    }
+    return buf
+}
+
+fn np_to_float_buffer(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let alloc_words = sz
+    if alloc_words <= 0 { alloc_words = 1 }
+    let alloc_bytes = alloc_words * 8
+    let buf = alloc alloc_bytes
+    let i = 0
+    while i < sz {
+        let fv = np_flat_get(arr, i)
+        store64 [buf + i * 8] fv
+        i = i + 1
+    }
+    return buf
+}
+
+fn np_array(src) {
+    if np_is_valid(src) == 1 {
+        return np_copy(src)
+    }
+    _np_err(NP_ERR_NULL)
+    return 0
+}
+
+fn np_zeros(n) {
+    return _np_alloc_ndarray_header(1, n, 0, 0, 0, NP_FLOAT64, 0)
+}
+
+fn np_zeros_dtype(n, dtype) {
+    if dtype < 1 {
+        _np_err(NP_ERR_DTYPE)
+        return 0
+    }
+    if dtype > 4 {
+        _np_err(NP_ERR_DTYPE)
+        return 0
+    }
+    return _np_alloc_ndarray_header(1, n, 0, 0, 0, dtype, 0)
+}
+
+fn np_zeros_2d(rows, cols) {
+    return _np_alloc_ndarray_header(2, rows, cols, 0, 0, NP_FLOAT64, 0)
+}
+
+fn np_zeros_3d(d0, d1, d2) {
+    return _np_alloc_ndarray_header(3, d0, d1, d2, 0, NP_FLOAT64, 0)
+}
+
+fn np_zeros_4d(d0, d1, d2, d3) {
+    return _np_alloc_ndarray_header(4, d0, d1, d2, d3, NP_FLOAT64, 0)
+}
+
+fn np_zeros_like(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    return _np_alloc_ndarray_header(load64 [arr + 24], load64 [arr + 72], load64 [arr + 80], load64 [arr + 88], load64 [arr + 96], load64 [arr + 16], 0)
+}
+
+fn np_empty(n) {
+    # Safe zero-initialized allocation (never exposes uninitialized memory)
+    return _np_alloc_ndarray_header(1, n, 0, 0, 0, NP_FLOAT64, 0)
+}
+
+fn np_empty_2d(rows, cols) {
+    return _np_alloc_ndarray_header(2, rows, cols, 0, 0, NP_FLOAT64, 0)
+}
+
+fn np_empty_3d(d0, d1, d2) {
+    return _np_alloc_ndarray_header(3, d0, d1, d2, 0, NP_FLOAT64, 0)
+}
+
+fn np_empty_like(arr) {
+    return np_zeros_like(arr)
+}
+
+fn np_full(n, val: float) {
+    let out = _np_alloc_ndarray_header(1, n, 0, 0, 0, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < n {
+        store64 [dst + i * 8] val
+        i = i + 1
+    }
+    return out
+}
+
+fn np_full_2d(rows, cols, val: float) {
+    let out = _np_alloc_ndarray_header(2, rows, cols, 0, 0, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let total = rows * cols
+    let i = 0
+    while i < total {
+        store64 [dst + i * 8] val
+        i = i + 1
+    }
+    return out
+}
+
+fn np_full_3d(d0, d1, d2, val: float) {
+    let out = _np_alloc_ndarray_header(3, d0, d1, d2, 0, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let total = d0 * d1 * d2
+    let i = 0
+    while i < total {
+        store64 [dst + i * 8] val
+        i = i + 1
+    }
+    return out
+}
+
+fn np_full_like(arr, val: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let dt = load64 [arr + 16]
+    let out = _np_alloc_ndarray_header(load64 [arr + 24], load64 [arr + 72], load64 [arr + 80], load64 [arr + 88], load64 [arr + 96], dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let sz = load64 [out + 32]
+    let cv = np_coerce_scalar_for_dtype(val, dt)
+    let i = 0
+    while i < sz {
+        store64 [dst + i * 8] cv
+        i = i + 1
+    }
+    return out
+}
+
+fn np_ones(n) {
+    return np_full(n, 1.0)
+}
+
+fn np_ones_dtype(n, dtype) {
+    let out = np_zeros_dtype(n, dtype)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < n {
+        store64 [dst + i * 8] 1.0
+        i = i + 1
+    }
+    return out
+}
+
+fn np_ones_2d(rows, cols) {
+    return np_full_2d(rows, cols, 1.0)
+}
+
+fn np_ones_3d(d0, d1, d2) {
+    return np_full_3d(d0, d1, d2, 1.0)
+}
+
+fn np_ones_like(arr) {
+    return np_full_like(arr, 1.0)
+}
+
+fn np_arange(start: float, stop: float, step: float) {
+    if step == 0.0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if np_isfinite_scalar(start) == 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    if np_isfinite_scalar(stop) == 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    if np_isfinite_scalar(step) == 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+
+    let count = 0
+    let diff = stop - start
+    if step > 0.0 {
+        if stop > start {
+            let ratio = diff / step
+            let ir = ftoi ratio
+            let rem = start + (itof ir) * step
+            # Guard against tiny floating-point overshoot near endpoint
+            let eps = step * 0.00000001
+            let stop_minus_eps = stop - eps
+            if rem < stop_minus_eps {
+                count = ir + 1
+            } else {
+                count = ir
+            }
+        }
+    } else {
+        if stop < start {
+            let ratio = diff / step
+            let ir = ftoi ratio
+            let rem = start + (itof ir) * step
+            let eps = (0.0 - step) * 0.00000001
+            let stop_plus_eps = stop + eps
+            if rem > stop_plus_eps {
+                count = ir + 1
+            } else {
+                count = ir
+            }
+        }
+    }
+
+    let out = _np_alloc_ndarray_header(1, count, 0, 0, 0, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < count {
+        let fi = itof i
+        let v = start + fi * step
+        store64 [dst + i * 8] v
+        i = i + 1
+    }
+    return out
+}
+
+fn np_linspace(start: float, stop: float, count) {
+    if count < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = _np_alloc_ndarray_header(1, count, 0, 0, 0, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    if count == 0 { return out }
+    let dst = load64 [out + 8]
+    if count == 1 {
+        store64 [dst + 0] start
+        return out
+    }
+    let span = stop - start
+    let denom = itof (count - 1)
+    let step = span / denom
+    let i = 0
+    while i < count {
+        if i == (count - 1) {
+            store64 [dst + i * 8] stop
+        } else {
+            let fi = itof i
+            let v = start + fi * step
+            store64 [dst + i * 8] v
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_eye_k(rows, cols, k) {
+    if rows < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if cols < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = _np_alloc_ndarray_header(2, rows, cols, 0, 0, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let r = 0
+    while r < rows {
+        let c = r + k
+        if c >= 0 {
+            if c < cols {
+                let idx = r * cols + c
+                store64 [dst + idx * 8] 1.0
+            }
+        }
+        r = r + 1
+    }
+    return out
+}
+
+fn np_eye(rows, cols) {
+    return np_eye_k(rows, cols, 0)
+}
+
+fn np_identity(n) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    return np_eye_k(n, n, 0)
+}
+
+fn np_diag(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let dt = load64 [arr + 16]
+    if nd == 1 {
+        let n = load64 [arr + 72]
+        let out = _np_alloc_ndarray_header(2, n, n, 0, 0, dt, 0)
+        if out == 0 { return 0 }
+        let dst = load64 [out + 8]
+        let i = 0
+        while i < n {
+            let v = np_get(arr, i)
+            let idx = i * n + i
+            store64 [dst + idx * 8] v
+            i = i + 1
+        }
+        return out
+    }
+    if nd == 2 {
+        let rows = load64 [arr + 72]
+        let cols = load64 [arr + 80]
+        let m = rows
+        if cols < m { m = cols }
+        let out = _np_alloc_ndarray_header(1, m, 0, 0, 0, dt, 0)
+        if out == 0 { return 0 }
+        let dst = load64 [out + 8]
+        let i = 0
+        while i < m {
+            let v = np_get2(arr, i, i)
+            store64 [dst + i * 8] v
+            i = i + 1
+        }
+        return out
+    }
+    _np_err(NP_ERR_INVALID_DIM)
+    return 0
+}
+
+fn np_diagonal(arr) {
+    return np_diag(arr)
+}
+
+# --- Structural Concatenation, Stacking, Splitting & Tiling ---
+
+fn np_concat_axis(a, b, axis) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    if nda != ndb {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let ax = axis
+    if ax < 0 { ax = ax + nda }
+    if ax < 0 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if ax >= nda {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let dt = np_promote_dtype(load64 [a + 16], load64 [b + 16])
+
+    if nda == 1 {
+        let na = load64 [a + 72]
+        let nb = load64 [b + 72]
+        let out = _np_alloc_ndarray_header(1, na + nb, 0, 0, 0, dt, 0)
+        if out == 0 { return 0 }
+        let dst = load64 [out + 8]
+        let i = 0
+        while i < na {
+            let v = np_get(a, i)
+            store64 [dst + i * 8] v
+            i = i + 1
+        }
+        let j = 0
+        while j < nb {
+            let v = np_get(b, j)
+            let d_idx = na + j
+            store64 [dst + d_idx * 8] v
+            j = j + 1
+        }
+        return out
+    }
+    if nda == 2 {
+        let ra = load64 [a + 72]
+        let ca = load64 [a + 80]
+        let rb = load64 [b + 72]
+        let cb = load64 [b + 80]
+        if ax == 0 {
+            if ca != cb {
+                _np_err(NP_ERR_INVALID_SHAPE)
+                return 0
+            }
+            let out = _np_alloc_ndarray_header(2, ra + rb, ca, 0, 0, dt, 0)
+            if out == 0 { return 0 }
+            let r = 0
+            while r < ra {
+                let c = 0
+                while c < ca {
+                    np_set2(out, r, c, np_get2(a, r, c))
+                    c = c + 1
+                }
+                r = r + 1
+            }
+            let r2 = 0
+            while r2 < rb {
+                let c2 = 0
+                while c2 < cb {
+                    np_set2(out, ra + r2, c2, np_get2(b, r2, c2))
+                    c2 = c2 + 1
+                }
+                r2 = r2 + 1
+            }
+            return out
+        }
+        if ax == 1 {
+            if ra != rb {
+                _np_err(NP_ERR_INVALID_SHAPE)
+                return 0
+            }
+            let out = _np_alloc_ndarray_header(2, ra, ca + cb, 0, 0, dt, 0)
+            if out == 0 { return 0 }
+            let r = 0
+            while r < ra {
+                let c = 0
+                while c < ca {
+                    np_set2(out, r, c, np_get2(a, r, c))
+                    c = c + 1
+                }
+                let c2 = 0
+                while c2 < cb {
+                    np_set2(out, r, ca + c2, np_get2(b, r, c2))
+                    c2 = c2 + 1
+                }
+                r = r + 1
+            }
+            return out
+        }
+    }
+    _np_err(NP_ERR_INVALID_DIM)
+    return 0
+}
+
+fn np_concat(a, b) {
+    return np_concat_axis(a, b, 0)
+}
+
+fn np_concatenate(a, b) {
+    return np_concat_axis(a, b, 0)
+}
+
+fn np_vstack(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    if nda == 1 {
+        if ndb == 1 {
+            let na = load64 [a + 72]
+            let nb = load64 [b + 72]
+            if na != nb {
+                _np_err(NP_ERR_INVALID_SHAPE)
+                return 0
+            }
+            let dt = np_promote_dtype(load64 [a + 16], load64 [b + 16])
+            let out = _np_alloc_ndarray_header(2, 2, na, 0, 0, dt, 0)
+            if out == 0 { return 0 }
+            let c = 0
+            while c < na {
+                np_set2(out, 0, c, np_get(a, c))
+                np_set2(out, 1, c, np_get(b, c))
+                c = c + 1
+            }
+            return out
+        }
+    }
+    return np_concat_axis(a, b, 0)
+}
+
+fn np_hstack(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    if nda == 1 {
+        return np_concat_axis(a, b, 0)
+    }
+    return np_concat_axis(a, b, 1)
+}
+
+fn np_stack(a, b, axis) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    if nda != 1 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if ndb != 1 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let na = load64 [a + 72]
+    let nb = load64 [b + 72]
+    if na != nb {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let ax = axis
+    if ax < 0 { ax = ax + 2 }
+    if ax == 0 {
+        return np_vstack(a, b)
+    }
+    if ax == 1 {
+        let v = np_vstack(a, b)
+        return np_transpose(v)
+    }
+    _np_err(NP_ERR_INVALID_DIM)
+    return 0
+}
+
+fn np_split_first(arr, split_idx) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let s0 = load64 [arr + 72]
+    if split_idx < 0 {
+        _np_err(NP_ERR_OUT_OF_BOUNDS)
+        return 0
+    }
+    if split_idx > s0 {
+        _np_err(NP_ERR_OUT_OF_BOUNDS)
+        return 0
+    }
+    let v = np_slice(arr, 0, split_idx)
+    return np_copy(v)
+}
+
+fn np_split_second(arr, split_idx) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let s0 = load64 [arr + 72]
+    if split_idx < 0 {
+        _np_err(NP_ERR_OUT_OF_BOUNDS)
+        return 0
+    }
+    if split_idx > s0 {
+        _np_err(NP_ERR_OUT_OF_BOUNDS)
+        return 0
+    }
+    let v = np_slice(arr, split_idx, s0)
+    return np_copy(v)
+}
+
+fn np_tile(arr, reps) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if reps < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let dt = load64 [arr + 16]
+    let out = _np_alloc_ndarray_header(1, sz * reps, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let r = 0
+    while r < reps {
+        let i = 0
+        while i < sz {
+            let v = np_flat_get(arr, i)
+            let d_idx = r * sz + i
+            store64 [dst + d_idx * 8] v
+            i = i + 1
+        }
+        r = r + 1
+    }
+    return out
+}
+
+fn np_repeat(arr, repeats) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if repeats < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let dt = load64 [arr + 16]
+    let out = _np_alloc_ndarray_header(1, sz * repeats, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        let r = 0
+        while r < repeats {
+            let d_idx = i * repeats + r
+            store64 [dst + d_idx * 8] v
+            r = r + 1
+        }
+        i = i + 1
+    }
+    return out
+}

@@ -61,7 +61,7 @@ static int needs_xl_compiler(const char *code_path) {
     size_t rd = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     buf[rd] = '\0';
-    int use_xl = (strstr(buf, "_ae_") != NULL || sz > 48000);
+    int use_xl = (strstr(buf, "_ae_") != NULL || strstr(buf, "_np_") != NULL || sz > 48000);
     free(buf);
     return use_xl;
 }

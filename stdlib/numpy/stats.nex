@@ -1,0 +1,445 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — NUMERICAL STATISTICS
+# ==============================================================================
+# Foundational statistical primitives: mean, median, variance & standard
+# deviation (population ddof=0 & sample ddof=1 via two-pass compensated algorithm),
+# percentiles, quantiles, weighted average, covariance, Pearson correlation,
+# histograms, and frequency bincounts.
+# ==============================================================================
+
+include "stdlib/numpy/sort.nex"
+
+fn np_mean(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let s = np_sum(arr)
+    let n_f = itof sz
+    return s / n_f
+}
+
+fn np_mean_axis(arr, axis) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let ax = axis
+    if ax < 0 { ax = ax + 2 }
+    let s_arr = np_sum_axis(arr, ax)
+    if s_arr == 0 { return 0 }
+    let count = load64 [arr + 72]
+    if ax == 1 { count = load64 [arr + 80] }
+    if count <= 0 {
+        _np_err(NP_ERR_EMPTY)
+        return 0
+    }
+    return np_div_scalar(s_arr, itof count)
+}
+
+# Two-pass compensated variance with configurable degrees of freedom (ddof)
+# Normalization: divides by (N - ddof). Default np_var uses ddof=0 (population);
+# pass ddof=1 for unbiased sample variance.
+fn np_var_ddof(arr, ddof) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    if ddof < 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let dof = sz - ddof
+    if dof <= 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let mu = np_mean(arr)
+    if np_isnan_scalar(mu) == 1 { return np_nan() }
+
+    # Corrected two-pass algorithm: sum((x - mu)^2) - (sum(x - mu))^2 / N
+    let sum_sq = 0.0
+    let sum_dev = 0.0
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        if np_isnan_scalar(x) == 1 { return np_nan() }
+        let d = x - mu
+        sum_sq = sum_sq + d * d
+        sum_dev = sum_dev + d
+        i = i + 1
+    }
+    let nf = itof sz
+    let corr = (sum_dev * sum_dev) / nf
+    let num = sum_sq - corr
+    if num < 0.0 { num = 0.0 }
+    return num / (itof dof)
+}
+
+fn np_var(arr) -> float {
+    return np_var_ddof(arr, 0)
+}
+
+fn np_sample_var(arr) -> float {
+    return np_var_ddof(arr, 1)
+}
+
+fn np_std_ddof(arr, ddof) -> float {
+    let v = np_var_ddof(arr, ddof)
+    if np_isnan_scalar(v) == 1 { return np_nan() }
+    return fsqrt v
+}
+
+fn np_std(arr) -> float {
+    return np_std_ddof(arr, 0)
+}
+
+fn np_sample_std(arr) -> float {
+    return np_std_ddof(arr, 1)
+}
+
+fn np_median(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let sorted = np_sort(arr)
+    let sdata = load64 [sorted + 8]
+    # Check if any NaN (placed at the end by np_sort)
+    let last_v = load64 [sdata + (sz - 1) * 8]
+    if np_isnan_scalar(last_v) == 1 { return np_nan() }
+
+    let mid = sz / 2
+    if sz % 2 == 1 {
+        return load64 [sdata + mid * 8]
+    }
+    let a = load64 [sdata + (mid - 1) * 8]
+    let b = load64 [sdata + mid * 8]
+    let ab = fadd a b
+    return 0.5 * ab
+}
+
+# Linear interpolation quantile (q in [0.0, 1.0], matching NumPy method='linear')
+fn np_quantile(arr, q: float) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    if np_isnan_scalar(q) == 1 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if q < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if q > 1.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let sorted = np_sort(arr)
+    let sdata = load64 [sorted + 8]
+    let last_el = load64 [sdata + (sz - 1) * 8]
+    if np_isnan_scalar(last_el) == 1 {
+        return np_nan()
+    }
+    if sz == 1 {
+        return load64 [sdata + 0]
+    }
+    let v_idx = q * (itof (sz - 1))
+    let lo_f = np_floor_scalar(v_idx)
+    let hi_f = np_ceil_scalar(v_idx)
+    let lo = ftoi lo_f
+    let hi = ftoi hi_f
+    if lo < 0 { lo = 0 }
+    if hi >= sz { hi = sz - 1 }
+    let frac = v_idx - lo_f
+    let vlo = load64 [sdata + lo * 8]
+    let vhi = load64 [sdata + hi * 8]
+    let dv = fsub vhi vlo
+    let sc = fmul frac dv
+    return fadd vlo sc
+}
+
+fn np_percentile(arr, p: float) -> float {
+    if p < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if p > 100.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    return np_quantile(arr, p / 100.0)
+}
+
+fn np_weighted_avg(arr, weights) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    if np_is_valid(weights) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let n = load64 [arr + 32]
+    let nw = load64 [weights + 32]
+    if n != nw {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return np_nan()
+    }
+    if n == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let wsum = np_sum(weights)
+    if wsum == 0.0 {
+        _np_err(NP_ERR_DIV_ZERO)
+        return np_nan()
+    }
+    let num = 0.0
+    let i = 0
+    while i < n {
+        let x = np_flat_get(arr, i)
+        let w = np_flat_get(weights, i)
+        num = num + x * w
+        i = i + 1
+    }
+    return num / wsum
+}
+
+fn np_cov_scalar(x, y, ddof) -> float {
+    if np_is_valid(x) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    if np_is_valid(y) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let nx = load64 [x + 32]
+    let ny = load64 [y + 32]
+    if nx != ny {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return np_nan()
+    }
+    let dof = nx - ddof
+    if dof <= 0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let mux = np_mean(x)
+    let muy = np_mean(y)
+    let acc = 0.0
+    let i = 0
+    while i < nx {
+        let dx = np_flat_get(x, i) - mux
+        let dy = np_flat_get(y, i) - muy
+        acc = acc + dx * dy
+        i = i + 1
+    }
+    return acc / (itof dof)
+}
+
+fn np_cov(x, y) {
+    if np_is_valid(x) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(y) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nx = load64 [x + 32]
+    let ny = load64 [y + 32]
+    if nx != ny {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if nx < 2 {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let cxx = np_cov_scalar(x, x, 1)
+    let cxy = np_cov_scalar(x, y, 1)
+    let cyy = np_cov_scalar(y, y, 1)
+    let out = np_zeros_2d(2, 2)
+    np_set2(out, 0, 0, cxx)
+    np_set2(out, 0, 1, cxy)
+    np_set2(out, 1, 0, cxy)
+    np_set2(out, 1, 1, cyy)
+    return out
+}
+
+fn np_corrcoef_scalar(x, y) -> float {
+    if np_is_valid(x) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    if np_is_valid(y) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let nx = load64 [x + 32]
+    let ny = load64 [y + 32]
+    if nx != ny {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return np_nan()
+    }
+    if nx < 2 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let cxy = np_cov_scalar(x, y, 1)
+    let sx = np_std_ddof(x, 1)
+    let sy = np_std_ddof(y, 1)
+    let denom = sx * sy
+    if denom == 0.0 {
+        _np_err(NP_ERR_DIV_ZERO)
+        return np_nan()
+    }
+    let r = cxy / denom
+    if r > 1.0 { r = 1.0 }
+    if r < -1.0 { r = -1.0 }
+    return r
+}
+
+fn np_corrcoef(x, y) {
+    let r = np_corrcoef_scalar(x, y)
+    if np_isnan_scalar(r) == 1 { return 0 }
+    let out = np_zeros_2d(2, 2)
+    np_set2(out, 0, 0, 1.0)
+    np_set2(out, 0, 1, r)
+    np_set2(out, 1, 0, r)
+    np_set2(out, 1, 1, 1.0)
+    return out
+}
+
+fn np_histogram_range(arr, bins, range_min: float, range_max: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if bins <= 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if range_min >= range_max {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let out = np_zeros_dtype(bins, NP_INT64)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let span = range_max - range_min
+    let fbins = itof bins
+    let sz = load64 [arr + 32]
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if v >= range_min {
+            if v <= range_max {
+                let b = ftoi (((v - range_min) / span) * fbins)
+                if b >= bins { b = bins - 1 }
+                if b < 0 { b = 0 }
+                let prev = load64 [dst + b * 8]
+                store64 [dst + b * 8] (prev + 1.0)
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_histogram(arr, bins) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        return np_zeros_dtype(bins, NP_INT64)
+    }
+    let lo = np_min(arr)
+    let hi = np_max(arr)
+    if lo == hi {
+        lo = lo - 0.5
+        hi = hi + 0.5
+    }
+    return np_histogram_range(arr, bins, lo, hi)
+}
+
+fn np_bincount(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        return np_zeros_dtype(0, NP_INT64)
+    }
+    let max_val = 0
+    let i = 0
+    while i < sz {
+        let fv = np_flat_get(arr, i)
+        let iv = ftoi fv
+        if iv < 0 {
+            _np_err(NP_ERR_DOMAIN)
+            return 0
+        }
+        if iv > max_val { max_val = iv }
+        i = i + 1
+    }
+    let out = np_zeros_dtype(max_val + 1, NP_INT64)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let j = 0
+    while j < sz {
+        let iv = ftoi (np_flat_get(arr, j))
+        let prev = load64 [dst + iv * 8]
+        store64 [dst + iv * 8] (prev + 1.0)
+        j = j + 1
+    }
+    return out
+}
+
+fn np_histogram_counts(arr, bins, range_min: float, range_max: float) {
+    return np_histogram_range(arr, bins, range_min, range_max)
+}
+
+fn np_histogram_edges(bins, range_min: float, range_max: float) {
+    if bins <= 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if range_min >= range_max {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    return np_linspace(range_min, range_max, bins + 1)
+}

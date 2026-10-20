@@ -1,0 +1,346 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — RANDOM NUMBER GENERATION
+# ==============================================================================
+# Deterministic, reproducible PRNG (L'Ecuyer combined dual-modulus generator)
+# with explicit seed control, isolated NpRng state objects, uniform floats,
+# bounded random integers, Box-Muller normal distribution, permutations,
+# shuffling, and sampling with/without replacement.
+# ==============================================================================
+
+include "stdlib/numpy/linalg.nex"
+
+struct NpRng {
+    s1: int
+    s2: int
+    has_spare: int
+    spare: int
+}
+
+fn np_rng_seed(rng, seed) {
+    if rng == 0 { return 0 }
+    let sd = seed
+    if sd < 0 { sd = 0 - sd }
+    let s1 = (sd % 2147483562) + 1
+    let s2 = ((sd / 2147483562) + sd * 12345 + 9876543) % 2147483398 + 1
+    store64 [rng + 0] s1
+    store64 [rng + 8] s2
+    store64 [rng + 16] 0
+    store64 [rng + 24] 0.0
+    return rng
+}
+
+fn np_rng_create(seed) {
+    let rng = alloc 32
+    np_rng_seed(rng, seed)
+    return rng
+}
+
+fn _np_rng_next_u31(rng) {
+    let s1 = load64 [rng + 0]
+    let s2 = load64 [rng + 8]
+    s1 = (s1 * 40014) % 2147483563
+    s2 = (s2 * 40692) % 2147483399
+    store64 [rng + 0] s1
+    store64 [rng + 8] s2
+    let z = s1 - s2
+    if z < 1 {
+        z = z + 2147483562
+    }
+    return z
+}
+
+fn np_rng_random(rng) -> float {
+    let z = _np_rng_next_u31(rng)
+    let fz = itof z
+    return fz / 2147483563.0
+}
+
+fn np_rng_uniform(rng, low: float, high: float) -> float {
+    if low > high {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    let u = np_rng_random(rng)
+    return low + u * (high - low)
+}
+
+fn np_rng_integers(rng, low, high) {
+    if low >= high {
+        _np_err(NP_ERR_DOMAIN)
+        return low
+    }
+    let span = high - low
+    let z = _np_rng_next_u31(rng)
+    return low + (z % span)
+}
+
+fn np_rng_normal(rng, mean: float, std: float) -> float {
+    if std < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return np_nan()
+    }
+    if std == 0.0 { return mean }
+    let has_sp = load64 [rng + 16]
+    if has_sp == 1 {
+        store64 [rng + 16] 0
+        let sp = load64 [rng + 24]
+        return mean + std * sp
+    }
+    let u1 = np_rng_random(rng)
+    while u1 <= 0.00000001 {
+        u1 = np_rng_random(rng)
+    }
+    let u2 = np_rng_random(rng)
+    let mag = fsqrt (-2.0 * np_log_scalar(u1))
+    let theta = 6.28318530717958647692 * u2
+    let z0 = mag * np_cos_scalar(theta)
+    let z1 = mag * np_sin_scalar(theta)
+    store64 [rng + 16] 1
+    store64 [rng + 24] z1
+    return mean + std * z0
+}
+
+# --- Default Module-Level PRNG (stored in _np_ctx + 88..112) ---
+
+fn _np_default_rng() {
+    np_ensure_init()
+    let s1 = load64 [_np_ctx + 88]
+    if s1 == 0 {
+        np_rng_seed(_np_ctx + 88, 42)
+    }
+    return _np_ctx + 88
+}
+
+fn np_random_seed(seed) {
+    np_ensure_init()
+    np_rng_seed(_np_ctx + 88, seed)
+    return seed
+}
+
+fn np_random_scalar() -> float {
+    let rng = _np_default_rng()
+    return np_rng_random(rng)
+}
+
+fn np_random_uniform_scalar(low: float, high: float) -> float {
+    let rng = _np_default_rng()
+    return np_rng_uniform(rng, low, high)
+}
+
+fn np_random_normal_scalar(mean: float, std: float) -> float {
+    let rng = _np_default_rng()
+    return np_rng_normal(rng, mean, std)
+}
+
+fn np_random_randint_scalar(low, high) {
+    let rng = _np_default_rng()
+    return np_rng_integers(rng, low, high)
+}
+
+# --- Random Array Constructors ---
+
+fn np_random_rand(n) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = np_zeros(n)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let rng = _np_default_rng()
+    let i = 0
+    while i < n {
+        store64 [dst + i * 8] (np_rng_random(rng))
+        i = i + 1
+    }
+    return out
+}
+
+fn np_random_rand_2d(rows, cols) {
+    if rows < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if cols < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = np_zeros_2d(rows, cols)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let total = rows * cols
+    let rng = _np_default_rng()
+    let i = 0
+    while i < total {
+        store64 [dst + i * 8] (np_rng_random(rng))
+        i = i + 1
+    }
+    return out
+}
+
+fn np_random_uniform(low: float, high: float, n) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if low > high {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let out = np_zeros(n)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let rng = _np_default_rng()
+    let i = 0
+    while i < n {
+        store64 [dst + i * 8] (np_rng_uniform(rng, low, high))
+        i = i + 1
+    }
+    return out
+}
+
+fn np_random_normal(mean: float, std: float, n) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if std < 0.0 {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let out = np_zeros(n)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let rng = _np_default_rng()
+    let i = 0
+    while i < n {
+        store64 [dst + i * 8] (np_rng_normal(rng, mean, std))
+        i = i + 1
+    }
+    return out
+}
+
+fn np_random_randn(n) {
+    return np_random_normal(0.0, 1.0, n)
+}
+
+fn np_random_integers(low, high, n) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if low >= high {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let out = np_zeros_dtype(n, NP_INT64)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let rng = _np_default_rng()
+    let i = 0
+    while i < n {
+        let iv = np_rng_integers(rng, low, high)
+        store64 [dst + i * 8] (itof iv)
+        i = i + 1
+    }
+    return out
+}
+
+fn np_random_permutation(n) {
+    if n < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = np_zeros_dtype(n, NP_INT64)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < n {
+        store64 [dst + i * 8] (itof i)
+        i = i + 1
+    }
+    let rng = _np_default_rng()
+    let k = n - 1
+    while k > 0 {
+        let j = np_rng_integers(rng, 0, k + 1)
+        let tmp = load64 [dst + k * 8]
+        store64 [dst + k * 8] (load64 [dst + j * 8])
+        store64 [dst + j * 8] tmp
+        k = k - 1
+    }
+    return out
+}
+
+fn np_random_shuffle(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let out = np_flatten(arr)
+    if out == 0 { return 0 }
+    let n = load64 [out + 32]
+    let dst = load64 [out + 8]
+    let rng = _np_default_rng()
+    let k = n - 1
+    while k > 0 {
+        let j = np_rng_integers(rng, 0, k + 1)
+        let tmp = load64 [dst + k * 8]
+        store64 [dst + k * 8] (load64 [dst + j * 8])
+        store64 [dst + j * 8] tmp
+        k = k - 1
+    }
+    return out
+}
+
+fn np_random_choice(arr, k, replace) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if k < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let n = load64 [arr + 32]
+    if n == 0 {
+        if k > 0 {
+            _np_err(NP_ERR_EMPTY)
+            return 0
+        }
+    }
+    let dt = load64 [arr + 16]
+    let rng = _np_default_rng()
+
+    if replace == 1 {
+        let out = _np_alloc_ndarray_header(1, k, 0, 0, 0, dt, 0)
+        if out == 0 { return 0 }
+        let dst = load64 [out + 8]
+        let i = 0
+        while i < k {
+            let idx = np_rng_integers(rng, 0, n)
+            store64 [dst + i * 8] (np_flat_get(arr, idx))
+            i = i + 1
+        }
+        return out
+    }
+
+    # Sampling without replacement via partial Fisher-Yates shuffle
+    if k > n {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let pool = np_flatten(arr)
+    let pbuf = load64 [pool + 8]
+    let out = _np_alloc_ndarray_header(1, k, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < k {
+        let j = np_rng_integers(rng, i, n)
+        let picked = load64 [pbuf + j * 8]
+        store64 [pbuf + j * 8] (load64 [pbuf + i * 8])
+        store64 [dst + i * 8] picked
+        i = i + 1
+    }
+    return out
+}

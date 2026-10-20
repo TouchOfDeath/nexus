@@ -1,0 +1,202 @@
+# TEST SUITE 4: SORTING, SEARCHING, STATISTICS, RANDOM & SERIALIZATION (I/O)
+import numpy
+
+let u = numpy.array([30.0, 10.0, 50.0, 20.0, 40.0])
+let s = numpy.sort(u)
+assert_eq s.size, 5
+numpy.assert_near(s[0], 10.0, 0.000001)
+numpy.assert_near(s[1], 20.0, 0.000001)
+numpy.assert_near(s[2], 30.0, 0.000001)
+numpy.assert_near(s[3], 40.0, 0.000001)
+numpy.assert_near(s[4], 50.0, 0.000001)
+numpy.assert_near(u[0], 30.0, 0.000001)
+
+let idx = numpy.argsort(u)
+assert_eq idx.size, 5
+numpy.assert_near(idx[0], 1.0, 0.000001)
+numpy.assert_near(idx[1], 3.0, 0.000001)
+numpy.assert_near(idx[2], 0.0, 0.000001)
+numpy.assert_near(idx[3], 4.0, 0.000001)
+numpy.assert_near(idx[4], 2.0, 0.000001)
+
+let u_ip = numpy.copy(u)
+numpy.sort_inplace(u_ip)
+numpy.assert_near(u_ip[0], 10.0, 0.000001)
+numpy.assert_near(u_ip[4], 50.0, 0.000001)
+
+let sorted_arr = numpy.array([10.0, 20.0, 20.0, 20.0, 30.0, 40.0])
+assert_eq numpy.searchsorted_left(sorted_arr, 20.0), 1
+assert_eq numpy.searchsorted_right(sorted_arr, 20.0), 4
+assert_eq numpy.searchsorted(sorted_arr, 25.0), 4
+assert_eq numpy.searchsorted(sorted_arr, 5.0), 0
+assert_eq numpy.searchsorted(sorted_arr, 50.0), 6
+assert_eq numpy.binary_search(sorted_arr, 30.0), 4
+assert_eq numpy.binary_search(sorted_arr, 25.0), -1
+
+let dup = numpy.array([3.0, 1.0, 2.0, 3.0, 1.0, 3.0, 4.0])
+let uvals = numpy.unique(dup)
+let ucnts = numpy.unique_counts(dup)
+assert_eq uvals.size, 4
+assert_eq ucnts.size, 4
+numpy.assert_near(uvals[0], 1.0, 0.000001)
+numpy.assert_near(uvals[1], 2.0, 0.000001)
+numpy.assert_near(uvals[2], 3.0, 0.000001)
+numpy.assert_near(uvals[3], 4.0, 0.000001)
+numpy.assert_near(ucnts[0], 2.0, 0.000001)
+numpy.assert_near(ucnts[1], 1.0, 0.000001)
+numpy.assert_near(ucnts[2], 3.0, 0.000001)
+numpy.assert_near(ucnts[3], 1.0, 0.000001)
+assert_eq numpy.count_value(dup, 3.0), 3
+
+let probe = numpy.array([1.0, 5.0, 3.0, 9.0])
+let mem = numpy.isin(probe, uvals)
+assert_eq mem.size, 4
+numpy.assert_near(mem[0], 1.0, 0.000001)
+numpy.assert_near(mem[1], 0.0, 0.000001)
+numpy.assert_near(mem[2], 1.0, 0.000001)
+numpy.assert_near(mem[3], 0.0, 0.000001)
+
+let data = numpy.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
+numpy.assert_near(numpy.mean(data), 5.0, 0.000001)
+numpy.assert_near(numpy.median(data), 4.5, 0.000001)
+numpy.assert_near(numpy.var(data), 4.0, 0.000001)
+numpy.assert_near(numpy.std(data), 2.0, 0.000001)
+numpy.assert_near(numpy.var_ddof(data, 1), 4.571428571428571, 0.000001)
+numpy.assert_near(numpy.std_ddof(data, 1), 2.138089935299395, 0.000001)
+
+let odd_data = numpy.array([10.0, 2.0, 38.0, 23.0, 38.0])
+numpy.assert_near(numpy.median(odd_data), 23.0, 0.000001)
+
+let m2d = numpy.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+let mu_ax0 = numpy.mean_axis(m2d, 0)
+let mu_ax1 = numpy.mean_axis(m2d, 1)
+numpy.assert_near(mu_ax0[0], 2.5, 0.000001)
+numpy.assert_near(mu_ax0[1], 3.5, 0.000001)
+numpy.assert_near(mu_ax0[2], 4.5, 0.000001)
+numpy.assert_near(mu_ax1[0], 2.0, 0.000001)
+numpy.assert_near(mu_ax1[1], 5.0, 0.000001)
+
+let qarr = numpy.array([10.0, 20.0, 30.0, 40.0, 50.0])
+numpy.assert_near(numpy.quantile(qarr, 0.0), 10.0, 0.000001)
+numpy.assert_near(numpy.quantile(qarr, 0.25), 20.0, 0.000001)
+numpy.assert_near(numpy.quantile(qarr, 0.5), 30.0, 0.000001)
+numpy.assert_near(numpy.quantile(qarr, 0.75), 40.0, 0.000001)
+numpy.assert_near(numpy.quantile(qarr, 1.0), 50.0, 0.000001)
+numpy.assert_near(numpy.percentile(qarr, 50.0), 30.0, 0.000001)
+numpy.assert_near(numpy.percentile(qarr, 12.5), 15.0, 0.000001)
+
+let wts = numpy.array([1.0, 1.0, 1.0, 1.0, 6.0])
+numpy.assert_near(numpy.weighted_avg(qarr, wts), 40.0, 0.000001)
+
+let x_s = numpy.array([1.0, 2.0, 3.0, 4.0, 5.0])
+let y_s = numpy.array([2.0, 4.0, 6.0, 8.0, 10.0])
+let z_s = numpy.array([10.0, 8.0, 6.0, 4.0, 2.0])
+
+let cov_xy = numpy.cov(x_s, y_s)
+numpy.assert_near(cov_xy[0, 0], 2.5, 0.000001)
+numpy.assert_near(cov_xy[0, 1], 5.0, 0.000001)
+numpy.assert_near(cov_xy[1, 0], 5.0, 0.000001)
+numpy.assert_near(cov_xy[1, 1], 10.0, 0.000001)
+
+let corr_xy = numpy.corrcoef(x_s, y_s)
+numpy.assert_near(corr_xy[0, 0], 1.0, 0.000001)
+numpy.assert_near(corr_xy[0, 1], 1.0, 0.000001)
+numpy.assert_near(numpy.corrcoef_scalar(x_s, z_s), -1.0, 0.000001)
+
+let hdata = numpy.array([0.5, 1.5, 1.8, 2.2, 3.1, 3.5, 3.9])
+let hcnts = numpy.histogram_range(hdata, 4, 0.0, 4.0)
+assert_eq hcnts.size, 4
+numpy.assert_near(hcnts[0], 1.0, 0.000001)
+numpy.assert_near(hcnts[1], 2.0, 0.000001)
+numpy.assert_near(hcnts[2], 1.0, 0.000001)
+numpy.assert_near(hcnts[3], 3.0, 0.000001)
+
+let hedges = numpy.histogram_edges(4, 0.0, 4.0)
+assert_eq hedges.size, 5
+numpy.assert_near(hedges[0], 0.0, 0.000001)
+numpy.assert_near(hedges[2], 2.0, 0.000001)
+numpy.assert_near(hedges[4], 4.0, 0.000001)
+
+let bins_in = numpy.array([0.0, 1.0, 1.0, 3.0, 2.0, 1.0, 3.0])
+let bc = numpy.bincount(bins_in)
+assert_eq bc.size, 4
+numpy.assert_near(bc[0], 1.0, 0.000001)
+numpy.assert_near(bc[1], 3.0, 0.000001)
+numpy.assert_near(bc[2], 1.0, 0.000001)
+numpy.assert_near(bc[3], 2.0, 0.000001)
+
+numpy.random_seed(12345)
+let r1 = numpy.random_rand(5)
+numpy.random_seed(12345)
+let r2 = numpy.random_rand(5)
+assert_eq numpy.allclose(r1, r2), 1
+
+let rng_a = numpy.rng_create(777)
+let rng_b = numpy.rng_create(777)
+let rng_c = numpy.rng_create(999)
+let va1 = numpy.rng_uniform(rng_a, -5.0, 5.0)
+let rc1 = numpy.rng_uniform(rng_c, -5.0, 5.0)
+let vb1 = numpy.rng_uniform(rng_b, -5.0, 5.0)
+let va2 = numpy.rng_normal(rng_a, 2.0, 0.5)
+let vb2 = numpy.rng_normal(rng_b, 2.0, 0.5)
+numpy.assert_near(va1, vb1, 0.000001)
+numpy.assert_near(va2, vb2, 0.000001)
+
+numpy.random_seed(2026)
+let unif = numpy.random_uniform(10.0, 20.0, 50)
+assert_eq unif.size, 50
+assert_eq (numpy.min(unif) >= 10.0), 1
+assert_eq (numpy.max(unif) <= 20.0), 1
+
+let norm = numpy.random_normal(100.0, 5.0, 200)
+assert_eq norm.size, 200
+let norm_mu = numpy.mean(norm)
+assert_eq (norm_mu > 97.0), 1
+assert_eq (norm_mu < 103.0), 1
+
+let rints = numpy.random_integers(5, 10, 40)
+assert_eq rints.size, 40
+assert_eq (numpy.min(rints) >= 5.0), 1
+assert_eq (numpy.max(rints) < 10.0), 1
+
+let perm = numpy.random_permutation(8)
+assert_eq perm.size, 8
+let perm_sorted = numpy.sort(perm)
+numpy.assert_near(perm_sorted[0], 0.0, 0.000001)
+numpy.assert_near(perm_sorted[7], 7.0, 0.000001)
+numpy.assert_near(numpy.sum(perm), 28.0, 0.000001)
+
+let pool = numpy.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+let samp_no_rep = numpy.random_choice(pool, 4, 0)
+assert_eq samp_no_rep.size, 4
+let samp_uniq = numpy.unique(samp_no_rep)
+assert_eq samp_uniq.size, 4
+
+let samp_rep = numpy.random_choice(pool, 12, 1)
+assert_eq samp_rep.size, 12
+
+let mat_io = numpy.array([[1.25, -2.5, 3.75], [4.0, 0.0, -6.125]])
+let bin_path = "/tmp/test_np_roundtrip.nxarr"
+let ok_bin = numpy.save_binary(bin_path, mat_io)
+assert_eq ok_bin, 1
+let loaded_bin = numpy.load_binary(bin_path)
+assert_eq loaded_bin.ndim, 2
+assert_eq loaded_bin.shape_dim(0), 2
+assert_eq loaded_bin.shape_dim(1), 3
+assert_eq numpy.allclose(mat_io, loaded_bin), 1
+
+let csv_path = "/tmp/test_np_roundtrip.csv"
+let ok_csv = numpy.save_csv(csv_path, mat_io)
+assert_eq ok_csv, 1
+let loaded_csv = numpy.load_csv(csv_path)
+assert_eq loaded_csv.ndim, 2
+assert_eq loaded_csv.shape_dim(0), 2
+assert_eq loaded_csv.shape_dim(1), 3
+assert_eq numpy.allclose(mat_io, loaded_csv), 1
+
+let csv_text = numpy.to_csv_string(mat_io)
+let parsed_csv = numpy.from_csv_string(csv_text)
+assert_eq numpy.allclose(mat_io, parsed_csv), 1
+
+call nx_assert_summary
+print "NUMPY_STATS_RANDOM_IO_TEST_PASS"

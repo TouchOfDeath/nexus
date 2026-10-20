@@ -1,0 +1,7 @@
+import numpy
+let base = numpy.arange(0.0, 10.0, 1.0)
+let view = numpy.slice(base, 2, 8, 2)
+numpy.set(view, 1, 99.0)
+numpy.assert_near(base[4], 99.0, 0.000001)
+numpy.print(base)
+print "EXAMPLE_02_OK"

@@ -1,0 +1,6 @@
+import numpy
+let M = numpy.reshape(numpy.arange(1.0, 7.0, 1.0), 2, 3)
+let row_bias = numpy.array([10.0, 20.0, 30.0])
+let out = M + row_bias
+numpy.print(out)
+print "EXAMPLE_03_OK"

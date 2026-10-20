@@ -1,0 +1,6 @@
+import numpy
+let M = numpy.array([[1.5, 2.5, 3.5], [4.5, 5.5, 6.5]])
+let csv_s = numpy.to_csv_string(M)
+let M_back = numpy.from_csv_string(csv_s)
+numpy.print(M_back)
+print "EXAMPLE_11_OK"

@@ -1,0 +1,7 @@
+import numpy
+let sample = numpy.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
+print_float (numpy.mean(sample))
+print_float (numpy.median(sample))
+print_float (numpy.std(sample))
+print_float (numpy.percentile(sample, 75.0))
+print "EXAMPLE_07_OK"

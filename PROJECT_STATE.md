@@ -1,8 +1,34 @@
 # NEXUS Project State & Memory Log
 
-> **Last Updated**: 2026-10-19  
-> **Current Version**: v1.0.0 — Formal Language Specification, Complete Loop Ecosystem, First-Class Strings & I/O, Unified Stdlib Parameterized ABI, and 5/5 Real-World Domain Applications  
+> **Last Updated**: 2026-10-20  
+> **Current Version**: v1.2.0 — Nexus NumPy Numerical Computing Framework, N-D Strided Arrays, Linear Algebra (LU, QR, SVD, Cholesky, Solvers), IEEE-754 Math, Compensated Reductions, Statistics, PRNG, and Binary/CSV Serialization  
 > **Compiler Architecture**: Self-Hosted Compiler Core in pure NEXUS (`compiler/nexc.nex`), 0% libc, direct Linux ELF64 syscalls + Native ARM64 Mach-O & Linux aarch64. Stage 5 bit-for-bit fixed-point convergence verified (`0` byte differences across 49,152 PE32+ bytes and 57,951 ELF64 bytes).
+
+---
+
+## 0.7 v1.2.0 — Nexus NumPy: Multidimensional Arrays, Linear Algebra, Statistics & Scientific Computing Engine (2026-10-20)
+- **Engine Architecture & Modules (`stdlib/numpy.nex`, `stdlib/numpy/*.nex` — 7,375 lines)**:
+  - `stdlib/numpy/core.nex`: Multidimensional `NdArray` memory layout, strata descriptors, custom strides, zero-copy slicing, 2D transpose views, multidimensional indexing parser (`M[i, j]`), and runtime error diagnostics.
+  - `stdlib/numpy/creation.nex`: Array constructors (`zeros`, `ones`, `full`, `arange`, `linspace`, `logspace`, `eye`, `diag`, `from_buffer`).
+  - `stdlib/numpy/ops.nex`: Vectorized element-wise arithmetic (`+`, `-`, `*`, `/`, `%`), comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`), logical masking, and N-D broadcasting.
+  - `stdlib/numpy/reduce.nex`: Compensated Neumaier reductions (`sum`, `prod`, `min`, `max`, `any`, `all`, `mean`, `ptp`, `argmin`, `argmax`, `cumsum`, `cumprod`).
+  - `stdlib/numpy/math.nex`: Mathematical ufuncs with IEEE-754 compliance (trigonometry, exp, log, sqrt, power, clip, sign, round, floor, ceil).
+  - `stdlib/numpy/linalg.nex`: Pure Nexus linear algebra engine (`dot`, `outer`, `matmul`, `trace`, `norm`, `det`, `inv`, `solve`, `lu`, `qr`, `cholesky`, `svd`, `eigvals`, `lstsq`).
+  - `stdlib/numpy/stats.nex`: Descriptive statistics (`var`, `std`, `median`, `quantile`, `percentile`, `cov`, `corrcoef`).
+  - `stdlib/numpy/random.nex`: Reproducible PRNG with 64-bit state (`random_seed`, `random_uniform`, `random_normal` Box-Muller, `random_integers`, `shuffle`, `permutation`).
+  - `stdlib/numpy/sort.nex`: Merge-sort (`sort`, `sort_inplace`), index tracking (`argsort`), binary search (`searchsorted`), and deduplication (`unique`).
+  - `stdlib/numpy/io.nex`: Binary file format with magic headers and checksums (`save_binary`, `load_binary`) and CSV serialization (`to_csv_string`, `from_csv_string`, `save_csv`, `load_csv`).
+- **Compiler & Preprocessor Enhancements (`tools/nexprep.c`, `tools/nextest.c`, `nexus`)**:
+  - Added native support for 2D array literals (`[[1.0, 2.0], [3.0, 4.0]]`) in `nexprep.c`.
+  - Added multidimensional indexing desugaring (`matrix[i, j]` and `matrix[i, j] = val`).
+  - Added `numpy.*` / `np.*` namespace dispatch and `NdArray__*` method dispatch.
+  - Extended ABI calling conventions for `np_` and `_np_` subroutines.
+  - Optimized preprocessor memory consumption by migrating high-depth macro buffers to static storage to eliminate stack frame pressure.
+  - Auto-routing in `./nexus` and `nextest.c` to invoke extended capacity compiler (`nexc_xl.elf`) whenever `_np_` routines or large symbol counts are present.
+- **Verification Suites & Examples**:
+  - 5 comprehensive automated test suites (`tests/test_numpy_core.nex`, `tests/test_numpy_math_reduce.nex`, `tests/test_numpy_linalg.nex`, `tests/test_numpy_stats_random_io.nex`, `tests/test_numpy_failures.nex`) with **523 assertions passing 100%**.
+  - 12 complete runnable example programs (`examples/numpy_01_basic.nex` .. `examples/numpy_12_least_squares.nex`) and benchmark suite (`examples/numpy_bench.nex`).
+  - Comprehensive documentation (`docs/NUMPY_MANUAL.md`, `docs/NUMPY_API_REFERENCE.md`, `docs/NUMPY_BENCHMARKS.md`).
 
 ---
 

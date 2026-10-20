@@ -1,0 +1,391 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — SORTING, SEARCHING & SETS
+# ==============================================================================
+# O(N log N) stable bottom-up MergeSort (sort, argsort), O(log N) binary search
+# (searchsorted_left, searchsorted_right), unique values & counts, membership
+# testing (in1d / isin), nonzero indices, and conditional replacement.
+# ==============================================================================
+
+include "stdlib/numpy/reduce.nex"
+
+# Ordering helper: returns 1 if a <= b (placing NaN at the end, matching NumPy)
+fn _np_sort_le(a: float, b: float) {
+    let na = np_isnan_scalar(a)
+    let nb = np_isnan_scalar(b)
+    if na == 1 {
+        if nb == 1 { return 1 }
+        return 0
+    }
+    if nb == 1 { return 1 }
+    if a <= b { return 1 }
+    return 0
+}
+
+fn _np_mergesort_buffers(vals, idxs, n) {
+    if n <= 1 { return 0 }
+    let n_bytes = n * 8
+    let tmp_v = alloc n_bytes
+    let tmp_i = alloc n_bytes
+    let width = 1
+    while width < n {
+        let left = 0
+        while left < n {
+            let mid = left + width
+            if mid > n { mid = n }
+            let right = left + 2 * width
+            if right > n { right = n }
+
+            let i = left
+            let j = mid
+            let k = left
+            while k < right {
+                let take_left = 0
+                if i < mid {
+                    if j >= right {
+                        take_left = 1
+                    } else {
+                        let va = load64 [vals + i * 8]
+                        let vb = load64 [vals + j * 8]
+                        if _np_sort_le(va, vb) == 1 {
+                            take_left = 1
+                        }
+                    }
+                }
+                if take_left == 1 {
+                    store64 [tmp_v + k * 8] (load64 [vals + i * 8])
+                    if idxs != 0 {
+                        store64 [tmp_i + k * 8] (load64 [idxs + i * 8])
+                    }
+                    i = i + 1
+                } else {
+                    store64 [tmp_v + k * 8] (load64 [vals + j * 8])
+                    if idxs != 0 {
+                        store64 [tmp_i + k * 8] (load64 [idxs + j * 8])
+                    }
+                    j = j + 1
+                }
+                k = k + 1
+            }
+            left = left + 2 * width
+        }
+        let c = 0
+        while c < n {
+            store64 [vals + c * 8] (load64 [tmp_v + c * 8])
+            if idxs != 0 {
+                store64 [idxs + c * 8] (load64 [tmp_i + c * 8])
+            }
+            c = c + 1
+        }
+        width = width * 2
+    }
+    return 1
+}
+
+fn np_sort(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let out = np_flatten(arr)
+    if out == 0 { return 0 }
+    let sz = load64 [out + 32]
+    let dst = load64 [out + 8]
+    _np_mergesort_buffers(dst, 0, sz)
+    return out
+}
+
+fn np_sort_inplace(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_contiguous(arr) == 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let off = load64 [arr + 144]
+    let dst = (load64 [arr + 8]) + off * 8
+    _np_mergesort_buffers(dst, 0, sz)
+    return arr
+}
+
+fn np_argsort(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let idx_out = _np_alloc_ndarray_header(1, sz, 0, 0, 0, NP_INT64, 0)
+    if idx_out == 0 { return 0 }
+    if sz == 0 { return idx_out }
+
+    let sz_bytes = sz * 8
+    let vbuf = alloc sz_bytes
+    let ibuf = load64 [idx_out + 8]
+    let i = 0
+    while i < sz {
+        store64 [vbuf + i * 8] (np_flat_get(arr, i))
+        store64 [ibuf + i * 8] (itof i)
+        i = i + 1
+    }
+    _np_mergesort_buffers(vbuf, ibuf, sz)
+    return idx_out
+}
+
+fn np_searchsorted_left(arr, val: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return -1
+    }
+    let n = load64 [arr + 32]
+    let lo = 0
+    let hi = n
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        let mv = np_flat_get(arr, mid)
+        if mv < val {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+fn np_searchsorted_right(arr, val: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return -1
+    }
+    let n = load64 [arr + 32]
+    let lo = 0
+    let hi = n
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        let mv = np_flat_get(arr, mid)
+        if mv <= val {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+fn np_searchsorted(arr, val: float) {
+    return np_searchsorted_left(arr, val)
+}
+
+fn np_binary_search(arr, val: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return -1
+    }
+    let n = load64 [arr + 32]
+    let pos = np_searchsorted_left(arr, val)
+    if pos >= 0 {
+        if pos < n {
+            if np_flat_get(arr, pos) == val {
+                return pos
+            }
+        }
+    }
+    return -1
+}
+
+fn np_unique(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sorted = np_sort(arr)
+    if sorted == 0 { return 0 }
+    let sz = load64 [sorted + 32]
+    let dt = load64 [arr + 16]
+    if sz == 0 {
+        return _np_alloc_ndarray_header(1, 0, 0, 0, 0, dt, 0)
+    }
+    let sdata = load64 [sorted + 8]
+    let uniq_cnt = 1
+    let i = 1
+    while i < sz {
+        let prev = load64 [sdata + (i - 1) * 8]
+        let cur = load64 [sdata + i * 8]
+let is_same = 0
+        if _np_sort_le(cur, prev) == 1 {
+            if _np_sort_le(prev, cur) == 1 {
+                is_same = 1
+            }
+        }
+        if is_same == 0 {
+            uniq_cnt = uniq_cnt + 1
+        }
+        i = i + 1
+    }
+    let out = _np_alloc_ndarray_header(1, uniq_cnt, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    store64 [dst + 0] (load64 [sdata + 0])
+    let k = 1
+    let j = 1
+    while j < sz {
+        let prev = load64 [sdata + (j - 1) * 8]
+        let cur = load64 [sdata + j * 8]
+let is_same = 0
+        if _np_sort_le(cur, prev) == 1 {
+            if _np_sort_le(prev, cur) == 1 {
+                is_same = 1
+            }
+        }
+        if is_same == 0 {
+            store64 [dst + k * 8] cur
+            k = k + 1
+        }
+        j = j + 1
+    }
+    return out
+}
+
+fn np_unique_counts(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sorted = np_sort(arr)
+    if sorted == 0 { return 0 }
+    let sz = load64 [sorted + 32]
+    if sz == 0 {
+        return _np_alloc_ndarray_header(1, 0, 0, 0, 0, NP_INT64, 0)
+    }
+    let sdata = load64 [sorted + 8]
+    let uniq_cnt = 1
+    let i = 1
+    while i < sz {
+        let prev = load64 [sdata + (i - 1) * 8]
+        let cur = load64 [sdata + i * 8]
+        let is_same = 0
+        if _np_sort_le(cur, prev) == 1 {
+            if _np_sort_le(prev, cur) == 1 {
+                is_same = 1
+            }
+        }
+        if is_same == 0 { uniq_cnt = uniq_cnt + 1 }
+        i = i + 1
+    }
+    let out = _np_alloc_ndarray_header(1, uniq_cnt, 0, 0, 0, NP_INT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let k = 0
+    let run = 1
+    let j = 1
+    while j < sz {
+        let prev = load64 [sdata + (j - 1) * 8]
+        let cur = load64 [sdata + j * 8]
+let is_same = 0
+        if _np_sort_le(cur, prev) == 1 {
+            if _np_sort_le(prev, cur) == 1 {
+                is_same = 1
+            }
+        }
+        if is_same == 1 {
+            run = run + 1
+        } else {
+            store64 [dst + k * 8] (itof run)
+            k = k + 1
+            run = 1
+        }
+        j = j + 1
+    }
+    store64 [dst + k * 8] (itof run)
+    return out
+}
+
+fn np_count_value(arr, val: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let cnt = 0
+    let i = 0
+    while i < sz {
+        if np_flat_get(arr, i) == val { cnt = cnt + 1 }
+        i = i + 1
+    }
+    return cnt
+}
+
+fn np_in1d(ar1, ar2) {
+    if np_is_valid(ar1) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(ar2) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let u2 = np_unique(ar2)
+    let n1 = load64 [ar1 + 32]
+    let out = _np_alloc_ndarray_header(1, n1, 0, 0, 0, NP_BOOL, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < n1 {
+        let v = np_flat_get(ar1, i)
+        let pos = np_binary_search(u2, v)
+        if pos >= 0 {
+            store64 [dst + i * 8] 1.0
+        } else {
+            store64 [dst + i * 8] 0.0
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_isin(ar1, ar2) {
+    return np_in1d(ar1, ar2)
+}
+
+fn np_nonzero(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let cnt = np_count_nonzero(arr)
+    let out = _np_alloc_ndarray_header(1, cnt, 0, 0, 0, NP_INT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let k = 0
+    let i = 0
+    while i < sz {
+        if np_flat_get(arr, i) != 0.0 {
+            store64 [dst + k * 8] (itof i)
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_replace(arr, old_val: float, new_val: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let out = np_copy(arr)
+    if out == 0 { return 0 }
+    let sz = load64 [out + 32]
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let v = load64 [dst + i * 8]
+        if v == old_val {
+            store64 [dst + i * 8] new_val
+        }
+        i = i + 1
+    }
+    return out
+}

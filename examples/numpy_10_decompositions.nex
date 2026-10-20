@@ -1,0 +1,10 @@
+import numpy
+let A = numpy.array([[2.0, 1.0, 1.0], [4.0, -6.0, 0.0], [-2.0, 7.0, 2.0]])
+let L = numpy.lu_L(A)
+let U = numpy.lu_U(A)
+let P = numpy.lu_P(A)
+let Q = numpy.qr_Q(A)
+let R = numpy.qr_R(A)
+let sv = numpy.svd_values(A)
+numpy.print(sv)
+print "EXAMPLE_10_OK"

@@ -1,0 +1,187 @@
+# ==============================================================================
+# TEST SUITE 3: LINEAR ALGEBRA, DECOMPOSITIONS, SOLVERS & SUBSYSTEM PIPELINES
+# ==============================================================================
+
+import numpy
+
+# 1. Dot Product, Outer Product, 3D Cross Product
+let u = numpy.array([1.0, 2.0, 3.0])
+let v = numpy.array([4.0, 5.0, 6.0])
+numpy.assert_near(numpy.dot(u, v), 32.0, 0.000001)
+
+let out_uv = numpy.outer(u, v)
+assert_eq out_uv.shape_dim(0), 3
+assert_eq out_uv.shape_dim(1), 3
+numpy.assert_near(out_uv[0, 0], 4.0, 0.000001)
+numpy.assert_near(out_uv[1, 2], 12.0, 0.000001)
+numpy.assert_near(out_uv[2, 2], 18.0, 0.000001)
+
+let cr = numpy.cross(u, v)
+assert_eq cr.size, 3
+numpy.assert_near(cr[0], -3.0, 0.000001)
+numpy.assert_near(cr[1], 6.0, 0.000001)
+numpy.assert_near(cr[2], -3.0, 0.000001)
+
+# Orthogonal property: u . (u x v) == 0 and v . (u x v) == 0
+numpy.assert_near(numpy.dot(u, cr), 0.0, 0.000001)
+numpy.assert_near(numpy.dot(v, cr), 0.0, 0.000001)
+
+# 2. Matrix Multiplication (2D@2D, 2D@1D, 1D@2D, matvec, matrix_power)
+let A = numpy.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+let B = numpy.array([[7.0, 8.0], [9.0, 1.0], [2.0, 3.0]])
+let C = numpy.matmul(A, B)
+assert_eq C.shape_dim(0), 2
+assert_eq C.shape_dim(1), 2
+numpy.assert_near(C[0, 0], 31.0, 0.000001)
+numpy.assert_near(C[0, 1], 19.0, 0.000001)
+numpy.assert_near(C[1, 0], 85.0, 0.000001)
+numpy.assert_near(C[1, 1], 55.0, 0.000001)
+
+let mv = numpy.matmul(A, u)
+assert_eq mv.ndim, 1
+assert_eq mv.size, 2
+numpy.assert_near(mv[0], 14.0, 0.000001)
+numpy.assert_near(mv[1], 32.0, 0.000001)
+
+let mv2 = numpy.matvec(A, u)
+assert_eq numpy.allclose(mv, mv2), 1
+
+let vm = numpy.matmul(numpy.array([1.0, 2.0]), A)
+assert_eq vm.ndim, 1
+assert_eq vm.size, 3
+numpy.assert_near(vm[0], 9.0, 0.000001)
+numpy.assert_near(vm[1], 12.0, 0.000001)
+numpy.assert_near(vm[2], 15.0, 0.000001)
+
+let mp0 = numpy.matrix_power(C, 0)
+assert_eq numpy.allclose(mp0, numpy.identity(2)), 1
+let mp2 = numpy.matrix_power(C, 2)
+assert_eq numpy.allclose(mp2, numpy.matmul(C, C)), 1
+
+# 3. Vector & Matrix Norms, Trace & Diagonal
+let v34 = numpy.array([3.0, -4.0])
+numpy.assert_near(numpy.vec_norm(v34), 5.0, 0.000001)
+numpy.assert_near(numpy.norm_ord(v34, 1), 7.0, 0.000001)
+numpy.assert_near(numpy.norm_ord(v34, 999), 4.0, 0.000001)
+
+let sq_m = numpy.array([[2.0, 1.0, 0.0], [1.0, 3.0, 1.0], [0.0, 1.0, 2.0]])
+numpy.assert_near(numpy.trace(sq_m), 7.0, 0.000001)
+let dg = numpy.diag_extract(sq_m)
+numpy.assert_near(dg[0], 2.0, 0.000001)
+numpy.assert_near(dg[1], 3.0, 0.000001)
+numpy.assert_near(dg[2], 2.0, 0.000001)
+
+# 4. PA = LU Decomposition, Determinant, Linear System Solver & Matrix Inverse
+let M2 = numpy.array([[4.0, 7.0], [2.0, 6.0]])
+numpy.assert_near(numpy.det(M2), 10.0, 0.000001)
+
+let M3 = numpy.array([[0.0, 2.0, 1.0], [1.0, -2.0, -3.0], [-1.0, 1.0, 2.0]])
+# Note: M3[0, 0] == 0.0 requires partial pivoting! Exact det(M3) == 1.0
+numpy.assert_near(numpy.det(M3), 1.0, 0.00001)
+
+# Explicit PA = LU verification: P @ M3 == L @ U
+let lu_P = numpy.lu_P(M3)
+let lu_L = numpy.lu_L(M3)
+let lu_U = numpy.lu_U(M3)
+let PM3 = numpy.matmul(lu_P, M3)
+let LU_prod = numpy.matmul(lu_L, lu_U)
+assert_eq numpy.allclose(PM3, LU_prod), 1
+
+# Solve M3 * x = b where true x = [1.0, 2.0, 3.0] -> b = [7.0, -12.0, 7.0]
+let rhs_b = numpy.array([7.0, -12.0, 7.0])
+let sol_x = numpy.solve(M3, rhs_b)
+numpy.assert_near(sol_x[0], 1.0, 0.00001)
+numpy.assert_near(sol_x[1], 2.0, 0.00001)
+numpy.assert_near(sol_x[2], 3.0, 0.00001)
+
+# Verify M3 @ sol_x == rhs_b
+let check_b = numpy.matmul(M3, sol_x)
+assert_eq numpy.allclose(check_b, rhs_b), 1
+
+# Multi-RHS 2D solve: M2 * X = I_2 -> X == inv(M2)
+let sol_2d = numpy.solve(M2, numpy.identity(2))
+let inv_M2 = numpy.inv(M2)
+assert_eq numpy.allclose(sol_2d, inv_M2), 1
+numpy.assert_near(inv_M2[0, 0], 0.6, 0.00001)
+numpy.assert_near(inv_M2[0, 1], -0.7, 0.00001)
+numpy.assert_near(inv_M2[1, 0], -0.2, 0.00001)
+numpy.assert_near(inv_M2[1, 1], 0.4, 0.00001)
+
+let inv_M3 = numpy.inv(M3)
+let prod_I3 = numpy.matmul(M3, inv_M3)
+assert_eq numpy.allclose(prod_I3, numpy.identity(3)), 1
+
+# Singular matrix detection in solve and inv
+let sing = numpy.array([[1.0, 2.0], [2.0, 4.0]])
+numpy.assert_near(numpy.det(sing), 0.0, 0.000001)
+numpy.clear_error()
+let bad_sol = numpy.solve(sing, numpy.array([1.0, 2.0]))
+assert_eq bad_sol, 0
+assert_eq numpy.get_error(), numpy.ERR_SINGULAR
+numpy.clear_error()
+let bad_inv = numpy.inv(sing)
+assert_eq bad_inv, 0
+assert_eq numpy.get_error(), numpy.ERR_SINGULAR
+numpy.clear_error()
+
+# 5. QR Decomposition & Linear Least Squares (lstsq)
+let Q = numpy.qr_Q(M3)
+let R = numpy.qr_R(M3)
+let QR_recon = numpy.matmul(Q, R)
+assert_eq numpy.allclose(QR_recon, M3), 1
+let QTQ = numpy.matmul(Q.transpose(), Q)
+assert_eq numpy.allclose(QTQ, numpy.identity(3)), 1
+
+# Overdetermined linear regression: fit y = 2*x + 5 across 4 points (0,5), (1,7), (2,9), (3,11)
+let X_design = numpy.array([[0.0, 1.0], [1.0, 1.0], [2.0, 1.0], [3.0, 1.0]])
+let y_obs = numpy.array([5.0, 7.0, 9.0, 11.0])
+let beta = numpy.lstsq(X_design, y_obs)
+numpy.assert_near(beta[0], 2.0, 0.0001)
+numpy.assert_near(beta[1], 5.0, 0.0001)
+
+# 6. Rank Estimation, Eigenvalues, Eigenvectors & Singular Values
+assert_eq numpy.matrix_rank(M3), 3
+let rank_def = numpy.array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 1.0, 1.0]])
+assert_eq numpy.matrix_rank(rank_def), 2
+assert_eq numpy.matrix_rank(numpy.zeros_2d(3, 3)), 0
+numpy.assert_near(numpy.det(rank_def), 0.0, 0.000001)
+
+let sym2 = numpy.array([[3.0, 1.0], [1.0, 3.0]])
+let evals = numpy.eigh_2x2_vals(sym2)
+numpy.assert_near(evals[0], 2.0, 0.0001)
+numpy.assert_near(evals[1], 4.0, 0.0001)
+
+let dom_ev = numpy.power_eigen_val(sym2, 30)
+numpy.assert_near(dom_ev, 4.0, 0.0001)
+let dom_vec = numpy.power_eigen_vec(sym2, 30)
+# Verify A * v == lambda * v
+let Av = numpy.matvec(sym2, dom_vec)
+let lam_v = dom_vec * dom_ev
+assert_eq numpy.allclose(Av, lam_v), 1
+
+let sv = numpy.svd_values(sym2)
+numpy.assert_near(sv[0], 4.0, 0.0001)
+numpy.assert_near(sv[1], 2.0, 0.0001)
+
+let diag3 = numpy.diag(numpy.array([5.0, -3.0, 2.0]))
+let sv3 = numpy.svd_values(diag3)
+numpy.assert_near(sv3[0], 5.0, 0.001)
+numpy.assert_near(sv3[1], 3.0, 0.001)
+numpy.assert_near(sv3[2], 2.0, 0.001)
+
+# 7. Multi-Subsystem Pipeline Verification
+# Construct -> Arithmetic -> Reduction -> Transpose -> Multiply -> Verify
+let P = numpy.reshape(numpy.arange(1.0, 5.0, 1.0), 2, 2)
+let P_scaled = P * 2.0 + 1.0
+let row_sums = numpy.sum_axis(P_scaled, 1)
+numpy.assert_near(row_sums[0], 8.0, 0.000001)
+numpy.assert_near(row_sums[1], 16.0, 0.000001)
+let PT = P_scaled.transpose()
+let PPT = numpy.matmul(P_scaled, PT)
+numpy.assert_near(PPT[0, 0], 34.0, 0.000001)
+numpy.assert_near(PPT[0, 1], 66.0, 0.000001)
+numpy.assert_near(PPT[1, 0], 66.0, 0.000001)
+numpy.assert_near(PPT[1, 1], 130.0, 0.000001)
+
+call nx_assert_summary
+print "NUMPY_LINALG_TEST_PASS"

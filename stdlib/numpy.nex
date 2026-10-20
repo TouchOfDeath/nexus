@@ -1,0 +1,25 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — PUBLIC ENTRY POINT
+# ==============================================================================
+# Usage:
+#   import numpy
+#
+# Provides multidimensional NdArray storage, constructors, indexing, slicing,
+# zero-copy views, N-D broadcasting, element-wise arithmetic, mathematical
+# functions, compensated reductions, linear algebra (LU, QR, solve, inv, det,
+# lstsq, eigenvalues, SVD), reproducible PRNG, sorting/searching, statistics,
+# and binary/CSV serialization.
+#
+# Completely independent of Aether / graphical libraries.
+# ==============================================================================
+
+include "stdlib/numpy/core.nex"
+include "stdlib/numpy/creation.nex"
+include "stdlib/numpy/math.nex"
+include "stdlib/numpy/ops.nex"
+include "stdlib/numpy/reduce.nex"
+include "stdlib/numpy/sort.nex"
+include "stdlib/numpy/stats.nex"
+include "stdlib/numpy/linalg.nex"
+include "stdlib/numpy/random.nex"
+include "stdlib/numpy/io.nex"

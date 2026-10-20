@@ -1,0 +1,7 @@
+import numpy
+let x = numpy.linspace(0.0, 3.141592653589793, 5)
+let s2 = numpy.square(numpy.sin(x))
+let c2 = numpy.square(numpy.cos(x))
+let ident = s2 + c2
+numpy.print(ident)
+print "EXAMPLE_04_OK"

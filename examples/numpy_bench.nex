@@ -1,0 +1,48 @@
+import numpy
+
+let a = numpy.linspace(0.0, 100.0, 10000)
+let b = numpy.linspace(1.0, 101.0, 10000)
+let iter1 = 0
+let acc_sum = 0.0
+while iter1 < 20 {
+    let c = a * b + a
+    acc_sum = acc_sum + numpy.sum(c)
+    iter1 = iter1 + 1
+}
+print_float acc_sum
+
+let M1 = numpy.reshape(numpy.linspace(0.1, 1.0, 1024), 32, 32)
+let M2 = numpy.reshape(numpy.linspace(0.2, 1.2, 1024), 32, 32)
+let iter2 = 0
+let tr_acc = 0.0
+while iter2 < 10 {
+    let P = numpy.matmul(M1, M2)
+    tr_acc = tr_acc + numpy.trace(P)
+    iter2 = iter2 + 1
+}
+print_float tr_acc
+
+numpy.random_seed(42)
+let rvec = numpy.random_uniform(0.0, 1000.0, 5000)
+let iter3 = 0
+let med_acc = 0.0
+while iter3 < 10 {
+    let s = numpy.sort(rvec)
+    med_acc = med_acc + s[2500]
+    iter3 = iter3 + 1
+}
+print_float med_acc
+
+let I16 = numpy.identity(16)
+let B16 = numpy.reshape(numpy.linspace(0.01, 0.25, 256), 16, 16)
+let A16 = I16 * 10.0 + B16
+let rhs16 = numpy.linspace(1.0, 16.0, 16)
+let iter4 = 0
+let sol_acc = 0.0
+while iter4 < 20 {
+    let x16 = numpy.solve(A16, rhs16)
+    sol_acc = sol_acc + numpy.sum(x16)
+    iter4 = iter4 + 1
+}
+print_float sol_acc
+print "NUMPY_BENCH_DONE"

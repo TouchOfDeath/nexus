@@ -1,0 +1,797 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — ELEMENT-WISE OPS & BROADCASTING
+# ==============================================================================
+# Implements N-D stride-0 virtual broadcasting, element-wise arithmetic,
+# array-scalar operations, comparisons, logical operations, clipping,
+# conditional selection (where), boolean mask filtering, and allclose/isclose.
+# ==============================================================================
+
+include "stdlib/numpy/math.nex"
+
+# --- Binary Scalar Kernel ---
+
+fn _np_eval_binary_op(x: float, y: float, op_code) -> float {
+    if op_code == 1 { return x + y }
+    if op_code == 2 { return x - y }
+    if op_code == 3 { return x * y }
+    if op_code == 4 {
+        if y == 0.0 {
+            _np_err(NP_ERR_DIV_ZERO)
+        }
+        return x / y
+    }
+    if op_code == 5 {
+        if y == 0.0 {
+            _np_err(NP_ERR_DIV_ZERO)
+            return np_nan()
+        }
+        return np_floor_scalar(x / y)
+    }
+    if op_code == 6 { return np_mod_scalar(x, y) }
+    if op_code == 7 { return np_fmod_scalar(x, y) }
+    if op_code == 8 { return np_pow_scalar(x, y) }
+    if op_code == 9 {
+        if np_isnan_scalar(x) == 1 { return np_nan() }
+        if np_isnan_scalar(y) == 1 { return np_nan() }
+        if x >= y { return x }
+        return y
+    }
+    if op_code == 10 {
+        if np_isnan_scalar(x) == 1 { return np_nan() }
+        if np_isnan_scalar(y) == 1 { return np_nan() }
+        if x <= y { return x }
+        return y
+    }
+    if op_code == 11 { return np_arctan2_scalar(x, y) }
+    if op_code == 12 { return np_hypot_scalar(x, y) }
+
+    # Comparisons (return 1.0 or 0.0)
+    if op_code == 20 {
+        if np_isnan_scalar(x) == 1 { return 0.0 }
+        if np_isnan_scalar(y) == 1 { return 0.0 }
+        if x == y { return 1.0 }
+        return 0.0
+    }
+    if op_code == 21 {
+        if np_isnan_scalar(x) == 1 { return 1.0 }
+        if np_isnan_scalar(y) == 1 { return 1.0 }
+        if x != y { return 1.0 }
+        return 0.0
+    }
+    if op_code == 22 {
+        if np_isnan_scalar(x) == 1 { return 0.0 }
+        if np_isnan_scalar(y) == 1 { return 0.0 }
+        if x < y { return 1.0 }
+        return 0.0
+    }
+    if op_code == 23 {
+        if np_isnan_scalar(x) == 1 { return 0.0 }
+        if np_isnan_scalar(y) == 1 { return 0.0 }
+        if x <= y { return 1.0 }
+        return 0.0
+    }
+    if op_code == 24 {
+        if np_isnan_scalar(x) == 1 { return 0.0 }
+        if np_isnan_scalar(y) == 1 { return 0.0 }
+        if x > y { return 1.0 }
+        return 0.0
+    }
+    if op_code == 25 {
+        if np_isnan_scalar(x) == 1 { return 0.0 }
+        if np_isnan_scalar(y) == 1 { return 0.0 }
+        if x >= y { return 1.0 }
+        return 0.0
+    }
+
+    # Logical operations
+    if op_code == 26 {
+        if x != 0.0 {
+            if y != 0.0 { return 1.0 }
+        }
+        return 0.0
+    }
+    if op_code == 27 {
+        if x != 0.0 { return 1.0 }
+        if y != 0.0 { return 1.0 }
+        return 0.0
+    }
+    if op_code == 28 {
+        let bx = 0
+        let by = 0
+        if x != 0.0 { bx = 1 }
+        if y != 0.0 { by = 1 }
+        if bx != by { return 1.0 }
+        return 0.0
+    }
+    return 0.0
+}
+
+# --- Zero-Copy Broadcast View Constructor ---
+
+fn np_broadcast_to(arr, target_rows, target_cols) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if target_rows < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if target_cols < 0 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let off = load64 [arr + 144]
+    if nd == 1 {
+        let n = load64 [arr + 72]
+        let st0 = load64 [arr + 104]
+        if n == target_cols {
+            return _np_make_view(arr, 2, target_rows, target_cols, 0, 0, 0, st0, 0, 0, off, 0)
+        }
+        if n == 1 {
+            return _np_make_view(arr, 2, target_rows, target_cols, 0, 0, 0, 0, 0, 0, off, 0)
+        }
+        _np_err(NP_ERR_BROADCAST)
+        return 0
+    }
+    if nd == 2 {
+        let r = load64 [arr + 72]
+        let c = load64 [arr + 80]
+        let st0 = load64 [arr + 104]
+        let st1 = load64 [arr + 112]
+        let bst0 = st0
+        let bst1 = st1
+        if r != target_rows {
+            if r == 1 {
+                bst0 = 0
+            } else {
+                _np_err(NP_ERR_BROADCAST)
+                return 0
+            }
+        }
+        if c != target_cols {
+            if c == 1 {
+                bst1 = 0
+            } else {
+                _np_err(NP_ERR_BROADCAST)
+                return 0
+            }
+        }
+        return _np_make_view(arr, 2, target_rows, target_cols, 0, 0, bst0, bst1, 0, 0, off, 0)
+    }
+    _np_err(NP_ERR_INVALID_DIM)
+    return 0
+}
+
+# --- General N-D Broadcasted Element-Wise Array-Array Kernel ---
+
+fn _np_apply_binary(a, b, op_code) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    let out_dt = NP_FLOAT64
+    if op_code >= 20 {
+        out_dt = NP_BOOL
+    } else {
+        if op_code <= 3 {
+            out_dt = np_promote_dtype(load64 [a + 16], load64 [b + 16])
+        }
+        if op_code == 9 {
+            out_dt = np_promote_dtype(load64 [a + 16], load64 [b + 16])
+        }
+        if op_code == 10 {
+            out_dt = np_promote_dtype(load64 [a + 16], load64 [b + 16])
+        }
+    }
+
+    # Fast Path: Identical shapes and both contiguous with offset 0
+    if nda == ndb {
+        let same_shape = 1
+        let d = 0
+        while d < nda {
+            let da = load64 [a + 72 + d * 8]
+            let db = load64 [b + 72 + d * 8]
+            if da != db { same_shape = 0 }
+            d = d + 1
+        }
+        if same_shape == 1 {
+            let s0 = load64 [a + 72]
+            let s1 = load64 [a + 80]
+            let s2 = load64 [a + 88]
+            let s3 = load64 [a + 96]
+            let sz = load64 [a + 32]
+            let out = _np_alloc_ndarray_header(nda, s0, s1, s2, s3, out_dt, 0)
+            if out == 0 { return 0 }
+            let dst = load64 [out + 8]
+
+            let ca = np_is_contiguous(a)
+            let cb = np_is_contiguous(b)
+            let off_a = load64 [a + 144]
+            let off_b = load64 [b + 144]
+            if ca == 1 {
+                if cb == 1 {
+                    if off_a == 0 {
+                        if off_b == 0 {
+                            let ptr_a = load64 [a + 8]
+                            let ptr_b = load64 [b + 8]
+                            let i = 0
+                            while i < sz {
+                                let vx = load64 [ptr_a + i * 8]
+                                let vy = load64 [ptr_b + i * 8]
+                                let vr = _np_eval_binary_op(vx, vy, op_code)
+                                store64 [dst + i * 8] vr
+                                i = i + 1
+                            }
+                            return out
+                        }
+                    }
+                }
+            }
+            let i = 0
+            while i < sz {
+                let vx = np_flat_get(a, i)
+                let vy = np_flat_get(b, i)
+                let vr = _np_eval_binary_op(vx, vy, op_code)
+                store64 [dst + i * 8] vr
+                i = i + 1
+            }
+            return out
+        }
+    }
+
+    # General N-D NumPy Broadcasting (right-aligned shapes with stride-0 virtual expansion)
+    let out_nd = nda
+    if ndb > out_nd { out_nd = ndb }
+
+    let sha = alloc 32
+    let shb = alloc 32
+    let sta = alloc 32
+    let stb = alloc 32
+    let out_sh = alloc 32
+    let b_sta = alloc 32
+    let b_stb = alloc 32
+
+    let k = 0
+    while k < 4 {
+        store64 [sha + k * 8] 1
+        store64 [shb + k * 8] 1
+        store64 [sta + k * 8] 0
+        store64 [stb + k * 8] 0
+        store64 [out_sh + k * 8] 0
+        store64 [b_sta + k * 8] 0
+        store64 [b_stb + k * 8] 0
+        k = k + 1
+    }
+
+    let shift_a = out_nd - nda
+    let ia = 0
+    while ia < nda {
+        store64 [sha + (shift_a + ia) * 8] (load64 [a + 72 + ia * 8])
+        store64 [sta + (shift_a + ia) * 8] (load64 [a + 104 + ia * 8])
+        ia = ia + 1
+    }
+
+    let shift_b = out_nd - ndb
+    let ib = 0
+    while ib < ndb {
+        store64 [shb + (shift_b + ib) * 8] (load64 [b + 72 + ib * 8])
+        store64 [stb + (shift_b + ib) * 8] (load64 [b + 104 + ib * 8])
+        ib = ib + 1
+    }
+
+    let d = 0
+    while d < out_nd {
+        let da = load64 [sha + d * 8]
+        let db = load64 [shb + d * 8]
+        let sa = load64 [sta + d * 8]
+        let sb = load64 [stb + d * 8]
+        if da == db {
+            store64 [out_sh + d * 8] da
+            store64 [b_sta + d * 8] sa
+            store64 [b_stb + d * 8] sb
+        } else {
+            if da == 1 {
+                store64 [out_sh + d * 8] db
+                store64 [b_sta + d * 8] 0
+                store64 [b_stb + d * 8] sb
+            } else {
+                if db == 1 {
+                    store64 [out_sh + d * 8] da
+                    store64 [b_sta + d * 8] sa
+                    store64 [b_stb + d * 8] 0
+                } else {
+                    _np_err(NP_ERR_BROADCAST)
+                    return 0
+                }
+            }
+        }
+        d = d + 1
+    }
+
+    let os0 = load64 [out_sh + 0]
+    let os1 = load64 [out_sh + 8]
+    let os2 = load64 [out_sh + 16]
+    let os3 = load64 [out_sh + 24]
+    let out = _np_alloc_ndarray_header(out_nd, os0, os1, os2, os3, out_dt, 0)
+    if out == 0 { return 0 }
+
+    let dst = load64 [out + 8]
+    let ptr_a = load64 [a + 8]
+    let ptr_b = load64 [b + 8]
+    let off_a = load64 [a + 144]
+    let off_b = load64 [b + 144]
+    let bsa0 = load64 [b_sta + 0]
+    let bsa1 = load64 [b_sta + 8]
+    let bsa2 = load64 [b_sta + 16]
+    let bsa3 = load64 [b_sta + 24]
+    let bsb0 = load64 [b_stb + 0]
+    let bsb1 = load64 [b_stb + 8]
+    let bsb2 = load64 [b_stb + 16]
+    let bsb3 = load64 [b_stb + 24]
+
+    if out_nd == 1 {
+        let i0 = 0
+        while i0 < os0 {
+            let pa = off_a + i0 * bsa0
+            let pb = off_b + i0 * bsb0
+            let vx = load64 [ptr_a + pa * 8]
+            let vy = load64 [ptr_b + pb * 8]
+            let vr = _np_eval_binary_op(vx, vy, op_code)
+            store64 [dst + i0 * 8] vr
+            i0 = i0 + 1
+        }
+        return out
+    }
+    if out_nd == 2 {
+        let idx = 0
+        let i0 = 0
+        while i0 < os0 {
+            let i1 = 0
+            while i1 < os1 {
+                let pa = off_a + i0 * bsa0 + i1 * bsa1
+                let pb = off_b + i0 * bsb0 + i1 * bsb1
+                let vx = load64 [ptr_a + pa * 8]
+                let vy = load64 [ptr_b + pb * 8]
+                let vr = _np_eval_binary_op(vx, vy, op_code)
+                store64 [dst + idx * 8] vr
+                idx = idx + 1
+                i1 = i1 + 1
+            }
+            i0 = i0 + 1
+        }
+        return out
+    }
+    if out_nd == 3 {
+        let idx = 0
+        let i0 = 0
+        while i0 < os0 {
+            let i1 = 0
+            while i1 < os1 {
+                let i2 = 0
+                while i2 < os2 {
+                    let pa = off_a + i0 * bsa0 + i1 * bsa1 + i2 * bsa2
+                    let pb = off_b + i0 * bsb0 + i1 * bsb1 + i2 * bsb2
+                    let vx = load64 [ptr_a + pa * 8]
+                    let vy = load64 [ptr_b + pb * 8]
+                    let vr = _np_eval_binary_op(vx, vy, op_code)
+                    store64 [dst + idx * 8] vr
+                    idx = idx + 1
+                    i2 = i2 + 1
+                }
+                i1 = i1 + 1
+            }
+            i0 = i0 + 1
+        }
+        return out
+    }
+    let idx = 0
+    let i0 = 0
+    while i0 < os0 {
+        let i1 = 0
+        while i1 < os1 {
+            let i2 = 0
+            while i2 < os2 {
+                let i3 = 0
+                while i3 < os3 {
+                    let pa = off_a + i0 * bsa0 + i1 * bsa1 + i2 * bsa2 + i3 * bsa3
+                    let pb = off_b + i0 * bsb0 + i1 * bsb1 + i2 * bsb2 + i3 * bsb3
+                    let vx = load64 [ptr_a + pa * 8]
+                    let vy = load64 [ptr_b + pb * 8]
+                    let vr = _np_eval_binary_op(vx, vy, op_code)
+                    store64 [dst + idx * 8] vr
+                    idx = idx + 1
+                    i3 = i3 + 1
+                }
+                i2 = i2 + 1
+            }
+            i1 = i1 + 1
+        }
+        i0 = i0 + 1
+    }
+    return out
+}
+
+# --- Array-Scalar Element-Wise Kernel ---
+
+fn _np_apply_scalar_rhs(arr, val: float, op_code) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let s0 = load64 [arr + 72]
+    let s1 = load64 [arr + 80]
+    let s2 = load64 [arr + 88]
+    let s3 = load64 [arr + 96]
+    let sz = load64 [arr + 32]
+    let out_dt = NP_FLOAT64
+    if op_code >= 20 { out_dt = NP_BOOL }
+    let out = _np_alloc_ndarray_header(nd, s0, s1, s2, s3, out_dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let vx = np_flat_get(arr, i)
+        let vr = _np_eval_binary_op(vx, val, op_code)
+        store64 [dst + i * 8] vr
+        i = i + 1
+    }
+    return out
+}
+
+fn _np_apply_scalar_lhs(val: float, arr, op_code) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let s0 = load64 [arr + 72]
+    let s1 = load64 [arr + 80]
+    let s2 = load64 [arr + 88]
+    let s3 = load64 [arr + 96]
+    let sz = load64 [arr + 32]
+    let out = _np_alloc_ndarray_header(nd, s0, s1, s2, s3, NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let vy = np_flat_get(arr, i)
+        let vr = _np_eval_binary_op(val, vy, op_code)
+        store64 [dst + i * 8] vr
+        i = i + 1
+    }
+    return out
+}
+
+# --- Public Element-Wise Arithmetic, Comparison & Logical Functions ---
+
+fn np_add(a, b)           { return _np_apply_binary(a, b, 1) }
+fn np_sub(a, b)           { return _np_apply_binary(a, b, 2) }
+fn np_subtract(a, b)      { return _np_apply_binary(a, b, 2) }
+fn np_mul(a, b)           { return _np_apply_binary(a, b, 3) }
+fn np_multiply(a, b)      { return _np_apply_binary(a, b, 3) }
+fn np_div(a, b)           { return _np_apply_binary(a, b, 4) }
+fn np_divide(a, b)        { return _np_apply_binary(a, b, 4) }
+fn np_floor_div(a, b)     { return _np_apply_binary(a, b, 5) }
+fn np_floor_divide(a, b)  { return _np_apply_binary(a, b, 5) }
+fn np_mod(a, b)           { return _np_apply_binary(a, b, 6) }
+fn np_remainder(a, b)     { return _np_apply_binary(a, b, 6) }
+fn np_fmod(a, b)          { return _np_apply_binary(a, b, 7) }
+fn np_power(a, b)         { return _np_apply_binary(a, b, 8) }
+fn np_maximum(a, b)       { return _np_apply_binary(a, b, 9) }
+fn np_minimum(a, b)       { return _np_apply_binary(a, b, 10) }
+fn np_arctan2(a, b)       { return _np_apply_binary(a, b, 11) }
+fn np_hypot(a, b)         { return _np_apply_binary(a, b, 12) }
+
+fn np_equal(a, b)         { return _np_apply_binary(a, b, 20) }
+fn np_not_equal(a, b)     { return _np_apply_binary(a, b, 21) }
+fn np_less(a, b)          { return _np_apply_binary(a, b, 22) }
+fn np_less_equal(a, b)    { return _np_apply_binary(a, b, 23) }
+fn np_greater(a, b)       { return _np_apply_binary(a, b, 24) }
+fn np_greater_equal(a, b) { return _np_apply_binary(a, b, 25) }
+
+fn np_logical_and(a, b)   { return _np_apply_binary(a, b, 26) }
+fn np_logical_or(a, b)    { return _np_apply_binary(a, b, 27) }
+fn np_logical_xor(a, b)   { return _np_apply_binary(a, b, 28) }
+
+fn np_logical_not(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let s0 = load64 [arr + 72]
+    let s1 = load64 [arr + 80]
+    let s2 = load64 [arr + 88]
+    let s3 = load64 [arr + 96]
+    let sz = load64 [arr + 32]
+    let out = _np_alloc_ndarray_header(nd, s0, s1, s2, s3, NP_BOOL, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if v == 0.0 {
+            store64 [dst + i * 8] 1.0
+        } else {
+            store64 [dst + i * 8] 0.0
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_add_scalar(a, val: float)           { return _np_apply_scalar_rhs(a, val, 1) }
+fn np_sub_scalar(a, val: float)           { return _np_apply_scalar_rhs(a, val, 2) }
+fn np_rsub_scalar(val: float, a)          { return _np_apply_scalar_lhs(val, a, 2) }
+fn np_mul_scalar(a, val: float)           { return _np_apply_scalar_rhs(a, val, 3) }
+fn np_div_scalar(a, val: float)           { return _np_apply_scalar_rhs(a, val, 4) }
+fn np_rdiv_scalar(val: float, a)          { return _np_apply_scalar_lhs(val, a, 4) }
+fn np_floor_div_scalar(a, val: float)     { return _np_apply_scalar_rhs(a, val, 5) }
+fn np_mod_scalar_arr(a, val: float)       { return _np_apply_scalar_rhs(a, val, 6) }
+fn np_power_scalar(a, val: float)         { return _np_apply_scalar_rhs(a, val, 8) }
+fn np_maximum_scalar(a, val: float)       { return _np_apply_scalar_rhs(a, val, 9) }
+fn np_minimum_scalar(a, val: float)       { return _np_apply_scalar_rhs(a, val, 10) }
+
+fn np_equal_scalar(a, val: float)         { return _np_apply_scalar_rhs(a, val, 20) }
+fn np_not_equal_scalar(a, val: float)     { return _np_apply_scalar_rhs(a, val, 21) }
+fn np_less_scalar(a, val: float)          { return _np_apply_scalar_rhs(a, val, 22) }
+fn np_less_equal_scalar(a, val: float)    { return _np_apply_scalar_rhs(a, val, 23) }
+fn np_greater_scalar(a, val: float)       { return _np_apply_scalar_rhs(a, val, 24) }
+fn np_greater_equal_scalar(a, val: float) { return _np_apply_scalar_rhs(a, val, 25) }
+
+# --- Clipping, Conditional Selection, Mask Filtering & Tolerances ---
+
+fn np_clip(arr, a_min: float, a_max: float) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if a_min > a_max {
+        _np_err(NP_ERR_DOMAIN)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    let dt = load64 [arr + 16]
+    let s0 = load64 [arr + 72]
+    let s1 = load64 [arr + 80]
+    let s2 = load64 [arr + 88]
+    let s3 = load64 [arr + 96]
+    let sz = load64 [arr + 32]
+    let out = _np_alloc_ndarray_header(nd, s0, s1, s2, s3, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if np_isnan_scalar(v) == 0 {
+            if v < a_min { v = a_min }
+            if v > a_max { v = a_max }
+        }
+        store64 [dst + i * 8] v
+        i = i + 1
+    }
+    return out
+}
+
+fn np_where(cond, x, y) {
+    if np_is_valid(cond) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(x) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(y) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz_c = load64 [cond + 32]
+    let sz_x = load64 [x + 32]
+    let sz_y = load64 [y + 32]
+    if sz_c != sz_x {
+        _np_err(NP_ERR_BROADCAST)
+        return 0
+    }
+    if sz_c != sz_y {
+        _np_err(NP_ERR_BROADCAST)
+        return 0
+    }
+    let nd = load64 [cond + 24]
+    let dt = np_promote_dtype(load64 [x + 16], load64 [y + 16])
+    let out = _np_alloc_ndarray_header(nd, load64 [cond + 72], load64 [cond + 80], load64 [cond + 88], load64 [cond + 96], dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz_c {
+        let c = np_flat_get(cond, i)
+        if c != 0.0 {
+            store64 [dst + i * 8] (np_flat_get(x, i))
+        } else {
+            store64 [dst + i * 8] (np_flat_get(y, i))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_where_scalar(cond, x_val: float, y_val: float) {
+    if np_is_valid(cond) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [cond + 24]
+    let sz = load64 [cond + 32]
+    let out = _np_alloc_ndarray_header(nd, load64 [cond + 72], load64 [cond + 80], load64 [cond + 88], load64 [cond + 96], NP_FLOAT64, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sz {
+        let c = np_flat_get(cond, i)
+        if c != 0.0 {
+            store64 [dst + i * 8] x_val
+        } else {
+            store64 [dst + i * 8] y_val
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_mask_filter(arr, mask) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(mask) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let msz = load64 [mask + 32]
+    if sz != msz {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let count = 0
+    let i = 0
+    while i < sz {
+        let mv = np_flat_get(mask, i)
+        if mv != 0.0 { count = count + 1 }
+        i = i + 1
+    }
+    let dt = load64 [arr + 16]
+    let out = _np_alloc_ndarray_header(1, count, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let k = 0
+    let j = 0
+    while j < sz {
+        let mv = np_flat_get(mask, j)
+        if mv != 0.0 {
+            let v = np_flat_get(arr, j)
+            store64 [dst + k * 8] v
+            k = k + 1
+        }
+        j = j + 1
+    }
+    return out
+}
+
+fn np_isclose_scalar(x: float, y: float, rtol: float, atol: float) {
+    if np_isnan_scalar(x) == 1 { return 0 }
+    if np_isnan_scalar(y) == 1 { return 0 }
+    if np_isinf_scalar(x) == 1 {
+        if np_isinf_scalar(y) == 1 {
+            if np_signbit_scalar(x) == np_signbit_scalar(y) { return 1 }
+        }
+        return 0
+    }
+    if np_isinf_scalar(y) == 1 { return 0 }
+    let diff = np_abs_scalar(x - y)
+    let bound = atol + rtol * np_abs_scalar(y)
+    if diff <= bound { return 1 }
+    return 0
+}
+
+fn np_isclose_tol(a, b, rtol: float, atol: float) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sza = load64 [a + 32]
+    let szb = load64 [b + 32]
+    if sza != szb {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let nd = load64 [a + 24]
+    let out = _np_alloc_ndarray_header(nd, load64 [a + 72], load64 [a + 80], load64 [a + 88], load64 [a + 96], NP_BOOL, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < sza {
+        let ok = np_isclose_scalar(np_flat_get(a, i), np_flat_get(b, i), rtol, atol)
+        store64 [dst + i * 8] (itof ok)
+        i = i + 1
+    }
+    return out
+}
+
+fn np_isclose(a, b) {
+    return np_isclose_tol(a, b, 0.00001, 0.00000001)
+}
+
+fn np_allclose_tol(a, b, rtol: float, atol: float) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    if nda != ndb { return 0 }
+    let d = 0
+    while d < nda {
+        let da = load64 [a + 72 + d * 8]
+        let db = load64 [b + 72 + d * 8]
+        if da != db { return 0 }
+        d = d + 1
+    }
+    let sz = load64 [a + 32]
+    let i = 0
+    while i < sz {
+        if np_isclose_scalar(np_flat_get(a, i), np_flat_get(b, i), rtol, atol) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn np_allclose(a, b) {
+    return np_allclose_tol(a, b, 0.00001, 0.00000001)
+}
+
+fn np_array_equal(a, b) {
+    if np_is_valid(a) == 0 { return 0 }
+    if np_is_valid(b) == 0 { return 0 }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    if nda != ndb { return 0 }
+    let d = 0
+    while d < nda {
+        let da = load64 [a + 72 + d * 8]
+        let db = load64 [b + 72 + d * 8]
+        if da != db { return 0 }
+        d = d + 1
+    }
+    let sz = load64 [a + 32]
+    let i = 0
+    while i < sz {
+        let va = np_flat_get(a, i)
+        let vb = np_flat_get(b, i)
+        if np_isnan_scalar(va) == 1 { return 0 }
+        if np_isnan_scalar(vb) == 1 { return 0 }
+        if va != vb { return 0 }
+        i = i + 1
+    }
+    return 1
+}

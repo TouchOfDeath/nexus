@@ -1,0 +1,1174 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — LINEAR ALGEBRA
+# ==============================================================================
+# Matrix & vector computing: dot, matmul, matvec, norms (L1, L2, Linf, Frobenius),
+# trace, outer, 3D cross product, PA=LU decomposition with partial pivoting,
+# determinant, linear system solver (solve), matrix inverse (inv), Modified
+# Gram-Schmidt QR decomposition, QR least-squares solver (lstsq), rank
+# estimation, QR eigenvalue solver, and singular value extraction.
+# ==============================================================================
+
+include "stdlib/numpy/stats.nex"
+
+# --- Dot Product, Outer Product, 3D Cross Product & Matrix Multiplication ---
+
+fn np_dot(a, b) -> float {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+    if nda != 1 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return np_nan()
+    }
+    if ndb != 1 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return np_nan()
+    }
+    let na = load64 [a + 72]
+    let nb = load64 [b + 72]
+    if na != nb {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return np_nan()
+    }
+    let sum = 0.0
+    let c = 0.0
+    let i = 0
+    while i < na {
+        let term = np_get(a, i) * np_get(b, i)
+        let t = sum + term
+        if np_abs_scalar(sum) >= np_abs_scalar(term) {
+            c = c + ((sum - t) + term)
+        } else {
+            c = c + ((term - t) + sum)
+        }
+        sum = t
+        i = i + 1
+    }
+    return sum + c
+}
+
+fn np_outer(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let m = load64 [a + 32]
+    let n = load64 [b + 32]
+    let out = np_zeros_2d(m, n)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < m {
+        let va = np_flat_get(a, i)
+        let j = 0
+        while j < n {
+            let vb = np_flat_get(b, j)
+            let idx = i * n + j
+            store64 [dst + idx * 8] (va * vb)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn np_cross(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let na = load64 [a + 32]
+    let nb = load64 [b + 32]
+    if na != 3 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if nb != 3 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let a0 = np_flat_get(a, 0)
+    let a1 = np_flat_get(a, 1)
+    let a2 = np_flat_get(a, 2)
+    let b0 = np_flat_get(b, 0)
+    let b1 = np_flat_get(b, 1)
+    let b2 = np_flat_get(b, 2)
+
+    let out = np_zeros(3)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    store64 [dst + 0]  (a1 * b2 - a2 * b1)
+    store64 [dst + 8]  (a2 * b0 - a0 * b2)
+    store64 [dst + 16] (a0 * b1 - a1 * b0)
+    return out
+}
+
+fn np_matvec(mat, vec) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(vec) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let ndm = load64 [mat + 24]
+    let ndv = load64 [vec + 24]
+    if ndm != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if ndv != 1 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let rows = load64 [mat + 72]
+    let cols = load64 [mat + 80]
+    let vlen = load64 [vec + 72]
+    if cols != vlen {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let out = np_zeros(rows)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let r = 0
+    while r < rows {
+        let sum = 0.0
+        let c = 0
+        while c < cols {
+            sum = sum + np_get2(mat, r, c) * np_get(vec, c)
+            c = c + 1
+        }
+        store64 [dst + r * 8] sum
+        r = r + 1
+    }
+    return out
+}
+
+fn np_matmul(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    let ndb = load64 [b + 24]
+
+    # Case 1: 2D @ 1D -> 1D
+    if nda == 2 {
+        if ndb == 1 {
+            return np_matvec(a, b)
+        }
+    }
+
+    # Case 2: 1D @ 2D -> 1D
+    if nda == 1 {
+        if ndb == 2 {
+            let vlen = load64 [a + 72]
+            let rows = load64 [b + 72]
+            let cols = load64 [b + 80]
+            if vlen != rows {
+                _np_err(NP_ERR_INVALID_SHAPE)
+                return 0
+            }
+            let out = np_zeros(cols)
+            if out == 0 { return 0 }
+            let dst = load64 [out + 8]
+            let c = 0
+            while c < cols {
+                let sum = 0.0
+                let r = 0
+                while r < rows {
+                    sum = sum + np_get(a, r) * np_get2(b, r, c)
+                    r = r + 1
+                }
+                store64 [dst + c * 8] sum
+                c = c + 1
+            }
+            return out
+        }
+    }
+
+    # Case 3: 2D @ 2D -> 2D
+    if nda == 2 {
+        if ndb == 2 {
+            let m = load64 [a + 72]
+            let k_a = load64 [a + 80]
+            let k_b = load64 [b + 72]
+            let n = load64 [b + 80]
+            if k_a != k_b {
+                _np_err(NP_ERR_INVALID_SHAPE)
+                return 0
+            }
+            let out = np_zeros_2d(m, n)
+            if out == 0 { return 0 }
+            let dst = load64 [out + 8]
+
+            # Cache-friendly i-k-j loop order when both inputs are contiguous with offset 0
+            let ca = np_is_contiguous(a)
+            let cb = np_is_contiguous(b)
+            let off_a = load64 [a + 144]
+            let off_b = load64 [b + 144]
+            if ca == 1 {
+                if cb == 1 {
+                    if off_a == 0 {
+                        if off_b == 0 {
+                            let pa = load64 [a + 8]
+                            let pb = load64 [b + 8]
+                            let i = 0
+                            while i < m {
+                                let k = 0
+                                while k < k_a {
+                                    let aik = load64 [pa + (i * k_a + k) * 8]
+                                    if_f aik != 0.0 {
+                                        let row_b = k * n
+                                        let row_c = i * n
+                                        let j = 0
+                                        while j < n {
+                                            let prev = load64 [dst + (row_c + j) * 8]
+                                            let bkj = load64 [pb + (row_b + j) * 8]
+                                            let prod = fmul aik bkj
+                                            let nxt = fadd prev prod
+                                            store64 [dst + (row_c + j) * 8] nxt
+                                            j = j + 1
+                                        }
+                                    }
+                                    k = k + 1
+                                }
+                                i = i + 1
+                            }
+                            return out
+                        }
+                    }
+                }
+            }
+
+            # General strided 2D @ 2D fallback
+            let i = 0
+            while i < m {
+                let j = 0
+                while j < n {
+                    let sum = 0.0
+                    let k = 0
+                    while k < k_a {
+                        sum = sum + np_get2(a, i, k) * np_get2(b, k, j)
+                        k = k + 1
+                    }
+                    store64 [dst + (i * n + j) * 8] sum
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            return out
+        }
+    }
+
+    _np_err(NP_ERR_INVALID_DIM)
+    return 0
+}
+
+# --- Vector & Matrix Norms, Trace & Diagonal ---
+
+fn np_vec_norm(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 { return 0.0 }
+    # Overflow/underflow-safe scaled L2 norm
+    let scale = 0.0
+    let ssq = 1.0
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        if np_isnan_scalar(x) == 1 { return np_nan() }
+        let ax = np_abs_scalar(x)
+        if ax != 0.0 {
+            if scale < ax {
+                let ratio = scale / ax
+                ssq = 1.0 + ssq * ratio * ratio
+                scale = ax
+            } else {
+                let ratio = ax / scale
+                ssq = ssq + ratio * ratio
+            }
+        }
+        i = i + 1
+    }
+    return scale * (fsqrt ssq)
+}
+
+fn np_frob_norm(mat) -> float {
+    return np_vec_norm(mat)
+}
+
+fn np_norm(arr) -> float {
+    return np_vec_norm(arr)
+}
+
+fn np_norm_ord(arr, ord) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 { return 0.0 }
+    if ord == 2 { return np_vec_norm(arr) }
+    if ord == 1 {
+        let sum = 0.0
+        let i = 0
+        while i < sz {
+            sum = sum + np_abs_scalar(np_flat_get(arr, i))
+            i = i + 1
+        }
+        return sum
+    }
+    if ord == 0 {
+        return itof (np_count_nonzero(arr))
+    }
+    # ord >= 100 treats as L-infinity norm (max abs)
+    let best = 0.0
+    let i = 0
+    while i < sz {
+        let a = np_abs_scalar(np_flat_get(arr, i))
+        if a > best { best = a }
+        i = i + 1
+    }
+    return best
+}
+
+fn np_trace(mat) -> float {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let nd = load64 [mat + 24]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return np_nan()
+    }
+    let rows = load64 [mat + 72]
+    let cols = load64 [mat + 80]
+    let m = rows
+    if cols < m { m = cols }
+    let sum = 0.0
+    let i = 0
+    while i < m {
+        sum = sum + np_get2(mat, i, i)
+        i = i + 1
+    }
+    return sum
+}
+
+fn np_diag_extract(mat) {
+    return np_diag(mat)
+}
+
+# --- PA = LU Decomposition with Partial Pivoting ---
+# Factorizes an n x n buffer `lu` in-place into unit lower-triangular L (below
+# diagonal) and upper-triangular U (on & above diagonal), recording row
+# permutations in `piv` (n QWORDs). Returns pivot parity (+1 or -1), or 0 if
+# singular within tolerance `tol`.
+
+fn _np_lu_factor_raw(lu, piv, n, tol: float) {
+    let i = 0
+    while i < n {
+        store64 [piv + i * 8] i
+        i = i + 1
+    }
+    let sign = 1
+    let k = 0
+    while k < n {
+        # Find pivot row p >= k maximizing |lu[p, k]|
+        let p = k
+        let kk_val = load64 [lu + (k * n + k) * 8]
+        let max_val = np_abs_scalar(kk_val)
+        let r = k + 1
+        while r < n {
+            let rk_val = load64 [lu + (r * n + k) * 8]
+            let v = np_abs_scalar(rk_val)
+            if v > max_val {
+                max_val = v
+                p = r
+            }
+            r = r + 1
+        }
+        if max_val <= tol {
+            return 0
+        }
+        if p != k {
+            # Swap rows p and k in lu
+            let c = 0
+            while c < n {
+                let tmp = load64 [lu + (k * n + c) * 8]
+                store64 [lu + (k * n + c) * 8] (load64 [lu + (p * n + c) * 8])
+                store64 [lu + (p * n + c) * 8] tmp
+                c = c + 1
+            }
+            let tp = load64 [piv + k * 8]
+            store64 [piv + k * 8] (load64 [piv + p * 8])
+            store64 [piv + p * 8] tp
+            sign = 0 - sign
+        }
+        let piv_val = load64 [lu + (k * n + k) * 8]
+        let i_row = k + 1
+        while i_row < n {
+            let ik_val = load64 [lu + (i_row * n + k) * 8]
+            let factor = fdiv ik_val piv_val
+            store64 [lu + (i_row * n + k) * 8] factor
+            let j_col = k + 1
+            while j_col < n {
+                let cur = load64 [lu + (i_row * n + j_col) * 8]
+                let ukj = load64 [lu + (k * n + j_col) * 8]
+                let prod = fmul factor ukj
+                let upd = fsub cur prod
+                store64 [lu + (i_row * n + j_col) * 8] upd
+                j_col = j_col + 1
+            }
+            i_row = i_row + 1
+        }
+        k = k + 1
+    }
+    return sign
+}
+
+fn np_lu_L(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [mat + 24]
+    let n = load64 [mat + 72]
+    let m = load64 [mat + 80]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if n != m {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let copy_m = np_copy(mat)
+    let lu = load64 [copy_m + 8]
+    let piv_bytes = n * 8
+    let piv = alloc piv_bytes
+    _np_lu_factor_raw(lu, piv, n, 0.00000001)
+    let L = np_identity(n)
+    let r = 0
+    while r < n {
+        let c = 0
+        while c < r {
+            let l_rc = load64 [lu + (r * n + c) * 8]
+            np_set2(L, r, c, l_rc)
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return L
+}
+
+fn np_lu_U(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [mat + 24]
+    let n = load64 [mat + 72]
+    let m = load64 [mat + 80]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if n != m {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let copy_m = np_copy(mat)
+    let lu = load64 [copy_m + 8]
+    let piv_bytes = n * 8
+    let piv = alloc piv_bytes
+    _np_lu_factor_raw(lu, piv, n, 0.00000001)
+    let U = np_zeros_2d(n, n)
+    let r = 0
+    while r < n {
+        let c = r
+        while c < n {
+            let u_rc = load64 [lu + (r * n + c) * 8]
+            np_set2(U, r, c, u_rc)
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return U
+}
+
+fn np_lu_P(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [mat + 24]
+    let n = load64 [mat + 72]
+    let m = load64 [mat + 80]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if n != m {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let copy_m = np_copy(mat)
+    let lu = load64 [copy_m + 8]
+    let piv_bytes = n * 8
+    let piv = alloc piv_bytes
+    _np_lu_factor_raw(lu, piv, n, 0.00000001)
+    let P = np_zeros_2d(n, n)
+    let i = 0
+    while i < n {
+        let p_col = load64 [piv + i * 8]
+        np_set2(P, i, p_col, 1.0)
+        i = i + 1
+    }
+    return P
+}
+
+fn np_det(mat) -> float {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let nd = load64 [mat + 24]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return np_nan()
+    }
+    let rows = load64 [mat + 72]
+    let cols = load64 [mat + 80]
+    if rows != cols {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return np_nan()
+    }
+    let n = rows
+    if n == 0 { return 1.0 }
+    if n == 1 { return np_get2(mat, 0, 0) }
+    if n == 2 {
+        let a = np_get2(mat, 0, 0)
+        let b = np_get2(mat, 0, 1)
+        let c = np_get2(mat, 1, 0)
+        let d = np_get2(mat, 1, 1)
+        return a * d - b * c
+    }
+    let copy_m = np_copy(mat)
+    let lu = load64 [copy_m + 8]
+    let piv_bytes = n * 8
+    let piv = alloc piv_bytes
+    let sign = _np_lu_factor_raw(lu, piv, n, 0.00000001)
+    if sign == 0 { return 0.0 }
+    let det = itof sign
+    let i = 0
+    while i < n {
+        let uii = load64 [lu + (i * n + i) * 8]
+        det = fmul det uii
+        i = i + 1
+    }
+    return det
+}
+
+fn np_solve(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nda = load64 [a + 24]
+    if nda != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let n = load64 [a + 72]
+    let cols_a = load64 [a + 80]
+    if n != cols_a {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if n == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return 0
+    }
+
+    let ndb = load64 [b + 24]
+    let rows_b = load64 [b + 72]
+    if rows_b != n {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+
+    # Estimate scale of A for relative singularity tolerance
+    let max_a = np_norm_ord(a, 999)
+    if max_a == 0.0 {
+        _np_err(NP_ERR_SINGULAR)
+        return 0
+    }
+    let tol = max_a * 0.00000001
+
+    let copy_a = np_copy(a)
+    let lu = load64 [copy_a + 8]
+    let piv_bytes = n * 8
+    let piv = alloc piv_bytes
+    let sign = _np_lu_factor_raw(lu, piv, n, tol)
+    if sign == 0 {
+        _np_err(NP_ERR_SINGULAR)
+        return 0
+    }
+
+    if ndb == 1 {
+        let x = np_zeros(n)
+        let x_buf = load64 [x + 8]
+        # 1. Permute b and solve L y = P b (forward substitution)
+        let i = 0
+        while i < n {
+            let p_idx = load64 [piv + i * 8]
+            let sum = np_get(b, p_idx)
+            let j = 0
+            while j < i {
+                let lij = load64 [lu + (i * n + j) * 8]
+                let xj = load64 [x_buf + j * 8]
+                let prod = fmul lij xj
+                sum = fsub sum prod
+                j = j + 1
+            }
+            store64 [x_buf + i * 8] sum
+            i = i + 1
+        }
+        # 2. Solve U x = y (back substitution)
+        let i2 = n - 1
+        while i2 >= 0 {
+            let sum = load64 [x_buf + i2 * 8]
+            let j2 = i2 + 1
+            while j2 < n {
+                let uij = load64 [lu + (i2 * n + j2) * 8]
+                let xj = load64 [x_buf + j2 * 8]
+                let prod = fmul uij xj
+                sum = fsub sum prod
+                j2 = j2 + 1
+            }
+            let u_ii = load64 [lu + (i2 * n + i2) * 8]
+            let x_res = fdiv sum u_ii
+            store64 [x_buf + i2 * 8] x_res
+            i2 = i2 - 1
+        }
+        return x
+    }
+
+    if ndb == 2 {
+        let nrhs = load64 [b + 80]
+        let X = np_zeros_2d(n, nrhs)
+        let col = 0
+        while col < nrhs {
+            let y_bytes = n * 8
+            let y_col = alloc y_bytes
+            let i = 0
+            while i < n {
+                let p_idx = load64 [piv + i * 8]
+                let sum = np_get2(b, p_idx, col)
+                let j = 0
+                while j < i {
+                    let lij = load64 [lu + (i * n + j) * 8]
+                    let yj = load64 [y_col + j * 8]
+                    let prod = fmul lij yj
+                    sum = fsub sum prod
+                    j = j + 1
+                }
+                store64 [y_col + i * 8] sum
+                i = i + 1
+            }
+            let i2 = n - 1
+            while i2 >= 0 {
+                let sum = load64 [y_col + i2 * 8]
+                let j2 = i2 + 1
+                while j2 < n {
+                    let uij = load64 [lu + (i2 * n + j2) * 8]
+                    let yj = load64 [y_col + j2 * 8]
+                    let prod = fmul uij yj
+                    sum = fsub sum prod
+                    j2 = j2 + 1
+                }
+                let u_ii = load64 [lu + (i2 * n + i2) * 8]
+                let x_val = fdiv sum u_ii
+                store64 [y_col + i2 * 8] x_val
+                np_set2(X, i2, col, x_val)
+                i2 = i2 - 1
+            }
+            col = col + 1
+        }
+        return X
+    }
+
+    _np_err(NP_ERR_INVALID_DIM)
+    return 0
+}
+
+fn np_inv(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [mat + 24]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let rows = load64 [mat + 72]
+    let cols = load64 [mat + 80]
+    if rows != cols {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if rows == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return 0
+    }
+    let eye_n = np_identity(rows)
+    return np_solve(mat, eye_n)
+}
+
+# --- Modified Gram-Schmidt QR Decomposition & Least Squares (lstsq) ---
+
+fn _np_qr_mgs(mat, Q_out, R_out) {
+    let m = load64 [mat + 72]
+    let n = load64 [mat + 80]
+    let r = 0
+    while r < m {
+        let c = 0
+        while c < n {
+            np_set2(Q_out, r, c, np_get2(mat, r, c))
+            c = c + 1
+        }
+        r = r + 1
+    }
+    let k = 0
+    while k < n {
+        let norm_sq = 0.0
+        let i = 0
+        while i < m {
+            let qik = np_get2(Q_out, i, k)
+            norm_sq = norm_sq + qik * qik
+            i = i + 1
+        }
+        let r_kk = fsqrt norm_sq
+        np_set2(R_out, k, k, r_kk)
+        if r_kk <= 0.00000001 {
+            return 0
+        }
+        let i2 = 0
+        while i2 < m {
+            np_set2(Q_out, i2, k, np_get2(Q_out, i2, k) / r_kk)
+            i2 = i2 + 1
+        }
+        let j = k + 1
+        while j < n {
+            let r_kj = 0.0
+            let i3 = 0
+            while i3 < m {
+                r_kj = r_kj + np_get2(Q_out, i3, k) * np_get2(Q_out, i3, j)
+                i3 = i3 + 1
+            }
+            np_set2(R_out, k, j, r_kj)
+            let i4 = 0
+            while i4 < m {
+                let updated = np_get2(Q_out, i4, j) - r_kj * np_get2(Q_out, i4, k)
+                np_set2(Q_out, i4, j, updated)
+                i4 = i4 + 1
+            }
+            j = j + 1
+        }
+        k = k + 1
+    }
+    return 1
+}
+
+fn np_qr_Q(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [mat + 24]) != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let m = load64 [mat + 72]
+    let n = load64 [mat + 80]
+    if m < n {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let Q = np_zeros_2d(m, n)
+    let R = np_zeros_2d(n, n)
+    _np_qr_mgs(mat, Q, R)
+    return Q
+}
+
+fn np_qr_R(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [mat + 24]) != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let m = load64 [mat + 72]
+    let n = load64 [mat + 80]
+    if m < n {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let Q = np_zeros_2d(m, n)
+    let R = np_zeros_2d(n, n)
+    _np_qr_mgs(mat, Q, R)
+    return R
+}
+
+fn np_lstsq(a, b) {
+    if np_is_valid(a) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if np_is_valid(b) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [a + 24]) != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if (load64 [b + 24]) != 1 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let m = load64 [a + 72]
+    let n = load64 [a + 80]
+    let nb = load64 [b + 72]
+    if m != nb {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if m < n {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let Q = np_zeros_2d(m, n)
+    let R = np_zeros_2d(n, n)
+    let ok = _np_qr_mgs(a, Q, R)
+    if ok == 0 {
+        _np_err(NP_ERR_SINGULAR)
+        return 0
+    }
+    # Compute qt_b = Q^T @ b
+    let qtb_bytes = n * 8
+    let qt_b = alloc qtb_bytes
+    let j = 0
+    while j < n {
+        let sum = 0.0
+        let i = 0
+        while i < m {
+            sum = sum + np_get2(Q, i, j) * np_get(b, i)
+            i = i + 1
+        }
+        store64 [qt_b + j * 8] sum
+        j = j + 1
+    }
+    # Back-substitute R x = qt_b
+    let x = np_zeros(n)
+    let x_buf = load64 [x + 8]
+    let k = n - 1
+    while k >= 0 {
+        let sum = load64 [qt_b + k * 8]
+        let c = k + 1
+        while c < n {
+            let rkc = np_get2(R, k, c)
+            let xc = load64 [x_buf + c * 8]
+            let prod = fmul rkc xc
+            sum = fsub sum prod
+            c = c + 1
+        }
+        let r_kk = np_get2(R, k, k)
+        let xk = fdiv sum r_kk
+        store64 [x_buf + k * 8] xk
+        k = k - 1
+    }
+    return x
+}
+
+# --- Rank Estimation, Eigenvalues & Singular Values ---
+
+fn np_matrix_rank_tol(mat, tol: float) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [mat + 24]) != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let rows = load64 [mat + 72]
+    let cols = load64 [mat + 80]
+    if rows == 0 { return 0 }
+    if cols == 0 { return 0 }
+
+    let work = np_copy(mat)
+    let w = load64 [work + 8]
+    let rank = 0
+    let r = 0
+    let c = 0
+    while r < rows {
+        if c >= cols { break }
+        # Find pivot in column c from row r..rows-1
+        let piv_r = r
+        let w_rc = load64 [w + (r * cols + c) * 8]
+        let max_v = np_abs_scalar(w_rc)
+        let i = r + 1
+        while i < rows {
+            let w_ic = load64 [w + (i * cols + c) * 8]
+            let v = np_abs_scalar(w_ic)
+            if v > max_v {
+                max_v = v
+                piv_r = i
+            }
+            i = i + 1
+        }
+        if max_v > tol {
+            if piv_r != r {
+                let k = c
+                while k < cols {
+                    let tmp = load64 [w + (r * cols + k) * 8]
+                    store64 [w + (r * cols + k) * 8] (load64 [w + (piv_r * cols + k) * 8])
+                    store64 [w + (piv_r * cols + k) * 8] tmp
+                    k = k + 1
+                }
+            }
+            let piv_val = load64 [w + (r * cols + c) * 8]
+            let i2 = r + 1
+            while i2 < rows {
+                let i2c_val = load64 [w + (i2 * cols + c) * 8]
+                let fac = fdiv i2c_val piv_val
+                let k2 = c
+                while k2 < cols {
+                    let cur = load64 [w + (i2 * cols + k2) * 8]
+                    let r_val = load64 [w + (r * cols + k2) * 8]
+                    let prod = fmul fac r_val
+                    let upd = fsub cur prod
+                    store64 [w + (i2 * cols + k2) * 8] upd
+                    k2 = k2 + 1
+                }
+                i2 = i2 + 1
+            }
+            rank = rank + 1
+            r = r + 1
+        }
+        c = c + 1
+    }
+    return rank
+}
+
+fn np_matrix_rank(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let max_a = np_norm_ord(mat, 999)
+    let tol = max_a * 0.00000001
+    if tol <= 0.0 { tol = 0.00000001 }
+    return np_matrix_rank_tol(mat, tol)
+}
+
+fn np_eigh_2x2_vals(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [mat + 72]) != 2 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if (load64 [mat + 80]) != 2 {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let a = np_get2(mat, 0, 0)
+    let b = np_get2(mat, 0, 1)
+    let c = np_get2(mat, 1, 0)
+    let d = np_get2(mat, 1, 1)
+    let tr = a + d
+    let diff = a - d
+    let disc = fsqrt (diff * diff + 4.0 * b * c)
+    let l1 = 0.5 * (tr - disc)
+    let l2 = 0.5 * (tr + disc)
+    let out = np_zeros(2)
+    np_set(out, 0, l1)
+    np_set(out, 1, l2)
+    return out
+}
+
+fn np_power_eigen_vec(mat, max_iter) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let n = load64 [mat + 72]
+    if n != (load64 [mat + 80]) {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    let v = np_ones(n)
+    let it = 0
+    while it < max_iter {
+        let nv = np_matvec(mat, v)
+        let nrm = np_vec_norm(nv)
+        if nrm <= 0.00000001 { break }
+        v = np_div_scalar(nv, nrm)
+        it = it + 1
+    }
+    return v
+}
+
+fn np_power_eigen_val(mat, max_iter) -> float {
+    let v = np_power_eigen_vec(mat, max_iter)
+    if v == 0 { return np_nan() }
+    let av = np_matvec(mat, v)
+    let num = np_dot(v, av)
+    let den = np_dot(v, v)
+    if den == 0.0 { return 0.0 }
+    return num / den
+}
+
+fn np_svd_values(mat) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [mat + 24]) != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let at = np_transpose(mat)
+    let ata = np_matmul(at, mat)
+    let n = load64 [ata + 72]
+    if n == 1 {
+        let v0 = np_get2(ata, 0, 0)
+        if v0 < 0.0 { v0 = 0.0 }
+        let out1 = np_zeros(1)
+        let sv0 = fsqrt v0
+        np_set(out1, 0, sv0)
+        return out1
+    }
+    if n == 2 {
+        let evals = np_eigh_2x2_vals(ata)
+        let s0_sq = np_get(evals, 1)
+        let s1_sq = np_get(evals, 0)
+        if s0_sq < 0.0 { s0_sq = 0.0 }
+        if s1_sq < 0.0 { s1_sq = 0.0 }
+        let out = np_zeros(2)
+        let sv0 = fsqrt s0_sq
+        let sv1 = fsqrt s1_sq
+        np_set(out, 0, sv0)
+        np_set(out, 1, sv1)
+        return out
+    }
+    # For general n, run QR iteration on A^T A to extract diagonal eigenvalues
+    let ak = np_copy(ata)
+    let iter = 0
+    while iter < 40 {
+        let Q = np_zeros_2d(n, n)
+        let R = np_zeros_2d(n, n)
+        let ok = _np_qr_mgs(ak, Q, R)
+        if ok == 0 { break }
+        ak = np_matmul(R, Q)
+        iter = iter + 1
+    }
+    let raw_s = np_zeros(n)
+    let i = 0
+    while i < n {
+        let lam = np_get2(ak, i, i)
+        if lam < 0.0 { lam = 0.0 }
+        let sv_i = fsqrt lam
+        np_set(raw_s, i, sv_i)
+        i = i + 1
+    }
+    # Sort descending
+    let asc = np_sort(raw_s)
+    let desc = np_zeros(n)
+    let j = 0
+    while j < n {
+        np_set(desc, j, np_get(asc, n - 1 - j))
+        j = j + 1
+    }
+    return desc
+}
+
+
+fn np_matrix_power(mat, power) {
+    if np_is_valid(mat) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    if (load64 [mat + 24]) != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let rows = load64 [mat + 72]
+    let cols = load64 [mat + 80]
+    if rows != cols {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0
+    }
+    if power < 0 {
+        let inv_m = np_inv(mat)
+        if inv_m == 0 { return 0 }
+        let pos_p = 0 - power
+        let res = np_identity(rows)
+        let k = 0
+        while k < pos_p {
+            res = np_matmul(res, inv_m)
+            k = k + 1
+        }
+        return res
+    }
+    if power == 0 {
+        return np_identity(rows)
+    }
+    if power == 1 {
+        return np_copy(mat)
+    }
+    let res = np_copy(mat)
+    let k = 1
+    while k < power {
+        res = np_matmul(res, mat)
+        k = k + 1
+    }
+    return res
+}

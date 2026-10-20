@@ -1,0 +1,469 @@
+# ==============================================================================
+# NEXUS NUMERICAL COMPUTING LIBRARY (numpy) — REDUCTIONS & AGGREGATIONS
+# ==============================================================================
+# Full-array and axis-aware reductions using Kahan-Neumaier compensated
+# summation: sum, prod, min, max, ptp, argmin, argmax, cumsum, cumprod,
+# any, all, count_nonzero, diff, trapz.
+# ==============================================================================
+
+include "stdlib/numpy/ops.nex"
+
+fn np_sum(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0.0
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 { return 0.0 }
+
+    # Neumaier compensated summation for numerical stability
+    let sum = 0.0
+    let c = 0.0
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        if np_isnan_scalar(x) == 1 { return np_nan() }
+        let t = sum + x
+        if np_abs_scalar(sum) >= np_abs_scalar(x) {
+            c = c + ((sum - t) + x)
+        } else {
+            c = c + ((x - t) + sum)
+        }
+        sum = t
+        i = i + 1
+    }
+    return sum + c
+}
+
+fn np_prod(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0.0
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 { return 1.0 }
+    let acc = 1.0
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        if np_isnan_scalar(x) == 1 { return np_nan() }
+        acc = acc * x
+        i = i + 1
+    }
+    return acc
+}
+
+fn np_min(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let best = np_flat_get(arr, 0)
+    if np_isnan_scalar(best) == 1 { return np_nan() }
+    let i = 1
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if np_isnan_scalar(v) == 1 { return np_nan() }
+        if v < best { best = v }
+        i = i + 1
+    }
+    return best
+}
+
+fn np_max(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let best = np_flat_get(arr, 0)
+    if np_isnan_scalar(best) == 1 { return np_nan() }
+    let i = 1
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if np_isnan_scalar(v) == 1 { return np_nan() }
+        if v > best { best = v }
+        i = i + 1
+    }
+    return best
+}
+
+fn np_ptp(arr) -> float {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return np_nan()
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return np_nan()
+    }
+    let hi = np_max(arr)
+    let lo = np_min(arr)
+    return hi - lo
+}
+
+fn np_argmin(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return -1
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return -1
+    }
+    let best = np_flat_get(arr, 0)
+    if np_isnan_scalar(best) == 1 { return 0 }
+    let best_idx = 0
+    let i = 1
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if np_isnan_scalar(v) == 1 { return i }
+        if v < best {
+            best = v
+            best_idx = i
+        }
+        i = i + 1
+    }
+    return best_idx
+}
+
+fn np_argmax(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return -1
+    }
+    let sz = load64 [arr + 32]
+    if sz == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return -1
+    }
+    let best = np_flat_get(arr, 0)
+    if np_isnan_scalar(best) == 1 { return 0 }
+    let best_idx = 0
+    let i = 1
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if np_isnan_scalar(v) == 1 { return i }
+        if v > best {
+            best = v
+            best_idx = i
+        }
+        i = i + 1
+    }
+    return best_idx
+}
+
+fn np_cumsum(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let dt = load64 [arr + 16]
+    let out = _np_alloc_ndarray_header(1, sz, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let sum = 0.0
+    let c = 0.0
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        let t = sum + x
+        if np_abs_scalar(sum) >= np_abs_scalar(x) {
+            c = c + ((sum - t) + x)
+        } else {
+            c = c + ((x - t) + sum)
+        }
+        sum = t
+        store64 [dst + i * 8] (sum + c)
+        i = i + 1
+    }
+    return out
+}
+
+fn np_cumprod(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let dt = load64 [arr + 16]
+    let out = _np_alloc_ndarray_header(1, sz, 0, 0, 0, dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let acc = 1.0
+    let i = 0
+    while i < sz {
+        let x = np_flat_get(arr, i)
+        acc = acc * x
+        store64 [dst + i * 8] acc
+        i = i + 1
+    }
+    return out
+}
+
+fn np_any(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if v != 0.0 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn np_all(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if v == 0.0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn np_count_nonzero(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    let cnt = 0
+    let i = 0
+    while i < sz {
+        let v = np_flat_get(arr, i)
+        if v != 0.0 { cnt = cnt + 1 }
+        i = i + 1
+    }
+    return cnt
+}
+
+fn np_diff(arr) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let sz = load64 [arr + 32]
+    if sz <= 1 {
+        return _np_alloc_ndarray_header(1, 0, 0, 0, 0, load64 [arr + 16], 0)
+    }
+    let out = _np_alloc_ndarray_header(1, sz - 1, 0, 0, 0, load64 [arr + 16], 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let i = 0
+    while i < (sz - 1) {
+        let v0 = np_flat_get(arr, i)
+        let v1 = np_flat_get(arr, i + 1)
+        store64 [dst + i * 8] (v1 - v0)
+        i = i + 1
+    }
+    return out
+}
+
+fn np_trapz(y, dx: float) -> float {
+    if np_is_valid(y) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0.0
+    }
+    let n = load64 [y + 32]
+    if n <= 1 { return 0.0 }
+    let sum = 0.0
+    let c = 0.0
+    let i = 0
+    while i < (n - 1) {
+        let y0 = np_flat_get(y, i)
+        let y1 = np_flat_get(y, i + 1)
+        let term = 0.5 * (y0 + y1) * dx
+        let t = sum + term
+        if np_abs_scalar(sum) >= np_abs_scalar(term) {
+            c = c + ((sum - t) + term)
+        } else {
+            c = c + ((term - t) + sum)
+        }
+        sum = t
+        i = i + 1
+    }
+    return sum + c
+}
+
+fn np_trapz_x(y, x) -> float {
+    if np_is_valid(y) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0.0
+    }
+    if np_is_valid(x) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0.0
+    }
+    let ny = load64 [y + 32]
+    let nx = load64 [x + 32]
+    if ny != nx {
+        _np_err(NP_ERR_INVALID_SHAPE)
+        return 0.0
+    }
+    if ny <= 1 { return 0.0 }
+    let sum = 0.0
+    let i = 0
+    while i < (ny - 1) {
+        let dx = np_flat_get(x, i + 1) - np_flat_get(x, i)
+        let avg_y = 0.5 * (np_flat_get(y, i) + np_flat_get(y, i + 1))
+        sum = sum + avg_y * dx
+        i = i + 1
+    }
+    return sum
+}
+
+# --- Axis-Aware 2D Reductions (axis = 0 reduces rows, axis = 1/-1 reduces cols) ---
+
+fn _np_reduce_axis_2d(arr, axis, op_code) {
+    if np_is_valid(arr) == 0 {
+        _np_err(NP_ERR_NULL)
+        return 0
+    }
+    let nd = load64 [arr + 24]
+    if nd != 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let ax = axis
+    if ax < 0 { ax = ax + 2 }
+    if ax < 0 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    if ax >= 2 {
+        _np_err(NP_ERR_INVALID_DIM)
+        return 0
+    }
+    let rows = load64 [arr + 72]
+    let cols = load64 [arr + 80]
+    if rows == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return 0
+    }
+    if cols == 0 {
+        _np_err(NP_ERR_EMPTY)
+        return 0
+    }
+    let out_dt = NP_FLOAT64
+    if op_code >= 5 { out_dt = NP_INT64 }
+
+    if ax == 0 {
+        let out = _np_alloc_ndarray_header(1, cols, 0, 0, 0, out_dt, 0)
+        if out == 0 { return 0 }
+        let dst = load64 [out + 8]
+        let c = 0
+        while c < cols {
+            let v0 = np_get2(arr, 0, c)
+            let acc = v0
+            if op_code == 1 { acc = 0.0 }
+            if op_code == 2 { acc = 1.0 }
+            let best_idx = 0
+            let r = 0
+            while r < rows {
+                let v = np_get2(arr, r, c)
+                if op_code == 1 { acc = acc + v }
+                if op_code == 2 { acc = acc * v }
+                if op_code == 3 {
+                    if v < acc { acc = v }
+                }
+                if op_code == 4 {
+                    if v > acc { acc = v }
+                }
+                if op_code == 5 {
+                    if v < acc {
+                        acc = v
+                        best_idx = r
+                    }
+                }
+                if op_code == 6 {
+                    if v > acc {
+                        acc = v
+                        best_idx = r
+                    }
+                }
+                r = r + 1
+            }
+            if op_code >= 5 {
+                store64 [dst + c * 8] (itof best_idx)
+            } else {
+                store64 [dst + c * 8] acc
+            }
+            c = c + 1
+        }
+        return out
+    }
+
+    # ax == 1
+    let out = _np_alloc_ndarray_header(1, rows, 0, 0, 0, out_dt, 0)
+    if out == 0 { return 0 }
+    let dst = load64 [out + 8]
+    let r = 0
+    while r < rows {
+        let v0 = np_get2(arr, r, 0)
+        let acc = v0
+        if op_code == 1 { acc = 0.0 }
+        if op_code == 2 { acc = 1.0 }
+        let best_idx = 0
+        let c = 0
+        while c < cols {
+            let v = np_get2(arr, r, c)
+            if op_code == 1 { acc = acc + v }
+            if op_code == 2 { acc = acc * v }
+            if op_code == 3 {
+                if v < acc { acc = v }
+            }
+            if op_code == 4 {
+                if v > acc { acc = v }
+            }
+            if op_code == 5 {
+                if v < acc {
+                    acc = v
+                    best_idx = c
+                }
+            }
+            if op_code == 6 {
+                if v > acc {
+                    acc = v
+                    best_idx = c
+                }
+            }
+            c = c + 1
+        }
+        if op_code >= 5 {
+            store64 [dst + r * 8] (itof best_idx)
+        } else {
+            store64 [dst + r * 8] acc
+        }
+        r = r + 1
+    }
+    return out
+}
+
+fn np_sum_axis(arr, axis)    { return _np_reduce_axis_2d(arr, axis, 1) }
+fn np_prod_axis(arr, axis)   { return _np_reduce_axis_2d(arr, axis, 2) }
+fn np_min_axis(arr, axis)    { return _np_reduce_axis_2d(arr, axis, 3) }
+fn np_max_axis(arr, axis)    { return _np_reduce_axis_2d(arr, axis, 4) }
+fn np_argmin_axis(arr, axis) { return _np_reduce_axis_2d(arr, axis, 5) }
+fn np_argmax_axis(arr, axis) { return _np_reduce_axis_2d(arr, axis, 6) }

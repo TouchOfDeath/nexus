@@ -1,0 +1,280 @@
+# TEST SUITE 5: NEGATIVE & ADVERSARIAL FAILURE VERIFICATION
+import numpy
+
+numpy.clear_error()
+let bad_z1 = numpy.zeros(-5)
+assert_eq bad_z1, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_z2 = numpy.zeros_2d(4, -2)
+assert_eq bad_z2, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_z3 = numpy.zeros_3d(2, 3, -1)
+assert_eq bad_z3, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_ar = numpy.arange(0.0, 10.0, 0.0)
+assert_eq bad_ar, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_ls = numpy.linspace(0.0, 1.0, -3)
+assert_eq bad_ls, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let huge_1d = numpy.zeros(50000000)
+assert_eq huge_1d, 0
+assert_eq numpy.get_error(), numpy.ERR_ALLOC
+
+numpy.clear_error()
+let huge_2d = numpy.zeros_2d(100000, 100000)
+assert_eq huge_2d, 0
+assert_eq numpy.get_error(), numpy.ERR_ALLOC
+
+let v = numpy.array([10.0, 20.0, 30.0])
+
+numpy.clear_error()
+let oob1 = numpy.get(v, 3)
+numpy.assert_near(oob1, 0.0, 0.000001)
+assert_eq numpy.get_error(), numpy.ERR_OUT_OF_BOUNDS
+
+numpy.clear_error()
+let oob_neg = numpy.get(v, -4)
+numpy.assert_near(oob_neg, 0.0, 0.000001)
+assert_eq numpy.get_error(), numpy.ERR_OUT_OF_BOUNDS
+
+numpy.clear_error()
+numpy.set(v, 10, 99.0)
+assert_eq numpy.get_error(), numpy.ERR_OUT_OF_BOUNDS
+
+let m2 = numpy.zeros_2d(2, 3)
+numpy.clear_error()
+let oob2 = numpy.get2(m2, 2, 0)
+numpy.assert_near(oob2, 0.0, 0.000001)
+assert_eq numpy.get_error(), numpy.ERR_OUT_OF_BOUNDS
+
+numpy.clear_error()
+let oob2_c = numpy.get2(m2, 0, 3)
+numpy.assert_near(oob2_c, 0.0, 0.000001)
+assert_eq numpy.get_error(), numpy.ERR_OUT_OF_BOUNDS
+
+let r_src = numpy.arange(0.0, 6.0, 1.0)
+
+numpy.clear_error()
+let bad_r1 = numpy.reshape(r_src, 2, 4)
+assert_eq bad_r1, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_r2 = numpy.reshape(r_src, 4, -1)
+assert_eq bad_r2, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_r3 = numpy.reshape(r_src, -1, -1)
+assert_eq bad_r3, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_r3d = numpy.reshape_3d(r_src, 2, 2, 2)
+assert_eq bad_r3d, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+let b_a = numpy.zeros_2d(2, 3)
+let b_b = numpy.zeros_2d(4, 3)
+let b_c = numpy.zeros(4)
+
+numpy.clear_error()
+let bad_bc1 = numpy.add(b_a, b_b)
+assert_eq bad_bc1, 0
+assert_eq numpy.get_error(), numpy.ERR_BROADCAST
+
+numpy.clear_error()
+let bad_bc2 = numpy.mul(b_a, b_c)
+assert_eq bad_bc2, 0
+assert_eq numpy.get_error(), numpy.ERR_BROADCAST
+
+let num_arr = numpy.array([1.0, -2.0, 0.0])
+let zero_arr = numpy.array([0.0, 0.0, 0.0])
+
+numpy.clear_error()
+let div_z = numpy.div(num_arr, zero_arr)
+assert_eq numpy.get_error(), numpy.ERR_DIV_ZERO
+assert_eq numpy.isinf_scalar(div_z[0]), 1
+assert_eq numpy.isinf_scalar(div_z[1]), 1
+assert_eq numpy.isnan_scalar(div_z[2]), 1
+
+numpy.clear_error()
+let div_sc = numpy.div_scalar(num_arr, 0.0)
+assert_eq numpy.get_error(), numpy.ERR_DIV_ZERO
+
+numpy.clear_error()
+let bad_sq = numpy.sqrt(numpy.array([-4.0]))
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+assert_eq numpy.isnan_scalar(bad_sq[0]), 1
+
+numpy.clear_error()
+let bad_lg = numpy.log(numpy.array([-1.0]))
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+assert_eq numpy.isnan_scalar(bad_lg[0]), 1
+
+numpy.clear_error()
+let bad_asin = numpy.arcsin(numpy.array([1.5]))
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+assert_eq numpy.isnan_scalar(bad_asin[0]), 1
+
+numpy.clear_error()
+let bad_acos = numpy.arccos(numpy.array([-1.5]))
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+assert_eq numpy.isnan_scalar(bad_acos[0]), 1
+
+numpy.clear_error()
+let bad_q1 = numpy.quantile(v, -0.1)
+assert_eq numpy.isnan_scalar(bad_q1), 1
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+
+numpy.clear_error()
+let bad_q2 = numpy.quantile(v, 1.1)
+assert_eq numpy.isnan_scalar(bad_q2), 1
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+
+let emp = numpy.zeros(0)
+numpy.clear_error()
+let emp_min = numpy.min(emp)
+assert_eq numpy.isnan_scalar(emp_min), 1
+assert_eq numpy.get_error(), numpy.ERR_EMPTY
+
+let sing = numpy.array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 1.0, 1.0]])
+let rhs3 = numpy.array([1.0, 2.0, 3.0])
+
+numpy.clear_error()
+let bad_inv = numpy.inv(sing)
+assert_eq bad_inv, 0
+assert_eq numpy.get_error(), numpy.ERR_SINGULAR
+
+numpy.clear_error()
+let bad_sol = numpy.solve(sing, rhs3)
+assert_eq bad_sol, 0
+assert_eq numpy.get_error(), numpy.ERR_SINGULAR
+
+let rect = numpy.zeros_2d(2, 3)
+numpy.clear_error()
+let bad_rect_inv = numpy.inv(rect)
+assert_eq bad_rect_inv, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_rect_det = numpy.det(rect)
+assert_eq numpy.isnan_scalar(bad_rect_det), 1
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_mm = numpy.matmul(rect, rect)
+assert_eq bad_mm, 0
+assert_eq numpy.get_error(), numpy.ERR_INVALID_SHAPE
+
+numpy.clear_error()
+let bad_csv1 = numpy.from_csv_string("1.0,2.0,3.0\n4.0,5.0\n")
+assert_eq bad_csv1, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+
+numpy.clear_error()
+let bad_csv2 = numpy.from_csv_string("1.0,abc,3.0\n")
+assert_eq bad_csv2, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+
+numpy.clear_error()
+let bad_csv3 = numpy.from_csv_string("1.0,2.0,\n")
+assert_eq bad_csv3, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+
+numpy.clear_error()
+let bad_csv4 = numpy.from_csv_string("")
+assert_eq bad_csv4, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+
+numpy.clear_error()
+let bad_csv_file = numpy.load_csv("/tmp/definitely_missing_nexus_file_999.csv")
+assert_eq bad_csv_file, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+
+let valid_arr = numpy.array([1.0, 2.0, 3.0, 4.0])
+let corrupt_path = "/tmp/test_np_corrupt.nxarr"
+assert_eq numpy.save_binary(corrupt_path, valid_arr), 1
+
+let fd_r = file_open corrupt_path
+let raw_buf = alloc 256
+let nbytes = file_read fd_r raw_buf 256
+file_close fd_r
+assert_eq nbytes, 96
+
+let orig_b = load [raw_buf + 64]
+store [raw_buf + 64] (orig_b + 1)
+let fd_w1 = file_create corrupt_path
+file_write fd_w1 raw_buf nbytes
+file_close fd_w1
+
+numpy.clear_error()
+let bad_bin_csum = numpy.load_binary(corrupt_path)
+assert_eq bad_bin_csum, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+store [raw_buf + 64] orig_b
+
+store64 [raw_buf + 0] 999999
+let fd_w2 = file_create corrupt_path
+file_write fd_w2 raw_buf nbytes
+file_close fd_w2
+
+numpy.clear_error()
+let bad_bin_magic = numpy.load_binary(corrupt_path)
+assert_eq bad_bin_magic, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+store64 [raw_buf + 0] 192837465
+
+store64 [raw_buf + 24] 99
+let fd_w3 = file_create corrupt_path
+file_write fd_w3 raw_buf nbytes
+file_close fd_w3
+
+numpy.clear_error()
+let bad_bin_ndim = numpy.load_binary(corrupt_path)
+assert_eq bad_bin_ndim, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+store64 [raw_buf + 24] 1
+
+let fd_w4 = file_create corrupt_path
+file_write fd_w4 raw_buf 32
+file_close fd_w4
+
+numpy.clear_error()
+let bad_bin_trunc = numpy.load_binary(corrupt_path)
+assert_eq bad_bin_trunc, 0
+assert_eq numpy.get_error(), numpy.ERR_IO
+
+numpy.clear_error()
+let bad_unif = numpy.random_uniform(10.0, 5.0, 4)
+assert_eq bad_unif, 0
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+
+numpy.clear_error()
+let bad_norm = numpy.random_normal(0.0, -1.0, 4)
+assert_eq bad_norm, 0
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+
+numpy.clear_error()
+let bad_rint = numpy.random_integers(10, 10, 4)
+assert_eq bad_rint, 0
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+
+numpy.clear_error()
+let bad_choice = numpy.random_choice(v, 5, 0)
+assert_eq bad_choice, 0
+assert_eq numpy.get_error(), numpy.ERR_DOMAIN
+
+call nx_assert_summary
+print "NUMPY_FAILURES_TEST_PASS"
