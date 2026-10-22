@@ -1,0 +1,422 @@
+# ==============================================================================
+#     NEXUS PHASE A TEST SUITE: CORE LANGUAGE, COMPILER SEMANTICS & TYPES
+#                Tests Features #9–#65 and #130 (String Interpolation)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/lang_core.nex"
+import stdlib::lang_core as lc
+
+# --- Feature #23: Type Aliases ---
+pub type Color = uint32
+pub type KeyCode = uint16
+pub type Vec2Alias = Vec2D
+
+# --- Feature #14: Struct Memory Alignment & Padding ---
+pub struct Vec2D {
+    x: int,
+    y: int
+}
+
+# --- Feature #49: Operator Overloading (`+`, `-`, `==`) ---
+impl Vec2D {
+    pub fn add(&self, other: Vec2D) -> Vec2D {
+        let r = Vec2D { x: self.x + other.x, y: self.y + other.y }
+        return r
+    }
+    pub fn sub(&self, other: Vec2D) -> Vec2D {
+        let r = Vec2D { x: self.x - other.x, y: self.y - other.y }
+        return r
+    }
+    pub fn eq(&self, other: Vec2D) -> int {
+        if self.x == other.x && self.y == other.y {
+            return 1
+        }
+        return 0
+    }
+}
+
+# --- Feature #15: Union Types / Untagged Unions ---
+pub union Word64 {
+    raw_i64: int,
+    alt_u64: int
+}
+
+# --- Features #19 & #20: Interfaces / Traits & Dynamic Trait Dispatch ---
+pub trait Drawable {
+    fn render_score(&self, scale: int) -> int
+}
+
+pub struct WidgetBox {
+    w: int,
+    h: int
+}
+
+impl Drawable for WidgetBox {
+    pub fn render_score(&self, scale: int) -> int {
+        return (self.w + self.h) * scale
+    }
+}
+
+# --- Features #21 & #22: Generics & Generic Bounds ---
+pub struct PairBox<A, B> {
+    first: A,
+    second: B
+}
+
+impl<A, B> PairBox<A, B> {
+    pub fn sum_pair(&self) -> int {
+        return self.first + self.second
+    }
+}
+
+pub fn generic_max<T: Comparable>(a: T, b: T) -> T {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+# --- Feature #38: Static Global Variables (`static mut`) ---
+static mut GLOBAL_TICKS: int = 100
+
+# --- Features #39, #40, #41: Module System (`mod`), Visibility (`pub`), Granular Import ---
+mod math_ns {
+    pub fn triple(v: int) -> int {
+        return v * 3
+    }
+    fn internal_offset(v: int) -> int {
+        return v + 7
+    }
+    pub fn triple_plus_offset(v: int) -> int {
+        let t = math_ns::triple(v)
+        return t + 7
+    }
+}
+
+import math_ns::{triple, triple_plus_offset}
+
+# --- Feature #54: Declarative Macros ---
+macro add_scaled(a, b, s) { (a + b) * s }
+
+# --- Feature #62: Constant Functions (`const fn`) ---
+const fn compute_lut_size(rows: int, cols: int) -> int {
+    return rows * cols * 4
+}
+
+# --- Feature #61: Tail-Call Recursive Function ---
+fn sum_tail(n: int, acc: int) -> int {
+    if n <= 0 {
+        return acc
+    }
+    return sum_tail(n - 1, acc + n)
+}
+
+# --- Feature #9: Function Pointers with Explicit `fn(...) -> ...` Type Annotation ---
+fn invoke_binary(cb: fn(int, int) -> int, x: int, y: int) -> int {
+    return cb(x, y)
+}
+
+fn my_adder(a: int, b: int) -> int {
+    return a + b
+}
+
+# --- Feature #24, #25, #26: Option<T>, Result<T, E>, and `?` Error Propagation ---
+fn safe_divide(num: int, den: int) {
+    if den == 0 {
+        return Err("division by zero")
+    }
+    return Ok(num / den)
+}
+
+fn chained_divide_and_add(a: int, b: int, c: int) {
+    let q1 = safe_divide(a, b)?
+    let q2 = safe_divide(q1, c)?
+    return Ok(q2 + 10)
+}
+
+# --- Feature #42: RAII `defer` deterministic cleanup ---
+static mut DEFER_LOG: int = 0
+
+fn run_with_defer(x: int) -> int {
+    defer { GLOBAL_TICKS = GLOBAL_TICKS + 50 }
+    defer { DEFER_LOG = DEFER_LOG * 10 + 2 }
+    DEFER_LOG = 1
+    if x > 0 {
+        return x * 2
+    }
+    return 0
+}
+
+fn main {
+    print "=== Running Phase A Language & Type System Verification ==="
+
+    # 1. Function pointers & explicit fn type annotations (#9, #10)
+    let on_click: fn(int, int) -> int = my_adder
+    let fp_res = invoke_binary(on_click, 18, 24)
+    assert_eq fp_res, 42
+
+    # 2. Struct alignment, size, and type aliases (#14, #23, #47)
+    assert_eq Vec2D.size, 16
+    assert_eq Vec2D.align, 8
+    assert_eq sizeof(Vec2D), 16
+    assert_eq sizeof(Vec2Alias), 16
+    assert_eq alignof(Vec2D), 8
+    assert_eq sizeof(Color), 4
+    assert_eq sizeof(KeyCode), 2
+    assert_eq alignof(KeyCode), 2
+
+    # 3. Union types (#15) - fields share offset 0
+    assert_eq Word64.size, 8
+    let u = Word64 { raw_i64: 123456789 }
+    assert_eq u.raw_i64, 123456789
+    assert_eq u.alt_u64, 123456789
+    u.alt_u64 = 987654321
+    assert_eq u.raw_i64, 987654321
+
+    # 4. Destructuring bindings: tuple and struct (#18)
+    let (tx, ty) = (33, 66)
+    assert_eq tx, 33
+    assert_eq ty, 66
+
+    let pt_orig = Vec2D { x: 15, y: 25 }
+    let Vec2D { x: dx, y: dy } = pt_orig
+    assert_eq dx, 15
+    assert_eq dy, 25
+
+    let Vec2D { x, y } = pt_orig
+    assert_eq x, 15
+    assert_eq y, 25
+
+    # 5. Traits & Dynamic Trait Dispatch (#19, #20)
+    let wbox = WidgetBox { w: 12, h: 8 }
+    assert_eq wbox.render_score(3), 60
+
+    let score_cl = WidgetBox__render_score
+    let vt = nx_vtable_new(1)
+    nx_vtable_set(vt, 0, score_cl)
+    let dyn_widget = nx_dyn_new(wbox, vt)
+    let dyn_fn = nx_vtable_get(nx_dyn_vtable(dyn_widget), 0)
+    let dyn_res = dyn_fn(nx_dyn_data(dyn_widget), 4)
+    assert_eq dyn_res, 80
+
+    # 6. Generics & Generic Bounds (#21, #22)
+    let pbox = PairBox<int, int> { first: 40, second: 60 }
+    assert_eq pbox.sum_pair(), 100
+    assert_eq generic_max(75, 42), 75
+
+    # 7. Option<T>, Result<T, E>, and `?` Operator (#24, #25, #26)
+    let opt_some = Some(777)
+    let opt_none = None()
+    assert_eq is_some(opt_some), 1
+    assert_eq is_none(opt_some), 0
+    assert_eq is_none(opt_none), 1
+    assert_eq unwrap(opt_some), 777
+    assert_eq unwrap_or(opt_none, 99), 99
+
+    let ok_chain = chained_divide_and_add(100, 5, 2)
+    assert_eq is_ok(ok_chain), 1
+    assert_eq unwrap(ok_chain), 20
+
+    let err_chain = chained_divide_and_add(100, 0, 2)
+    assert_eq is_err(err_chain), 1
+    assert_eq unwrap_err(err_chain), "division by zero"
+
+    # 8. Panic & Recovery Mechanism (#27)
+    nx_stack_push_frame("main")
+    nx_stack_push_frame("worker")
+    assert_eq nx_stack_depth(), 2
+    assert_eq nx_stack_frame_at(1), "worker"
+    nx_try_begin()
+    nx_panic("simulated recoverable fault", 501)
+    let panicked = nx_try_end()
+    assert_eq panicked, 1
+    assert_eq nx_panic_code(), 501
+    assert_eq nx_panic_msg(), "simulated recoverable fault"
+    nx_panic_clear()
+    nx_stack_pop_frame()
+    nx_stack_pop_frame()
+
+    # 9. Static Globals, Modules, Visibility, Import Aliases, RAII Defer (#38, #39, #40, #41, #42)
+    assert_eq GLOBAL_TICKS, 100
+    let def_ret = run_with_defer(21)
+    assert_eq def_ret, 42
+    assert_eq DEFER_LOG, 12
+    assert_eq GLOBAL_TICKS, 150
+
+    assert_eq math_ns.triple(9), 27
+    assert_eq math_ns::triple_plus_offset(10), 37
+
+    let alias_some = lc.Some(314)
+    assert_eq lc.unwrap(alias_some), 314
+
+    let dscope = nx_drop_scope_new()
+    let res_buf = alloc 16
+    store64 [res_buf + 0] 999
+    nx_drop_register(dscope, res_buf, 0)
+    let dropped_cnt = nx_drop_scope_run(dscope)
+    assert_eq dropped_cnt, 1
+    assert_eq load64 [res_buf + 0], 0
+
+    # 10. Reference Counting Rc<T> & Arc<T> (#43)
+    let rc1 = nx_rc_new(1234)
+    assert_eq nx_rc_count(rc1), 1
+    let rc2 = nx_rc_clone(rc1)
+    assert_eq nx_rc_count(rc1), 2
+    assert_eq nx_rc_get(rc2), 1234
+    nx_rc_release(rc2)
+    assert_eq nx_rc_count(rc1), 1
+    nx_rc_release(rc1)
+    assert_eq nx_rc_count(rc1), 0
+
+    let arc1 = nx_arc_new(5678)
+    let arc2 = nx_arc_clone(arc1)
+    assert_eq nx_arc_count(arc1), 2
+    assert_eq nx_arc_get(arc2), 5678
+    nx_arc_release(arc2)
+    nx_arc_release(arc1)
+
+    # 11. Pointer Types, Borrowing & Pointer Arithmetic Ergonomics (#44, #45, #46)
+    let raw_arr: *mut int = alloc 32
+    store64 [raw_arr + 0] 11
+    let p1 = raw_arr.offset(1)
+    store64 [p1 + 0] 22
+    let p2 = nx_ptr_offset(raw_arr, 2, 8)
+    store64 [p2 + 0] 33
+    assert_eq load64 [raw_arr + 8], 22
+    assert_eq load64 [raw_arr + 16], 33
+    assert_eq nx_ptr_diff(p2, raw_arr, 8), 2
+
+    let btrack = nx_borrow_tracker_new(8)
+    assert_eq nx_borrow_shared(btrack, 1), 1
+    assert_eq nx_borrow_shared(btrack, 1), 1
+    assert_eq nx_borrow_mut(btrack, 1), 0
+    nx_release_shared(btrack, 1)
+    nx_release_shared(btrack, 1)
+    assert_eq nx_borrow_mut(btrack, 1), 1
+    assert_eq nx_borrow_shared(btrack, 1), 0
+    nx_release_mut(btrack, 1)
+
+    # 12. Inline Assembly & Hardware Intrinsics (#48)
+    let tsc1 = asm!("rdtsc")
+    asm!("pause")
+    asm!("mfence")
+    assert_eq tsc1 > 0, 1
+    assert_eq nx_asm_bswap64(256), 281474976710656
+    assert_eq nx_asm_ctz64(16), 4
+    assert_eq nx_asm_popcnt64(15), 4
+
+    # 13. Operator Overloading on Structs (#49)
+    let va = Vec2D { x: 10, y: 20 }
+    let vb = Vec2D { x: 5, y: 15 }
+    let vc = va + vb
+    assert_eq vc.x, 15
+    assert_eq vc.y, 35
+    let vd = vc - vb
+    assert_eq vd.x, 10
+    assert_eq vd.y, 20
+    let veq = vd == va
+    assert_eq veq, 1
+
+    # 14. For-In Iterator Loops (#51) & Labeled Loops (#52)
+    let vec_items = nx_vec_new()
+    nx_vec_push(vec_items, 10)
+    nx_vec_push(vec_items, 20)
+    nx_vec_push(vec_items, 30)
+    let iter_sum = 0
+    for elem in vec_items {
+        let iter_sum = iter_sum + elem
+    }
+    assert_eq iter_sum, 60
+
+    let outer_hits = 0
+    let oi = 0
+    'outer: while oi < 5 {
+        let oj = 0
+        while oj < 5 {
+            let outer_hits = outer_hits + 1
+            if oi == 2 && oj == 1 {
+                break 'outer
+            }
+            let oj = oj + 1
+        }
+        if _lbl_brk_outer == 1 {
+            break
+        }
+        let oi = oi + 1
+    }
+    assert_eq outer_hits, 12
+
+    # 15. Compile-Time Reflection, Macros, Conditional Compilation (#53, #54, #55)
+    assert_eq field_count(Vec2D), 2
+    assert_eq type_name(va), "Vec2D"
+    let mac_val = add_scaled!(3, 4, 10)
+    assert_eq mac_val, 70
+
+    let cfg_val = 0
+    #cfg(target_os = "linux")
+    let cfg_val = 42
+    #cfg(target_os = "windows")
+    let cfg_val = 999
+    assert_eq cfg_val, 42
+
+    # 16. Strict String Immutability, Allocator Abstraction, Bounds Checking (#56, #57, #58)
+    let imm_s = nx_str_immut_new("immutable")
+    assert_eq nx_str_immut_len(imm_s), 9
+    assert_eq nx_str_immut_get(imm_s, 0), 105
+    assert_eq nx_str_immut_cstr(imm_s), "immutable"
+
+    let slab_al = nx_allocator_new(NX_ALLOC_SLAB, 1024, 32)
+    let chunk1 = nx_alloc_from(slab_al, 32)
+    store64 [chunk1 + 0] 888
+    assert_eq load64 [chunk1 + 0], 888
+    nx_free_from(slab_al, chunk1)
+    let chunk2 = nx_alloc_from(slab_al, 32)
+    assert_eq chunk1, chunk2
+
+    let backing = alloc 32
+    let sl = nx_slice_new(backing, 4)
+    nx_slice_set(sl, 2, 4242)
+    assert_eq nx_slice_get(sl, 2), 4242
+
+    # 17. Safe Casts, TCO, Const Fn, Shadowing, Volatile, Stack Probing (#60–#65)
+    let raw_num = 258
+    let b_u8 = raw_num as u8
+    assert_eq b_u8, 2
+    let neg_b = 255 as i8
+    assert_eq neg_b, -1
+    assert_eq is_some(nx_try_into_u8(200)), 1
+    assert_eq is_none(nx_try_into_u8(300)), 1
+
+    let tco_res = sum_tail(100, 0)
+    assert_eq tco_res, 5050
+
+    let lut_sz = compute_lut_size(16, 16)
+    assert_eq lut_sz, 1024
+
+    # Variable shadowing (#63)
+    let shad = 10
+    let shad = shad + 5
+    assert_eq shad, 15
+
+    # Volatile memory ops (#64)
+    let mmio = alloc 16
+    nx_volatile_store64(mmio, 9001)
+    assert_eq nx_volatile_load64(mmio), 9001
+
+    # Stack probing (#65)
+    assert_eq nx_stack_probe(4096), 1
+    assert_eq nx_stack_remaining(), 1044480
+    nx_stack_leave(4096)
+
+    # 18. String Interpolation `f"..."` (#130)
+    let line_no = 42
+    let col_no = 7
+    let msg = f"Line {line_no}, Col {col_no}"
+    assert_eq msg, "Line 42, Col 7"
+
+    print "PHASE_A_LANG_TEST_PASS"
+    call nx_assert_summary
+}
+
+call main

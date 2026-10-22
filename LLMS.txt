@@ -363,6 +363,20 @@ let count = nx_r0
 - **Bulk Memory (`stdlib/memory.nex`)**:
   `nx_memmove(dst, src, n)` (overlap-safe), `nx_memcpy`, `nx_memset`, `nx_memzero`.
 
+### NEXUS Studio & 500 Capabilities Modules (`stdlib/nexus_studio_full.nex`)
+- **Single Umbrella Include**: `include "stdlib/nexus_studio_full.nex"`
+- **Core Language & Generics (`stdlib/lang_core.nex`)**: `Option<T>` (`nx_opt_some`, `nx_opt_none`, `nx_opt_unwrap`), `Result<T, E>` (`nx_res_ok`, `nx_res_err`, `nx_res_unwrap`), allocators (`nx_bump_alloc`, `nx_slab_alloc`).
+- **Piece-Tree, Rope & Diff (`stdlib/collections_ext.nex`)**: `nx_rope_new()`, `nx_rope_insert()`, `nx_rope_delete()`, Myers diff `nx_diff()`, undo/redo `nx_undo_stack_new()`.
+- **Unicode UAX & Regex (`stdlib/regex_unicode_str.nex`)**: `nx_regex_compile(pat)`, `nx_regex_match(re, text)`, `nx_str_builder_new()`, UAX #29 graphemes, UAX #14 line breaks.
+- **POSIX Process & Concurrency (`stdlib/os_posix.nex`)**: `nx_proc_spawn()`, `nx_pipe_new()`, `nx_pty_open()`, futex wait/wake, atomics `nx_atomic_add_64`, MPSC channels `nx_channel_new()`.
+- **Desktop Windowing (`stdlib/window_desktop.nex`)**: Wayland wire protocol client, X11 handshake, XKB keyboard translation.
+- **2D Vector Graphics (`stdlib/graphics2d_full.nex`)**: Vector rasterizer, Bézier curves, Porter-Duff compositing, WCAG contrast scoring.
+- **TTF Font Shaping (`stdlib/font_shaping_ttf.nex`)**: TrueType/OpenType table parser, glyf decoder, ligatures, subpixel shaping.
+- **Retained GUI Widgets (`stdlib/gui_widgets.nex`)**: `WidgetNode`, Flexbox solver, Grid solver, docking containers, theme colors.
+- **LSP Client (`stdlib/editor_lsp.nex`)**: JSON-RPC 2.0 framing, hover, completion, diagnostics squiggles, jump-to-definition.
+- **VT100 Terminal (`stdlib/terminal_vt100.nex`)**: ANSI terminal state machine, 2D screen buffer, scrollback history.
+- **Toolchain Infrastructure (`stdlib/toolchain_eco.nex`)**: TOML parser, chord keybindings, DWARF v4 helpers.
+
 ---
 
 ## 9. Assertions & Testing

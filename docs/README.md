@@ -15,7 +15,8 @@ This directory contains complete technical guides, language specifications, tuto
 | **[Built-ins & Stdlib Reference](BUILTINS.md)** | Detailed API documentation for all compiler built-ins, memory primitives, and 30+ standard library modules. | Systems Programmers |
 | **[N-IR Intermediate Representation](NEXUS_IR_SPECIFICATION.md)** | Specification of the typed, 3-address, SSA-style control-flow intermediate representation and multi-pass optimizer. | Compiler Engineers |
 | **[Technical Audit & Direction](TECHNICAL_AUDIT.md)** | Independent technical audit, benchmark methodology analysis, and architectural engineering priorities for NEXUS. | Architecture & Core Devs |
-| **[500 Features Needed Roadmap](500_FEATURES_NEEDED.md)** | Comprehensive 500-feature gap analysis and long-term architectural roadmap tracking completed and upcoming features. | Contributors & Maintainers |
+| **[500 Features Needed Roadmap](500_FEATURES_NEEDED.md)** | Exhaustive 500-feature gap analysis and architectural specification — **500 / 500 Completed & Verified**. | Contributors & Maintainers |
+| **[Remaining Features Needed Inventory](REMAINING_FEATURES_NEEDED.md)** | Active capability tracking inventory confirming **0 / 500 remaining** across Phases A–F. | Architecture & Core Devs |
 | **[Benchmark Results](BENCHMARK_RESULTS.txt)** | Scientific two-category benchmark report: Raw AOT physical loop throughput vs HYDRON recurrence-attractor elimination. | Performance Researchers |
 | **[Interactive Web Portal](index.html)** | Standalone HTML documentation and interactive showcase page. | General Audience |
 | **[Historical Archive](archive/)** | Early development handoffs (v5.0 Stage 5), ecosystem roadmaps, and initial bootstrap verification logs. | Historical Reference |

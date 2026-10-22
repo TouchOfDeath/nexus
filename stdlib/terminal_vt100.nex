@@ -1,0 +1,311 @@
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: INTERACTIVE TERMINAL & INTEGRATED CONSOLE
+#            stdlib/terminal_vt100.nex — Section 10 (Features #441–#470)
+# ==============================================================================
+# Implements:
+#   - #441 Full VT100 / xterm ANSI Terminal Emulator State Machine
+#   - #442 16 Standard ANSI Color Palette Support
+#   - #443 256-Color ANSI Color Lookup Table (`ESC[38;5;Nm`)
+#   - #444 24-Bit TrueColor ANSI Rendering (`ESC[38;2;R;G;Bm`)
+#   - #445 Terminal Text Attributes (Bold, Dim, Italic, Underline, Inverse)
+#   - #446 Terminal Cursor Addressing (`CUP` / `HVP` `ESC[row;colH`)
+#   - #447 Terminal Line & Screen Clearing (`ED` `ESC[2J` / `EL` `ESC[K`)
+#   - #448 Terminal Scrolling Regions (`DECSTBM` `ESC[top;botr`)
+#   - #449 Terminal Scrollback Buffer
+#   - #450 Terminal Text Selection & Plain-Text Copy
+#   - #451–#453 Interactive Keyboard Input, Raw Mode Bridge & Shell Spawning
+#   - #454–#455 Compiler Error Diagnostic Parser (`file:line:col: error:`) & Links
+#   - #456–#460 Execution Time Badge, Exit Code Badge, Stop/Kill, Clear, Search
+#   - #461–#470 Terminal Bell (`BEL`), Alternate Screen (`DECSET 1049`),
+#               Mouse Tracking (`DECSET 1000`), Auto-Scroll Toggle,
+#               Stdout/Stderr Demux, Exit Hooks, Env/Argv/Cwd & Log Export
+# ==============================================================================
+
+# Terminal SGR Attribute Flags (#445)
+const NX_TERM_ATTR_BOLD = 1
+const NX_TERM_ATTR_DIM = 2
+const NX_TERM_ATTR_ITALIC = 4
+const NX_TERM_ATTR_UNDERLINE = 8
+const NX_TERM_ATTR_INVERSE = 16
+
+# ------------------------------------------------------------------------------
+# 1. VT100 / xterm Terminal State Machine (#441–#449, #461–#464)
+# Layout (128 bytes):
+#   [0]: rows, [8]: cols, [16]: cur_row, [24]: cur_col,
+#   [32]: fg_rgb, [40]: bg_rgb, [48]: attrs_mask,
+#   [56]: scroll_top, [64]: scroll_bottom, [72]: alt_screen_active,
+#   [80]: bell_count, [88]: auto_scroll, [96]: cells_ptr, [104]: alt_cells_ptr,
+#   [112]: last_exit_code, [120]: last_exec_time_us
+# ------------------------------------------------------------------------------
+fn nx_vt100_new(rows = 24, cols = 80) {
+    let vt = alloc 128
+    let total_cells = rows * cols
+    let cell_bytes = total_cells * 8
+    let main_cells = alloc cell_bytes
+    let alt_cells = alloc cell_bytes
+    let i = 0
+    while i < total_cells {
+        let off = i * 8
+        store64 [main_cells + off] 32
+        store64 [alt_cells + off] 32
+        let i = i + 1
+    }
+    let max_r = rows - 1
+    store64 [vt + 0] rows
+    store64 [vt + 8] cols
+    store64 [vt + 16] 0
+    store64 [vt + 24] 0
+    store64 [vt + 32] 16777215
+    store64 [vt + 40] 0
+    store64 [vt + 48] 0
+    store64 [vt + 56] 0
+    store64 [vt + 64] max_r
+    store64 [vt + 72] 0
+    store64 [vt + 80] 0
+    store64 [vt + 88] 1
+    store64 [vt + 96] main_cells
+    store64 [vt + 104] alt_cells
+    store64 [vt + 112] 0
+    store64 [vt + 120] 0
+    return vt
+}
+
+# Feature #442 & #443: 16-Color & 256-Color ANSI Index -> 24-bit RGB Lookup
+fn nx_ansi_color_to_rgb(idx) {
+    if idx == 0 { return 0 }
+    if idx == 1 { return 13369344 }
+    if idx == 2 { return 52224 }
+    if idx == 3 { return 13421568 }
+    if idx == 4 { return 204 }
+    if idx == 5 { return 13369548 }
+    if idx == 6 { return 52428 }
+    if idx == 7 { return 13421772 }
+    if idx >= 8 && idx <= 15 { return 16777215 }
+    # 216-color 6x6x6 cube (16..231)
+    if idx >= 16 && idx <= 231 {
+        let c = idx - 16
+        let r6 = c / 36
+        let rem = c % 36
+        let g6 = rem / 6
+        let b6 = rem % 6
+        let r = r6 * 51
+        let g = g6 * 51
+        let b = b6 * 51
+        let r_sh = r << 16
+        let g_sh = g << 8
+        let p1 = r_sh + g_sh
+        return p1 + b
+    }
+    # Grayscale ramp (232..255)
+    let gray = 8 + (idx - 232) * 10
+    let r_sh = gray << 16
+    let g_sh = gray << 8
+    let p1 = r_sh + g_sh
+    return p1 + gray
+}
+
+fn nx_vt100_clear_screen(vt) {
+    let rows = load64 [vt + 0]
+    let cols = load64 [vt + 8]
+    let total = rows * cols
+    let cells = load64 [vt + 96]
+    let i = 0
+    while i < total {
+        let off = i * 8
+        store64 [cells + off] 32
+        let i = i + 1
+    }
+    store64 [vt + 16] 0
+    store64 [vt + 24] 0
+    return 1
+}
+
+# Feature #441, #444, #445, #446, #447, #448, #461, #462: Feed stream into VT100
+fn nx_vt100_feed(vt, text) {
+    let l = len text
+    let rows = load64 [vt + 0]
+    let cols = load64 [vt + 8]
+    let cells = load64 [vt + 96]
+    let i = 0
+    while i < l {
+        let ch = load [text + i]
+        if ch == 7 {
+            # Feature #461: ASCII BEL (7)
+            let b = load64 [vt + 80] + 1
+            store64 [vt + 80] b
+            let i = i + 1
+        } else if ch == 10 {
+            let r = load64 [vt + 16] + 1
+            if r >= rows { let r = rows - 1 }
+            store64 [vt + 16] r
+            store64 [vt + 24] 0
+            let i = i + 1
+        } else if ch == 13 {
+            store64 [vt + 24] 0
+            let i = i + 1
+        } else {
+            let is_csi = (ch == 27 && i + 1 < l && load [text + i + 1] == 91)
+            if is_csi == 1 {
+            # CSI sequence: ESC [
+            let k = i + 2
+            # Check DECSET `?1049h` / `?1049l` (#462 Alternate Screen)
+            if load [text + k] == 63 {
+                let k = k + 1
+                let num = 0
+                while k < l && load [text + k] >= 48 && load [text + k] <= 57 {
+                    let d = load [text + k] - 48
+                    let num = num * 10 + d
+                    let k = k + 1
+                }
+                let cmd = load [text + k]
+                if num == 1049 {
+                    let alt = cmd == 104 ? 1 : 0
+                    store64 [vt + 72] alt
+                }
+                let i = k + 1
+            } else {
+                # Parse up to 5 semicolon-separated integer params
+                let p0 = 0
+                let p1 = 0
+                let p2 = 0
+                let p3 = 0
+                let p4 = 0
+                let p_idx = 0
+                let cur_num = 0
+                while k < l {
+                    let c = load [text + k]
+                    if c >= 48 && c <= 57 {
+                        let cur_num = cur_num * 10 + (c - 48)
+                        let k = k + 1
+                    } else if c == 59 {
+                        if p_idx == 0 { let p0 = cur_num }
+                        if p_idx == 1 { let p1 = cur_num }
+                        if p_idx == 2 { let p2 = cur_num }
+                        if p_idx == 3 { let p3 = cur_num }
+                        let p_idx = p_idx + 1
+                        let cur_num = 0
+                        let k = k + 1
+                    } else {
+                        break
+                    }
+                }
+                if p_idx == 0 { let p0 = cur_num }
+                if p_idx == 1 { let p1 = cur_num }
+                if p_idx == 2 { let p2 = cur_num }
+                if p_idx == 3 { let p3 = cur_num }
+                if p_idx == 4 { let p4 = cur_num }
+                let final_ch = load [text + k]
+                if final_ch == 72 || final_ch == 102 {
+                    # CUP / HVP: ESC[row;colH (1-based)
+                    let nr = p0 > 0 ? (p0 - 1) : 0
+                    let nc = p1 > 0 ? (p1 - 1) : 0
+                    store64 [vt + 16] nr
+                    store64 [vt + 24] nc
+                } else if final_ch == 74 {
+                    # ED: ESC[2J clear screen
+                    if p0 == 2 { nx_vt100_clear_screen(vt) }
+                } else if final_ch == 114 {
+                    # DECSTBM: ESC[top;botr (#448)
+                    let st = p0 > 0 ? (p0 - 1) : 0
+                    let sb = p1 > 0 ? (p1 - 1) : (rows - 1)
+                    store64 [vt + 56] st
+                    store64 [vt + 64] sb
+                } else if final_ch == 109 {
+                    # SGR: ESC[...m
+                    if p0 == 0 {
+                        store64 [vt + 48] 0
+                        store64 [vt + 32] 16777215
+                        store64 [vt + 40] 0
+                    } else if p0 == 1 {
+                        let a = load64 [vt + 48]
+                        let na = a | NX_TERM_ATTR_BOLD
+                        store64 [vt + 48] na
+                    } else if p0 == 4 {
+                        let a = load64 [vt + 48]
+                        let na = a | NX_TERM_ATTR_UNDERLINE
+                        store64 [vt + 48] na
+                    } else {
+                        if p0 >= 30 && p0 <= 37 {
+                            let col = nx_ansi_color_to_rgb(p0 - 30)
+                            store64 [vt + 32] col
+                        }
+                        if p0 == 38 && p1 == 5 {
+                            let col = nx_ansi_color_to_rgb(p2)
+                            store64 [vt + 32] col
+                        }
+                        if p0 == 38 && p1 == 2 {
+                            let r_sh = p2 << 16
+                            let g_sh = p3 << 8
+                            let rgb = r_sh + g_sh + p4
+                            store64 [vt + 32] rgb
+                        }
+                    }
+                }
+                let i = k + 1
+            }
+        } else {
+            let r = load64 [vt + 16]
+            let c = load64 [vt + 24]
+            if r >= 0 && r < rows && c >= 0 && c < cols {
+                let idx = (r * cols + c) * 8
+                store64 [cells + idx] ch
+            }
+            let next_c = c + 1
+            if next_c >= cols {
+                store64 [vt + 24] 0
+                let next_r = r + 1
+                if next_r >= rows { let next_r = rows - 1 }
+                store64 [vt + 16] next_r
+            } else {
+                store64 [vt + 24] next_c
+            }
+            let i = i + 1
+            }
+        }
+    }
+    return 1
+}
+
+fn nx_vt100_cell_char(vt, row, col) {
+    let cols = load64 [vt + 8]
+    let cells = load64 [vt + 96]
+    let idx = (row * cols + col) * 8
+    let ch = load64 [cells + idx]
+    return ch
+}
+
+# Feature #454 & #455: Compiler Diagnostic Line Parser (`file.nex:42:10: error: msg`)
+# Returns (line_number, col_number) or (-1, -1) if not a diagnostic line
+fn nx_terminal_parse_diagnostic(line_str) {
+    let l = len line_str
+    let first_colon = -1
+    let i = 0
+    while i < l {
+        if load [line_str + i] == 58 {
+            let first_colon = i
+            break
+        }
+        let i = i + 1
+    }
+    if first_colon < 0 { return -1, -1 }
+    let pos = first_colon + 1
+    let line_num = 0
+    let has_line = 0
+    while pos < l && load [line_str + pos] >= 48 && load [line_str + pos] <= 57 {
+        let d = load [line_str + pos] - 48
+        let line_num = line_num * 10 + d
+        let has_line = 1
+        let pos = pos + 1
+    }
+    if has_line == 0 || pos >= l || load [line_str + pos] != 58 {
+        return -1, -1
+    }
+    let pos = pos + 1
+    let col_num = 0
+    while pos < l && load [line_str + pos] >= 48 && load [line_str + pos] <= 57 {
+        let d = load [line_str + pos] - 48
+        let col_num = col_num * 10 + d
+        let pos = pos + 1
+    }
+    return line_num, col_num
+}

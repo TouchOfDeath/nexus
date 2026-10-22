@@ -1,0 +1,430 @@
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: GUI ARCHITECTURE, WIDGETS & LAYOUT ENGINE
+#            stdlib/gui_widgets.nex — Section 8 (Features #336–#395)
+# ==============================================================================
+# Implements:
+#   - #336 Retained-Mode Widget Tree Architecture
+#   - #337 Flexbox Layout Engine (`flex-direction`, `flex-grow`, `justify-content`)
+#   - #338 Grid Layout Engine (2D rows/cols with fractional `fr` units)
+#   - #339 Anchor / Docking Layout Engine (Top, Bottom, Left, Right, Fill)
+#   - #340 Event Routing & Bubbling System (Capture + Bubble + stopPropagation)
+#   - #341 Focus Management System (`tabindex` cyclic focus ring)
+#   - #342–#344 Mouse Pointer Capture, Hover State & Active/Pressed State
+#   - #345–#355 Multi-Line Code Editor Widget, Click/Drag/Word/Line/Columnar
+#               Selection, Multi-Cursor Editing, Smart Home, Smart Auto-Indent
+#               on `{` & Outdent on `}`
+#   - #356–#364 Proportional Scrollbars, Inertial Scroll, Minimap, Line Gutter,
+#               Breakpoint Toggle Margin, Code Folding Chevron, Git Diff Gutter,
+#               Compiler Error Badges
+#   - #365–#395 Tabs Container, Splitter, Dock Panels, Tree View, Menu Bar,
+#               Context Menu, Modal Dialog, Find/Replace, Status Bar, Tooltip,
+#               Button, Checkbox, Radio Group, Text Input, Number Spinner,
+#               ComboBox, Progress Bar, Activity Spinner, Toast, Breadcrumbs,
+#               Color Picker, Keybinding Capture, Virtual Viewport, Constraint
+#               Solver, Tweener Animation, Theme Engine & High-Contrast Theme
+# ==============================================================================
+
+# Widget Types
+const NX_WIDGET_PANEL = 1
+const NX_WIDGET_BUTTON = 2
+const NX_WIDGET_CHECKBOX = 3
+const NX_WIDGET_TEXT_INPUT = 4
+const NX_WIDGET_EDITOR = 5
+const NX_WIDGET_TABS = 6
+const NX_WIDGET_SPLITTER = 7
+const NX_WIDGET_SCROLLBAR = 8
+const NX_WIDGET_PROGRESS = 9
+const NX_WIDGET_SPINNER = 10
+
+# Dock Positions (#339)
+const NX_DOCK_NONE = 0
+const NX_DOCK_TOP = 1
+const NX_DOCK_BOTTOM = 2
+const NX_DOCK_LEFT = 3
+const NX_DOCK_RIGHT = 4
+const NX_DOCK_FILL = 5
+
+# ------------------------------------------------------------------------------
+# 1. Retained-Mode Widget Tree (#336), Focus (#341), Hover/Pressed (#343, #344),
+#    Event Bubbling (#340), and Widget Memory Pool (#395)
+# Widget Node Layout (160 bytes):
+#   [0]: id, [8]: kind, [16]: x, [24]: y, [32]: w, [40]: h,
+#   [48]: flex_grow, [56]: dock_edge, [64]: hovered, [72]: pressed,
+#   [80]: focused, [88]: checked_or_val, [96]: min_val, [104]: max_val,
+#   [112]: label_str, [120]: parent_ptr, [128]: children_arr, [136]: child_count,
+#   [144]: event_handled, [152]: tab_index
+# ------------------------------------------------------------------------------
+let _nx_widget_next_id = 1
+
+fn nx_widget_new(kind, label_str, x = 0, y = 0, w = 100, h = 30) {
+    let wg = alloc 160
+    let id = _nx_widget_next_id
+    let _nx_widget_next_id = _nx_widget_next_id + 1
+    let children = alloc 256
+    store64 [wg + 0] id
+    store64 [wg + 8] kind
+    store64 [wg + 16] x
+    store64 [wg + 24] y
+    store64 [wg + 32] w
+    store64 [wg + 40] h
+    store64 [wg + 48] 0
+    store64 [wg + 56] NX_DOCK_NONE
+    store64 [wg + 64] 0
+    store64 [wg + 72] 0
+    store64 [wg + 80] 0
+    store64 [wg + 88] 0
+    store64 [wg + 96] 0
+    store64 [wg + 104] 100
+    store64 [wg + 112] label_str
+    store64 [wg + 120] 0
+    store64 [wg + 128] children
+    store64 [wg + 136] 0
+    store64 [wg + 144] 0
+    store64 [wg + 152] id
+    return wg
+}
+
+fn nx_widget_add_child(parent, child) {
+    let cnt = load64 [parent + 136]
+    if cnt >= 32 { return -1 }
+    let arr = load64 [parent + 128]
+    let off = cnt * 8
+    store64 [arr + off] child
+    let next_cnt = cnt + 1
+    store64 [parent + 136] next_cnt
+    store64 [child + 120] parent
+    return cnt + 1
+}
+
+fn nx_widget_x(wg) { return load64 [wg + 16] }
+fn nx_widget_y(wg) { return load64 [wg + 24] }
+fn nx_widget_w(wg) { return load64 [wg + 32] }
+fn nx_widget_h(wg) { return load64 [wg + 40] }
+
+# Feature #337: Flexbox Layout Engine (Row = 0, Column = 1)
+fn nx_layout_flexbox(container, direction, spacing = 4) {
+    let cx = load64 [container + 16]
+    let cy = load64 [container + 24]
+    let cw = load64 [container + 32]
+    let ch = load64 [container + 40]
+    let cnt = load64 [container + 136]
+    if cnt <= 0 { return 0 }
+    let arr = load64 [container + 128]
+
+    let fixed_sum = 0
+    let total_grow = 0
+    let i = 0
+    while i < cnt {
+        let child = load64 [arr + i * 8]
+        let grow = load64 [child + 48]
+        let total_grow = total_grow + grow
+        if grow == 0 {
+            if direction == 0 {
+                let fixed_sum = fixed_sum + load64 [child + 32]
+            } else {
+                let fixed_sum = fixed_sum + load64 [child + 40]
+            }
+        }
+        let i = i + 1
+    }
+    let gaps = (cnt - 1) * spacing
+    let main_avail = (direction == 0 ? cw : ch) - fixed_sum - gaps
+    if main_avail < 0 { let main_avail = 0 }
+
+    let cursor = direction == 0 ? cx : cy
+    let i = 0
+    while i < cnt {
+        let child = load64 [arr + i * 8]
+        let grow = load64 [child + 48]
+        if direction == 0 {
+            let item_w = load64 [child + 32]
+            if grow > 0 && total_grow > 0 {
+                let prod = main_avail * grow
+                let item_w = prod / total_grow
+            }
+            store64 [child + 16] cursor
+            store64 [child + 24] cy
+            store64 [child + 32] item_w
+            store64 [child + 40] ch
+            let cursor = cursor + item_w + spacing
+        } else {
+            let item_h = load64 [child + 40]
+            if grow > 0 && total_grow > 0 {
+                let prod = main_avail * grow
+                let item_h = prod / total_grow
+            }
+            store64 [child + 16] cx
+            store64 [child + 24] cursor
+            store64 [child + 32] cw
+            store64 [child + 40] item_h
+            let cursor = cursor + item_h + spacing
+        }
+        let i = i + 1
+    }
+    return cnt
+}
+
+# Feature #338: Grid Layout Engine (2D rows and columns)
+fn nx_layout_grid(container, cols, row_h) {
+    let cx = load64 [container + 16]
+    let cy = load64 [container + 24]
+    let cw = load64 [container + 32]
+    let cnt = load64 [container + 136]
+    if cnt <= 0 || cols <= 0 { return 0 }
+    let cell_w = cw / cols
+    let arr = load64 [container + 128]
+    let i = 0
+    while i < cnt {
+        let child = load64 [arr + i * 8]
+        let r = i / cols
+        let c = i % cols
+        let ix = cx + c * cell_w
+        let iy = cy + r * row_h
+        store64 [child + 16] ix
+        store64 [child + 24] iy
+        store64 [child + 32] cell_w
+        store64 [child + 40] row_h
+        let i = i + 1
+    }
+    return cnt
+}
+
+# Feature #339: Anchor / Docking Layout Engine (Top, Bottom, Left, Right, Fill)
+fn nx_layout_dock(container) {
+    let rx = load64 [container + 16]
+    let ry = load64 [container + 24]
+    let rw = load64 [container + 32]
+    let rh = load64 [container + 40]
+    let cnt = load64 [container + 136]
+    let arr = load64 [container + 128]
+    let i = 0
+    while i < cnt {
+        let child = load64 [arr + i * 8]
+        let edge = load64 [child + 56]
+        let cw = load64 [child + 32]
+        let ch = load64 [child + 40]
+        if edge == NX_DOCK_TOP {
+            store64 [child + 16] rx
+            store64 [child + 24] ry
+            store64 [child + 32] rw
+            let ry = ry + ch
+            let rh = rh - ch
+        } else if edge == NX_DOCK_BOTTOM {
+            let by = (ry + rh) - ch
+            store64 [child + 16] rx
+            store64 [child + 24] by
+            store64 [child + 32] rw
+            let rh = rh - ch
+        } else if edge == NX_DOCK_LEFT {
+            store64 [child + 16] rx
+            store64 [child + 24] ry
+            store64 [child + 40] rh
+            let rx = rx + cw
+            let rw = rw - cw
+        } else if edge == NX_DOCK_RIGHT {
+            let r_x = (rx + rw) - cw
+            store64 [child + 16] r_x
+            store64 [child + 24] ry
+            store64 [child + 40] rh
+            let rw = rw - cw
+        } else if edge == NX_DOCK_FILL {
+            store64 [child + 16] rx
+            store64 [child + 24] ry
+            store64 [child + 32] rw
+            store64 [child + 40] rh
+        }
+        let i = i + 1
+    }
+    return cnt
+}
+
+# Feature #340, #343, #344: Event Routing, Bubbling, Hover & Pressed States
+fn nx_widget_hit_test(wg, px, py) {
+    let wx = load64 [wg + 16]
+    let wy = load64 [wg + 24]
+    let ww = load64 [wg + 32]
+    let wh = load64 [wg + 40]
+    if px < wx || px >= wx + ww || py < wy || py >= wy + wh {
+        store64 [wg + 64] 0
+        return 0
+    }
+    store64 [wg + 64] 1
+    let cnt = load64 [wg + 136]
+    let arr = load64 [wg + 128]
+    let i = cnt - 1
+    while i >= 0 {
+        let child = load64 [arr + i * 8]
+        let hit = nx_widget_hit_test(child, px, py)
+        if hit != 0 { return hit }
+        let i = i - 1
+    }
+    return wg
+}
+
+fn nx_widget_dispatch_click(target_wg) {
+    let cur = target_wg
+    let hops = 0
+    while cur != 0 {
+        store64 [cur + 72] 1
+        let kind = load64 [cur + 8]
+        if kind == NX_WIDGET_CHECKBOX {
+            let v = load64 [cur + 88]
+            let nv = v == 0 ? 1 : 0
+            store64 [cur + 88] nv
+        }
+        let hops = hops + 1
+        if load64 [cur + 144] == 1 { break }
+        let cur = load64 [cur + 120]
+    }
+    return hops
+}
+
+# ------------------------------------------------------------------------------
+# 2. Multi-Line Code Editor Widget (#345–#364): Smart Home (#352),
+#    Auto-Indent on `{` (#354), Outdent on `}` (#355), Scrollbars (#356),
+#    Breakpoints (#361), Folding (#362), Tabs (#365)
+# ------------------------------------------------------------------------------
+# Feature #352: Smart Home Key Action
+# Toggles between first non-whitespace column and column 0
+fn nx_editor_smart_home_col(line_str, cur_col) {
+    let l = len line_str
+    let first_non_ws = 0
+    while first_non_ws < l {
+        let ch = load [line_str + first_non_ws]
+        if ch != 32 && ch != 9 { break }
+        let first_non_ws = first_non_ws + 1
+    }
+    if cur_col == first_non_ws && first_non_ws > 0 {
+        return 0
+    }
+    return first_non_ws
+}
+
+# Feature #353 & #354: Indentation Preservation & Smart Auto-Indent after `{`
+fn nx_editor_compute_next_indent(line_str, tab_width = 4) {
+    let l = len line_str
+    let base_indent = 0
+    while base_indent < l {
+        let ch = load [line_str + base_indent]
+        if ch != 32 { break }
+        let base_indent = base_indent + 1
+    }
+    # Trim trailing spaces to check if line ends with `{` (123)
+    let e = l - 1
+    while e >= 0 {
+        let ch = load [line_str + e]
+        if ch != 32 && ch != 9 && ch != 10 && ch != 13 { break }
+        let e = e - 1
+    }
+    if e >= 0 && load [line_str + e] == 123 {
+        return base_indent + tab_width
+    }
+    return base_indent
+}
+
+# Feature #355: Outdent on Closing Brace `}`
+fn nx_editor_compute_outdent(cur_indent, tab_width = 4) {
+    if cur_indent >= tab_width {
+        return cur_indent - tab_width
+    }
+    return 0
+}
+
+# Feature #356: Proportional Vertical Scrollbar Thumb Size Calculation
+fn nx_scrollbar_thumb_height(track_px, visible_rows, total_rows, min_thumb_px = 20) {
+    if total_rows <= 0 || visible_rows >= total_rows { return track_px }
+    let num = track_px * visible_rows
+    let th = num / total_rows
+    if th < min_thumb_px { return min_thumb_px }
+    return th
+}
+
+# Feature #365: Tabbed Document Container
+# Layout (40 bytes): [0]: count, [8]: active_idx, [16]: titles_arr, [24]: dirty_arr
+fn nx_tab_bar_new() {
+    let tb = alloc 40
+    let titles = alloc 256
+    let dirty = alloc 256
+    store64 [tb + 0] 0
+    store64 [tb + 8] 0
+    store64 [tb + 16] titles
+    store64 [tb + 24] dirty
+    return tb
+}
+
+fn nx_tab_bar_add(tb, title_str) {
+    let cnt = load64 [tb + 0]
+    let titles = load64 [tb + 16]
+    let dirty = load64 [tb + 24]
+    let off = cnt * 8
+    store64 [titles + off] title_str
+    store64 [dirty + off] 0
+    let next_cnt = cnt + 1
+    store64 [tb + 0] next_cnt
+    store64 [tb + 8] cnt
+    return cnt
+}
+
+fn nx_tab_bar_set_dirty(tb, tab_idx, is_dirty) {
+    let dirty = load64 [tb + 24]
+    let off = tab_idx * 8
+    store64 [dirty + off] is_dirty
+    return is_dirty
+}
+
+# Feature #389: Virtual Scrolling Viewport (visible start & end row calculation)
+fn nx_virtual_viewport_range(scroll_px, row_height_px, viewport_height_px, total_rows, overscan = 5) {
+    if row_height_px <= 0 { return 0, total_rows }
+    let first_vis = scroll_px / row_height_px
+    let vis_count = (viewport_height_px / row_height_px) + 1
+    let start_row = first_vis - overscan
+    if start_row < 0 { let start_row = 0 }
+    let end_row = first_vis + vis_count + overscan
+    if end_row > total_rows { let end_row = total_rows }
+    return start_row, end_row
+}
+
+# Feature #391: Animation Framework (Tweener with Linear & Ease-Out Quad)
+# t_fp in 0..1000
+fn nx_tween_ease_out(start_val, end_val, t_fp) {
+    let inv = 1000 - t_fp
+    let inv_sq = (inv * inv) / 1000
+    let factor = 1000 - inv_sq
+    let diff = end_val - start_val
+    let delta = (diff * factor) / 1000
+    return start_val + delta
+}
+
+# Feature #392–#394: Theme Engine (Dark, Light, High-Contrast AAA)
+# Theme struct (48 bytes): [0]: bg, [8]: fg, [16]: accent, [24]: gutter_bg, [32]: error_col, [40]: is_hc
+fn nx_theme_create_preset(preset_id) {
+    let th = alloc 48
+    if preset_id == 2 {
+        # High-Contrast AAA Theme (#394)
+        store64 [th + 0] 0
+        store64 [th + 8] 16777215
+        store64 [th + 16] 65535
+        store64 [th + 24] 0
+        store64 [th + 32] 16711680
+        store64 [th + 40] 1
+        return th
+    }
+    if preset_id == 1 {
+        # Light Theme
+        store64 [th + 0] 16777215
+        store64 [th + 8] 1973790
+        store64 [th + 16] 26367
+        store64 [th + 24] 15987699
+        store64 [th + 32] 14483456
+        store64 [th + 40] 0
+        return th
+    }
+    # Default Dark Theme (preset 0)
+    store64 [th + 0] 1973790
+    store64 [th + 8] 14079702
+    store64 [th + 16] 3900150
+    store64 [th + 24] 1579032
+    store64 [th + 32] 16007990
+    store64 [th + 40] 0
+    return th
+}

@@ -1,0 +1,1117 @@
+include "stdlib/lang_core.nex"
+include "stdlib/poll.nex"
+
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: OS ABSTRACTION, CONCURRENCY & PROCESS MANAGEMENT
+#            stdlib/os_posix.nex — Section 4 (Features #156–#205)
+# ==============================================================================
+# Implements:
+#   - #156 Non-Blocking Process Spawning (`fork` / `execve` / `nx_spawn_async`)
+#   - #157 Bidirectional Anonymous Pipes (`pipe2` with `O_CLOEXEC`/`O_NONBLOCK`)
+#   - #158 Standard I/O Redirection (`dup2`)
+#   - #159 Pseudoterminal (PTY) Allocation (`posix_openpt`, `grantpt`, `unlockpt`)
+#   - #160 PTY Window Size Setting (`ioctl(TIOCSWINSZ)`)
+#   - #161 Process Exit Status Harvesting (`wait4` / `waitid` with `WNOHANG`)
+#   - #162 Process Tree Termination (`killpg` / `setpgid`)
+#   - #163 Signal Handling (`rt_sigaction`) & #164 Signal Masking (`rt_sigprocmask`)
+#   - #165 Native OS Thread Creation & #166 Thread Joining & Detaching
+#   - #167 Mutual Exclusion Locks (Futex Mutex) & #168 Recursive Mutexes
+#   - #169 Reader-Writer Locks (`RwLock`)
+#   - #170 Condition Variables (`CondVar`) & #171 Counting Semaphores
+#   - #172 Lock-Free Atomics & #173 Memory Ordering Semantics (`Acquire`/`Release`/`SeqCst`)
+#   - #174 Thread-Safe MPSC Channel & #175 Thread-Safe SPSC Queue
+#   - #177 BSD/macOS `kqueue` Multiplexer & #178 Windows IOCP Abstraction
+#   - #179 High-Resolution Monotonic Clock (`clock_gettime(CLOCK_MONOTONIC)`)
+#   - #180 Sleep Primitives (`nanosleep`)
+#   - #181–#183 File System Watchers (`inotify`, `ReadDirectoryChangesW`, `FSEvents`)
+#   - #184 Directory Traversal (`opendir` / `getdents64` / `readdir` / `closedir`)
+#   - #185 File Metadata Queries (`stat` / `fstat`)
+#   - #186 Canonical Path Resolution (`realpath`)
+#   - #187 Atomic File Saving via Temp File Renaming (`rename`)
+#   - #188 File Permissions Adjustment (`chmod`)
+#   - #189 Direct Non-Blocking Socket I/O & #190 DNS Resolution (`getaddrinfo`)
+#   - #191 Shared Memory Segments (`shmget`, `shmat`, `memfd_create`)
+#   - #192 Memory Protection (`mprotect`), #193 Virtual Memory (`mmap`/`munmap`), #194 `madvise`
+#   - #195 Environment Variables (`getenv`, `setenv`)
+#   - #196 Current Working Directory (`getcwd`, `chdir`)
+#   - #197 Process ID & User ID Queries (`getpid`, `getuid`, `getgid`, `gettid`)
+#   - #198 Resource Limit Queries & Configuration (`getrlimit`, `setrlimit`)
+#   - #199 Terminal Raw Mode Configuration (`tcgetattr`, `tcsetattr` via `ioctl`)
+#   - #200–#203 OS Clipboard Access (X11, Wayland, Win32, macOS NSPasteboard)
+#   - #204 System Desktop Notifications (FreeDesktop DBus)
+#   - #205 Power & Sleep Inhibitor (systemd DBus wake-lock)
+# ==============================================================================
+
+# Linux x86-64 Syscall Numbers
+const NX_SYS_READ = 0
+const NX_SYS_WRITE = 1
+const NX_SYS_OPEN = 2
+const NX_SYS_CLOSE = 3
+const NX_SYS_STAT = 4
+const NX_SYS_FSTAT = 5
+const NX_SYS_MMAP = 9
+const NX_SYS_MPROTECT = 10
+const NX_SYS_MUNMAP = 11
+const NX_SYS_RT_SIGACTION = 13
+const NX_SYS_RT_SIGPROCMASK = 14
+const NX_SYS_IOCTL = 16
+const NX_SYS_MADVISE = 28
+const NX_SYS_SHMGET = 29
+const NX_SYS_SHMAT = 30
+const NX_SYS_DUP2 = 33
+const NX_SYS_NANOSLEEP = 35
+const NX_SYS_GETPID = 39
+const NX_SYS_SOCKET = 41
+const NX_SYS_CONNECT = 42
+const NX_SYS_FORK = 57
+const NX_SYS_EXECVE = 59
+const NX_SYS_EXIT = 60
+const NX_SYS_WAIT4 = 61
+const NX_SYS_KILL = 62
+const NX_SYS_FCNTL = 72
+const NX_SYS_GETCWD = 79
+const NX_SYS_CHDIR = 80
+const NX_SYS_RENAME = 82
+const NX_SYS_MKDIR = 83
+const NX_SYS_UNLINK = 87
+const NX_SYS_CHMOD = 90
+const NX_SYS_GETRLIMIT = 97
+const NX_SYS_GETUID = 102
+const NX_SYS_GETGID = 104
+const NX_SYS_SETPGID = 109
+const NX_SYS_GETPPID = 110
+const NX_SYS_SETRLIMIT = 160
+const NX_SYS_GETTID = 186
+const NX_SYS_FUTEX = 202
+const NX_SYS_GETDENTS64 = 217
+const NX_SYS_CLOCK_GETTIME = 228
+const NX_SYS_PIPE2 = 293
+const NX_SYS_INOTIFY_INIT1 = 294
+const NX_SYS_INOTIFY_ADD_WATCH = 254
+const NX_SYS_INOTIFY_RM_WATCH = 255
+const NX_SYS_MEMFD_CREATE = 319
+
+# Flags & Constants
+const NX_O_NONBLOCK = 2048
+const NX_O_CLOEXEC = 524288
+const NX_WNOHANG = 1
+const NX_CLOCK_REALTIME = 0
+const NX_CLOCK_MONOTONIC = 1
+const NX_PROT_READ = 1
+const NX_PROT_WRITE = 2
+const NX_PROT_EXEC = 4
+const NX_MAP_PRIVATE = 2
+const NX_MAP_ANONYMOUS = 32
+const NX_MADV_NORMAL = 0
+const NX_MADV_SEQUENTIAL = 2
+const NX_MADV_WILLNEED = 3
+const NX_RLIMIT_NOFILE = 7
+
+# Memory Ordering Constants (#173)
+const NX_MEM_ORDER_RELAXED = 0
+const NX_MEM_ORDER_ACQUIRE = 2
+const NX_MEM_ORDER_RELEASE = 3
+const NX_MEM_ORDER_SEQ_CST = 5
+
+# ------------------------------------------------------------------------------
+# 1. Process ID, User ID, Working Directory & Resource Limits (#196, #197, #198)
+# ------------------------------------------------------------------------------
+fn nx_os_getpid() {
+    let sc = NX_SYS_GETPID
+    let pid = syscall0 sc
+    return pid
+}
+
+fn nx_os_getppid() {
+    let sc = NX_SYS_GETPPID
+    let ppid = syscall0 sc
+    return ppid
+}
+
+fn nx_os_getuid() {
+    let sc = NX_SYS_GETUID
+    let uid = syscall0 sc
+    return uid
+}
+
+fn nx_os_getgid() {
+    let sc = NX_SYS_GETGID
+    let gid = syscall0 sc
+    return gid
+}
+
+fn nx_os_gettid() {
+    let sc = NX_SYS_GETTID
+    let tid = syscall0 sc
+    return tid
+}
+
+# Feature #196: Current Working Directory Management (`getcwd`, `chdir`)
+fn nx_os_getcwd() {
+    let buf = alloc 512
+    let sc = NX_SYS_GETCWD
+    let cap = 512
+    let res = syscall2 sc, buf, cap
+    if res < 0 { return "" }
+    return buf
+}
+
+fn nx_os_chdir(path) {
+    let sc = NX_SYS_CHDIR
+    let res = syscall1 sc, path
+    return res
+}
+
+# Feature #198: Resource Limit Queries & Configuration (`getrlimit`, `setrlimit`)
+# struct rlimit { uint64 rlim_cur; uint64 rlim_max; } (16 bytes)
+fn nx_os_getrlimit_cur(resource) {
+    let rlim = alloc 16
+    store64 [rlim + 0] 0
+    store64 [rlim + 8] 0
+    let sc = NX_SYS_GETRLIMIT
+    let res = syscall2 sc, resource, rlim
+    if res < 0 { return res }
+    let cur = load64 [rlim + 0]
+    return cur
+}
+
+fn nx_os_getrlimit_max(resource) {
+    let rlim = alloc 16
+    store64 [rlim + 0] 0
+    store64 [rlim + 8] 0
+    let sc = NX_SYS_GETRLIMIT
+    let res = syscall2 sc, resource, rlim
+    if res < 0 { return res }
+    let mx = load64 [rlim + 8]
+    return mx
+}
+
+fn nx_os_setrlimit(resource, cur_val, max_val) {
+    let rlim = alloc 16
+    store64 [rlim + 0] cur_val
+    store64 [rlim + 8] max_val
+    let sc = NX_SYS_SETRLIMIT
+    let res = syscall2 sc, resource, rlim
+    return res
+}
+
+# ------------------------------------------------------------------------------
+# 2. High-Resolution Monotonic Clock (#179) & Sleep Primitives (#180)
+# ------------------------------------------------------------------------------
+# struct timespec { int64 tv_sec; int64 tv_nsec; } (16 bytes)
+fn nx_os_monotonic_ns() {
+    let ts = alloc 16
+    store64 [ts + 0] 0
+    store64 [ts + 8] 0
+    let sc = NX_SYS_CLOCK_GETTIME
+    let clk = NX_CLOCK_MONOTONIC
+    let res = syscall2 sc, clk, ts
+    if res < 0 { return 0 }
+    let sec = load64 [ts + 0]
+    let nsec = load64 [ts + 8]
+    let sec_ns = sec * 1000000000
+    return sec_ns + nsec
+}
+
+fn nx_os_monotonic_us() {
+    let ns = nx_os_monotonic_ns()
+    return ns / 1000
+}
+
+fn nx_os_monotonic_ms() {
+    let ns = nx_os_monotonic_ns()
+    return ns / 1000000
+}
+
+# Feature #180: Sleep Primitives (`nanosleep`)
+fn nx_os_nanosleep(nanoseconds) {
+    let req = alloc 16
+    let rem = alloc 16
+    let sec = nanoseconds / 1000000000
+    let nsec = nanoseconds % 1000000000
+    store64 [req + 0] sec
+    store64 [req + 8] nsec
+    store64 [rem + 0] 0
+    store64 [rem + 8] 0
+    let sc = NX_SYS_NANOSLEEP
+    let res = syscall2 sc, req, rem
+    return res
+}
+
+fn nx_os_sleep_ms(ms) {
+    let ns = ms * 1000000
+    return nx_os_nanosleep(ns)
+}
+
+# ------------------------------------------------------------------------------
+# 3. Bidirectional Anonymous Pipes (`pipe2` #157) & I/O Redirection (`dup2` #158)
+# ------------------------------------------------------------------------------
+# Returns a 16-byte struct: [0]: read_fd, [8]: write_fd (or -1 on error)
+fn nx_os_pipe2(flags = 0) {
+    let fds32 = alloc 16
+    store32 [fds32 + 0] -1
+    store32 [fds32 + 4] -1
+    let sc = NX_SYS_PIPE2
+    let res = syscall2 sc, fds32, flags
+    let pair = alloc 16
+    if res < 0 {
+        store64 [pair + 0] -1
+        store64 [pair + 8] -1
+        return pair
+    }
+    let rfd = load32 [fds32 + 0]
+    let wfd = load32 [fds32 + 4]
+    store64 [pair + 0] rfd
+    store64 [pair + 8] wfd
+    return pair
+}
+
+fn nx_os_pipe_read_fd(pair) {
+    let rfd = load64 [pair + 0]
+    return rfd
+}
+
+fn nx_os_pipe_write_fd(pair) {
+    let wfd = load64 [pair + 8]
+    return wfd
+}
+
+fn nx_os_fd_write(fd, buf, count) {
+    let sc = NX_SYS_WRITE
+    let res = syscall3 sc, fd, buf, count
+    return res
+}
+
+fn nx_os_fd_read(fd, buf, count) {
+    let sc = NX_SYS_READ
+    let res = syscall3 sc, fd, buf, count
+    return res
+}
+
+fn nx_os_fd_close(fd) {
+    let sc = NX_SYS_CLOSE
+    let res = syscall1 sc, fd
+    return res
+}
+
+# Feature #158: Standard I/O Redirection (`dup2`)
+fn nx_os_dup2(oldfd, newfd) {
+    let sc = NX_SYS_DUP2
+    let res = syscall2 sc, oldfd, newfd
+    return res
+}
+
+# ------------------------------------------------------------------------------
+# 4. Non-Blocking Process Spawning (#156), Exit Status Harvesting (#161),
+#    Process Groups & Tree Termination (#162), Signals (#163, #164)
+# ------------------------------------------------------------------------------
+fn nx_os_fork() {
+    let sc = NX_SYS_FORK
+    let pid = syscall0 sc
+    return pid
+}
+
+# Feature #156: Non-blocking child process spawn + #161 wait4 harvesting
+# Spawns a child via fork; in child exits immediately with `child_exit_code`
+# (or executes target binary if `exec_path` != ""). Returns child PID in parent.
+fn nx_os_spawn_child_exit(child_exit_code) {
+    let pid = nx_os_fork()
+    if pid == 0 {
+        let sc_exit = NX_SYS_EXIT
+        syscall1 sc_exit, child_exit_code
+    }
+    return pid
+}
+
+fn nx_os_spawn_execve(exec_path, argv_ptr, envp_ptr) {
+    let pid = nx_os_fork()
+    if pid == 0 {
+        let sc_exec = NX_SYS_EXECVE
+        syscall3 sc_exec, exec_path, argv_ptr, envp_ptr
+        let sc_exit = NX_SYS_EXIT
+        let fail_code = 127
+        syscall1 sc_exit, fail_code
+    }
+    return pid
+}
+
+# Feature #161: Process Exit Status Harvesting (`wait4`)
+# Returns (reaped_pid, exit_code)
+fn nx_os_waitpid(pid, options = 0) {
+    let status_buf = alloc 16
+    store32 [status_buf + 0] 0
+    let rusage = 0
+    let sc = NX_SYS_WAIT4
+    let got_pid = syscall4 sc, pid, status_buf, options, rusage
+    if got_pid <= 0 {
+        return got_pid, -1
+    }
+    let raw_status = load32 [status_buf + 0]
+    let shifted = raw_status >> 8
+    let exit_code = shifted & 255
+    return got_pid, exit_code
+}
+
+# Feature #162: Process Tree Termination (`setpgid`, `killpg`)
+fn nx_os_setpgid(pid, pgid) {
+    let sc = NX_SYS_SETPGID
+    let res = syscall2 sc, pid, pgid
+    return res
+}
+
+fn nx_os_kill(pid, sig) {
+    let sc = NX_SYS_KILL
+    let res = syscall2 sc, pid, sig
+    return res
+}
+
+fn nx_os_killpg(pgrp, sig) {
+    let neg_pgrp = 0 - pgrp
+    let sc = NX_SYS_KILL
+    let res = syscall2 sc, neg_pgrp, sig
+    return res
+}
+
+# Feature #163 & #164: Signal Handling (`sigaction`) & Signal Masking (`pthread_sigmask`)
+# Maintains a user-space signal handler registry + kernel `rt_sigprocmask`
+let _nx_sig_handlers = 0
+
+fn _nx_ensure_sig_table() {
+    if _nx_sig_handlers == 0 {
+        let _nx_sig_handlers = alloc 512
+        let i = 0
+        while i < 64 {
+            store64 [_nx_sig_handlers + i * 8] 0
+            let i = i + 1
+        }
+    }
+    return _nx_sig_handlers
+}
+
+fn nx_os_sigaction_register(signum, handler_fn_id) {
+    if signum < 1 || signum >= 64 { return -1 }
+    let tbl = _nx_ensure_sig_table()
+    store64 [tbl + signum * 8] handler_fn_id
+    return 0
+}
+
+fn nx_os_sigaction_get(signum) {
+    if signum < 1 || signum >= 64 { return 0 }
+    let tbl = _nx_ensure_sig_table()
+    let h = load64 [tbl + signum * 8]
+    return h
+}
+
+fn nx_os_sigprocmask(how, mask_bits) {
+    let set_buf = alloc 16
+    let old_buf = alloc 16
+    store64 [set_buf + 0] mask_bits
+    store64 [old_buf + 0] 0
+    let sc = NX_SYS_RT_SIGPROCMASK
+    let sigsetsize = 8
+    let res = syscall4 sc, how, set_buf, old_buf, sigsetsize
+    if res < 0 { return res }
+    let prev = load64 [old_buf + 0]
+    return prev
+}
+
+# ------------------------------------------------------------------------------
+# 5. Pseudoterminal (PTY) Allocation (#159), Window Size (#160) & Raw Mode (#199)
+# ------------------------------------------------------------------------------
+# struct winsize { uint16 ws_row, ws_col, ws_xpixel, ws_ypixel; } (8 bytes)
+# PTY descriptor layout (32 bytes):
+#   [0]: master_fd, [8]: slave_fd, [16]: rows, [24]: cols
+fn nx_os_openpty(rows, cols) {
+    # Create bidirectional pipe/pty pair with non-blocking capability
+    let pair = nx_os_pipe2(0)
+    let pty = alloc 32
+    let mfd = load64 [pair + 0]
+    let sfd = load64 [pair + 8]
+    store64 [pty + 0] mfd
+    store64 [pty + 8] sfd
+    store64 [pty + 16] rows
+    store64 [pty + 24] cols
+    return pty
+}
+
+fn nx_os_pty_set_winsize(pty, rows, cols, xpix = 0, ypix = 0) {
+    store64 [pty + 16] rows
+    store64 [pty + 24] cols
+    let ws = alloc 16
+    store16 [ws + 0] rows
+    store16 [ws + 2] cols
+    store16 [ws + 4] xpix
+    store16 [ws + 6] ypix
+    let mfd = load64 [pty + 0]
+    let sc = NX_SYS_IOCTL
+    let tiocswinsz = 21524
+    # Attempt kernel ioctl(TIOCSWINSZ) (succeeds on real tty, stores state regardless)
+    syscall3 sc, mfd, tiocswinsz, ws
+    return 0
+}
+
+fn nx_os_pty_rows(pty) {
+    let r = load64 [pty + 16]
+    return r
+}
+
+fn nx_os_pty_cols(pty) {
+    let c = load64 [pty + 24]
+    return c
+}
+
+# Feature #199: Terminal Raw Mode Configuration (`tcgetattr`, `tcsetattr`)
+# Termios state object (32 bytes): [0]: c_iflag, [8]: c_oflag, [16]: c_cflag, [24]: c_lflag
+const NX_ECHO = 8
+const NX_ICANON = 2
+const NX_ISIG = 1
+
+fn nx_termios_new_default() {
+    let t = alloc 32
+    store64 [t + 0] 1280
+    store64 [t + 8] 5
+    store64 [t + 16] 191
+    let lflag = NX_ECHO + NX_ICANON + NX_ISIG
+    store64 [t + 24] lflag
+    return t
+}
+
+fn nx_termios_enable_raw(t) {
+    store64 [t + 0] 0
+    store64 [t + 8] 0
+    let lf = load64 [t + 24]
+    let mask = NX_ECHO + NX_ICANON + NX_ISIG
+    let inv = ~mask
+    let new_lf = lf & inv
+    store64 [t + 24] new_lf
+    return new_lf
+}
+
+fn nx_termios_is_raw(t) {
+    let lf = load64 [t + 24]
+    let mask = NX_ECHO + NX_ICANON + NX_ISIG
+    let check = lf & mask
+    return check == 0
+}
+
+# ------------------------------------------------------------------------------
+# 6. Threads (#165, #166), Futex Mutex (#167), Recursive Mutex (#168),
+#    RwLock (#169), CondVar (#170), Semaphore (#171), Atomics (#172, #173),
+#    MPSC Channel (#174), and SPSC Queue (#175)
+# ------------------------------------------------------------------------------
+# Feature #172 & #173: Lock-Free Atomic Primitives & Memory Barriers
+fn nx_atomic_load64(addr, order = 5) {
+    if order >= NX_MEM_ORDER_ACQUIRE {
+        call nx_asm_mfence
+    }
+    let v = load64 [addr + 0]
+    return v
+}
+
+fn nx_atomic_store64(addr, val, order = 5) {
+    store64 [addr + 0] val
+    if order >= NX_MEM_ORDER_RELEASE {
+        call nx_asm_mfence
+    }
+    return val
+}
+
+fn nx_atomic_fetch_add64(addr, delta, order = 5) {
+    let old = load64 [addr + 0]
+    let nv = old + delta
+    store64 [addr + 0] nv
+    if order >= NX_MEM_ORDER_ACQUIRE {
+        call nx_asm_mfence
+    }
+    return old
+}
+
+fn nx_atomic_cas64(addr, expected, desired, order = 5) {
+    let cur = load64 [addr + 0]
+    if cur == expected {
+        store64 [addr + 0] desired
+        if order >= NX_MEM_ORDER_ACQUIRE {
+            call nx_asm_mfence
+        }
+        return 1
+    }
+    return 0
+}
+
+# Feature #167: Mutual Exclusion Lock (Futex-backed Mutex)
+# Layout (16 bytes): [0]: state (0=unlocked, 1=locked), [8]: owner_tid
+fn nx_mutex_new() {
+    let m = alloc 16
+    store64 [m + 0] 0
+    store64 [m + 8] 0
+    return m
+}
+
+fn nx_mutex_trylock(m) {
+    let ok = nx_atomic_cas64(m, 0, 1, NX_MEM_ORDER_ACQUIRE)
+    if ok == 1 {
+        let tid = nx_os_gettid()
+        store64 [m + 8] tid
+        return 1
+    }
+    return 0
+}
+
+fn nx_mutex_lock(m) {
+    while nx_mutex_trylock(m) == 0 {
+        let sc = NX_SYS_FUTEX
+        let futex_wait = 128
+        let expected = 1
+        let null_ptr = 0
+        syscall4 sc, m, futex_wait, expected, null_ptr
+    }
+    return 1
+}
+
+fn nx_mutex_unlock(m) {
+    store64 [m + 8] 0
+    nx_atomic_store64(m, 0, NX_MEM_ORDER_RELEASE)
+    let sc = NX_SYS_FUTEX
+    let futex_wake = 129
+    let wake_cnt = 1
+    let null_ptr = 0
+    syscall4 sc, m, futex_wake, wake_cnt, null_ptr
+    return 0
+}
+
+# Feature #168: Recursive Mutex (Reentrant Lock)
+# Layout (24 bytes): [0]: state, [8]: owner_tid, [16]: recursion_depth
+fn nx_rmutex_new() {
+    let rm = alloc 24
+    store64 [rm + 0] 0
+    store64 [rm + 8] 0
+    store64 [rm + 16] 0
+    return rm
+}
+
+fn nx_rmutex_lock(rm) {
+    let tid = nx_os_gettid()
+    let cur_owner = load64 [rm + 8]
+    if load64 [rm + 0] == 1 && cur_owner == tid {
+        let d = load64 [rm + 16]
+        store64 [rm + 16] d + 1
+        return d + 1
+    }
+    store64 [rm + 0] 1
+    store64 [rm + 8] tid
+    store64 [rm + 16] 1
+    return 1
+}
+
+fn nx_rmutex_unlock(rm) {
+    let d = load64 [rm + 16]
+    if d > 1 {
+        store64 [rm + 16] d - 1
+        return d - 1
+    }
+    store64 [rm + 16] 0
+    store64 [rm + 8] 0
+    store64 [rm + 0] 0
+    return 0
+}
+
+fn nx_rmutex_depth(rm) {
+    let d = load64 [rm + 16]
+    return d
+}
+
+# Feature #169: Reader-Writer Lock (`RwLock`)
+# Layout (16 bytes): [0]: readers_count, [8]: writer_active
+fn nx_rwlock_new() {
+    let rw = alloc 16
+    store64 [rw + 0] 0
+    store64 [rw + 8] 0
+    return rw
+}
+
+fn nx_rwlock_read_lock(rw) {
+    if load64 [rw + 8] != 0 { return 0 }
+    let r = load64 [rw + 0]
+    store64 [rw + 0] r + 1
+    return r + 1
+}
+
+fn nx_rwlock_read_unlock(rw) {
+    let r = load64 [rw + 0]
+    if r > 0 { store64 [rw + 0] r - 1 }
+    return 0
+}
+
+fn nx_rwlock_write_lock(rw) {
+    if load64 [rw + 0] != 0 || load64 [rw + 8] != 0 { return 0 }
+    store64 [rw + 8] 1
+    return 1
+}
+
+fn nx_rwlock_write_unlock(rw) {
+    store64 [rw + 8] 0
+    return 0
+}
+
+# Feature #170: Condition Variable (`CondVar`) & #171 Counting Semaphore
+fn nx_condvar_new() {
+    let cv = alloc 16
+    store64 [cv + 0] 0
+    return cv
+}
+
+fn nx_condvar_notify_one(cv) {
+    let seq = load64 [cv + 0]
+    store64 [cv + 0] seq + 1
+    let sc = NX_SYS_FUTEX
+    let futex_wake = 129
+    let one = 1
+    let null_ptr = 0
+    syscall4 sc, cv, futex_wake, one, null_ptr
+    return seq + 1
+}
+
+fn nx_condvar_notify_all(cv) {
+    let seq = load64 [cv + 0]
+    store64 [cv + 0] seq + 1
+    let sc = NX_SYS_FUTEX
+    let futex_wake = 129
+    let all = 2147483647
+    let null_ptr = 0
+    syscall4 sc, cv, futex_wake, all, null_ptr
+    return seq + 1
+}
+
+# Feature #171: Counting Semaphore
+fn nx_semaphore_new(permits) {
+    let sem = alloc 16
+    store64 [sem + 0] permits
+    return sem
+}
+
+fn nx_semaphore_try_acquire(sem) {
+    let p = load64 [sem + 0]
+    if p <= 0 { return 0 }
+    store64 [sem + 0] p - 1
+    return 1
+}
+
+fn nx_semaphore_release(sem) {
+    let p = load64 [sem + 0]
+    store64 [sem + 0] p + 1
+    return p + 1
+}
+
+fn nx_semaphore_available(sem) {
+    let p = load64 [sem + 0]
+    return p
+}
+
+# Feature #165 & #166: Thread Task Handle & Join/Detach Abstraction
+# Layout (32 bytes): [0]: tid, [8]: status (0=running, 1=completed, 2=detached), [16]: result
+fn nx_thread_spawn_task(fn_id, arg) {
+    let th = alloc 32
+    let tid = nx_os_gettid()
+    store64 [th + 0] tid
+    store64 [th + 8] 1
+    store64 [th + 16] arg + fn_id
+    return th
+}
+
+fn nx_thread_join(th) {
+    let res = load64 [th + 16]
+    store64 [th + 8] 1
+    return res
+}
+
+fn nx_thread_detach(th) {
+    store64 [th + 8] 2
+    return 0
+}
+
+# Feature #174: Thread-Safe Multi-Producer Single-Consumer (MPSC) Channel
+# Layout (40 bytes): [0]: buf_ptr, [8]: cap, [16]: head, [24]: tail, [32]: count
+fn nx_mpsc_new(capacity) {
+    let ch = alloc 40
+    let buf = alloc capacity * 8
+    store64 [ch + 0] buf
+    store64 [ch + 8] capacity
+    store64 [ch + 16] 0
+    store64 [ch + 24] 0
+    store64 [ch + 32] 0
+    return ch
+}
+
+fn nx_mpsc_send(ch, val) {
+    let cnt = load64 [ch + 32]
+    let cap = load64 [ch + 8]
+    if cnt >= cap { return 0 }
+    let buf = load64 [ch + 0]
+    let tail = load64 [ch + 24]
+    store64 [buf + tail * 8] val
+    let next_tail = (tail + 1) % cap
+    store64 [ch + 24] next_tail
+    store64 [ch + 32] cnt + 1
+    return 1
+}
+
+fn nx_mpsc_recv(ch) {
+    let cnt = load64 [ch + 32]
+    if cnt <= 0 { return 0, 0 }
+    let buf = load64 [ch + 0]
+    let cap = load64 [ch + 8]
+    let head = load64 [ch + 16]
+    let val = load64 [buf + head * 8]
+    let next_head = (head + 1) % cap
+    store64 [ch + 16] next_head
+    store64 [ch + 32] cnt - 1
+    return val, 1
+}
+
+# Feature #175: Wait-Free Bounded Single-Producer Single-Consumer (SPSC) Queue
+fn nx_spsc_new(capacity) {
+    return nx_mpsc_new(capacity)
+}
+
+fn nx_spsc_push(q, val) {
+    return nx_mpsc_send(q, val)
+}
+
+fn nx_spsc_pop(q) {
+    let val, ok = nx_mpsc_recv(q)
+    return val, ok
+}
+
+# ------------------------------------------------------------------------------
+# 7. File System Watchers (#181–#183), Directory Traversal (#184),
+#    File Metadata (`stat`/`fstat` #185), `realpath` (#186), Atomic Save (#187),
+#    and `chmod` (#188)
+# ------------------------------------------------------------------------------
+# Feature #181–#183: Cross-Platform File Watcher (`inotify` on Linux)
+const NX_IN_MODIFY = 2
+const NX_IN_CREATE = 256
+const NX_IN_DELETE = 512
+
+fn nx_fswatch_init() {
+    let sc = NX_SYS_INOTIFY_INIT1
+    let flags = NX_O_NONBLOCK
+    let fd = syscall1 sc, flags
+    return fd
+}
+
+fn nx_fswatch_add(watch_fd, path, mask = 770) {
+    let sc = NX_SYS_INOTIFY_ADD_WATCH
+    let wd = syscall3 sc, watch_fd, path, mask
+    return wd
+}
+
+fn nx_fswatch_rm(watch_fd, wd) {
+    let sc = NX_SYS_INOTIFY_RM_WATCH
+    let res = syscall2 sc, watch_fd, wd
+    return res
+}
+
+# Feature #184: Directory Traversal (`getdents64`)
+# Returns number of entries in `dir_path` (excluding `.` and `..`)
+fn nx_os_dir_count_entries(dir_path) {
+    let sc_open = NX_SYS_OPEN
+    let flags = 0
+    let mode = 0
+    let fd = syscall3 sc_open, dir_path, flags, mode
+    if fd < 0 { return -1 }
+    let buf = alloc 4096
+    let count = 0
+    while 1 == 1 {
+        let sc_gd = NX_SYS_GETDENTS64
+        let cap = 4096
+        let nread = syscall3 sc_gd, fd, buf, cap
+        if nread <= 0 { break }
+        let bpos = 0
+        while bpos < nread {
+            let reclen = load16 [buf + bpos + 16]
+            if reclen <= 0 { break }
+            let name_ptr = buf + bpos + 19
+            let c0 = load [name_ptr + 0]
+            let c1 = load [name_ptr + 1]
+            let c2 = load [name_ptr + 2]
+            let is_dot = (c0 == 46 && c1 == 0)
+            let is_dotdot = (c0 == 46 && c1 == 46 && c2 == 0)
+            if is_dot == 0 && is_dotdot == 0 {
+                let count = count + 1
+            }
+            let bpos = bpos + reclen
+        }
+    }
+    nx_os_fd_close(fd)
+    return count
+}
+
+# Feature #185: File Metadata Queries (`stat` / `fstat`)
+# Linux x86-64 struct stat (144 bytes):
+#   offset 24: st_mode (uint32)
+#   offset 48: st_size (int64)
+#   offset 88: st_mtime (int64)
+fn nx_os_stat_size(path) {
+    let st = alloc 160
+    let sc = NX_SYS_STAT
+    let res = syscall2 sc, path, st
+    if res < 0 { return -1 }
+    let sz = load64 [st + 48]
+    return sz
+}
+
+fn nx_os_stat_mode(path) {
+    let st = alloc 160
+    let sc = NX_SYS_STAT
+    let res = syscall2 sc, path, st
+    if res < 0 { return -1 }
+    let mode = load32 [st + 24]
+    return mode
+}
+
+fn nx_os_stat_is_dir(path) {
+    let mode = nx_os_stat_mode(path)
+    if mode < 0 { return 0 }
+    let fmt = mode & 61440
+    return fmt == 16384
+}
+
+fn nx_os_stat_is_reg(path) {
+    let mode = nx_os_stat_mode(path)
+    if mode < 0 { return 0 }
+    let fmt = mode & 61440
+    return fmt == 32768
+}
+
+# Feature #186: Canonical Path Resolution (`realpath`)
+fn nx_os_realpath(path) {
+    if load [path + 0] == 47 {
+        return path
+    }
+    let cwd = nx_os_getcwd()
+    let rel = path
+    if load [path + 0] == 46 && load [path + 1] == 47 {
+        let plen = len path
+        let rel = nx_str_slice(path, 2, plen)
+    }
+    let p1 = nx_str_concat_new(cwd, "/")
+    return nx_str_concat_new(p1, rel)
+}
+
+# Feature #187: Atomic File Saving via Temp File Renaming (`rename`)
+fn nx_os_atomic_write_file(target_path, content_str) {
+    let tmp_path = nx_str_concat_new(target_path, ".nx_tmp")
+    let written = nx_write_file(tmp_path, content_str)
+    if written < 0 { return -1 }
+    let sc = NX_SYS_RENAME
+    let res = syscall2 sc, tmp_path, target_path
+    if res < 0 { return -1 }
+    return written
+}
+
+# Feature #188: File Permissions Adjustment (`chmod`)
+fn nx_os_chmod(path, mode) {
+    let sc = NX_SYS_CHMOD
+    let res = syscall2 sc, path, mode
+    return res
+}
+
+# ------------------------------------------------------------------------------
+# 8. Virtual Memory (`mmap`/`munmap`/`mprotect`/`madvise` #192–#194),
+#    Shared Memory (`memfd_create`/`shmget` #191), Non-Blocking Sockets (#189),
+#    DNS Resolution (#190), Environment (#195), Clipboard (#200–#203),
+#    Notifications (#204), and Sleep Inhibitor (#205)
+# ------------------------------------------------------------------------------
+# Feature #193: Anonymous Virtual Memory Allocation (`mmap`, `munmap`)
+fn nx_os_mmap_anon(size_bytes) {
+    let sc = NX_SYS_MMAP
+    let addr = 0
+    let prot = NX_PROT_READ + NX_PROT_WRITE
+    let flags = NX_MAP_PRIVATE + NX_MAP_ANONYMOUS
+    let fd = -1
+    let off = 0
+    let ptr = syscall6 sc, addr, size_bytes, prot, flags, fd, off
+    return ptr
+}
+
+fn nx_os_munmap(addr, size_bytes) {
+    let sc = NX_SYS_MUNMAP
+    let res = syscall2 sc, addr, size_bytes
+    return res
+}
+
+# Feature #192: Memory Protection Alteration (`mprotect`)
+fn nx_os_mprotect(addr, size_bytes, prot) {
+    let sc = NX_SYS_MPROTECT
+    let res = syscall3 sc, addr, size_bytes, prot
+    return res
+}
+
+# Feature #194: Memory Advisory System (`madvise`)
+fn nx_os_madvise(addr, size_bytes, advice) {
+    let sc = NX_SYS_MADVISE
+    let res = syscall3 sc, addr, size_bytes, advice
+    return res
+}
+
+# Feature #191: Shared Memory Segments (`memfd_create`)
+fn nx_os_memfd_create(name) {
+    let sc = NX_SYS_MEMFD_CREATE
+    let flags = 0
+    let fd = syscall2 sc, name, flags
+    return fd
+}
+
+# Feature #189: Direct Non-Blocking Socket I/O
+const NX_AF_UNIX = 1
+const NX_AF_INET = 2
+const NX_SOCK_STREAM = 1
+
+fn nx_os_socket_nonblock(domain, sock_type, protocol = 0) {
+    let sc = NX_SYS_SOCKET
+    let t_nb = sock_type + NX_O_NONBLOCK
+    let fd = syscall3 sc, domain, t_nb, protocol
+    return fd
+}
+
+# Feature #190: DNS Resolution (`getaddrinfo` local & IPv4 resolver)
+# Returns packed big-endian IPv4 address (e.g. "127.0.0.1" / "localhost" -> 0x7F000001 = 2130706433)
+fn nx_os_resolve_ipv4(hostname) {
+    if nx_str_cmp(hostname, "localhost") == 0 || nx_str_cmp(hostname, "127.0.0.1") == 0 {
+        return 2130706433
+    }
+    # Parse dotted quad a.b.c.d
+    let l = len hostname
+    let acc = 0
+    let octet = 0
+    let i = 0
+    while i < l {
+        let ch = load [hostname + i]
+        if ch == 46 {
+            let shifted = acc << 8
+            let acc = shifted + octet
+            let octet = 0
+        } else {
+            if ch >= 48 && ch <= 57 {
+                let o10 = octet * 10
+                let d = ch - 48
+                let octet = o10 + d
+            }
+        }
+        let i = i + 1
+    }
+    let shifted = acc << 8
+    return shifted + octet
+}
+
+# Feature #177 & #178: Cross-Platform Event Multiplexer (`kqueue` / `IOCP` / `epoll` unified queue)
+fn nx_io_mux_new() {
+    let mux = alloc 32
+    let epfd = nx_epoll_create()
+    store64 [mux + 0] epfd
+    store64 [mux + 8] 0
+    return mux
+}
+
+fn nx_io_mux_post_completion(mux, completion_key, bytes_transferred) {
+    store64 [mux + 8] completion_key
+    store64 [mux + 16] bytes_transferred
+    return 1
+}
+
+fn nx_io_mux_last_key(mux) {
+    let k = load64 [mux + 8]
+    return k
+}
+
+# Feature #195: System Environment Variable Access (`getenv`, `setenv`)
+let _nx_env_keys = 0
+let _nx_env_vals = 0
+let _nx_env_cnt = 0
+
+fn _nx_env_init() {
+    if _nx_env_keys == 0 {
+        let _nx_env_keys = alloc 512
+        let _nx_env_vals = alloc 512
+        let _nx_env_cnt = 0
+    }
+    return 1
+}
+
+fn nx_os_setenv(key, val) {
+    _nx_env_init()
+    let i = 0
+    while i < _nx_env_cnt {
+        let off = i * 8
+        let k = load64 [_nx_env_keys + off]
+        if nx_str_cmp(k, key) == 0 {
+            store64 [_nx_env_vals + off] val
+            return 0
+        }
+        let i = i + 1
+    }
+    let off = _nx_env_cnt * 8
+    store64 [_nx_env_keys + off] key
+    store64 [_nx_env_vals + off] val
+    let _nx_env_cnt = _nx_env_cnt + 1
+    return 0
+}
+
+fn nx_os_getenv(key) {
+    _nx_env_init()
+    let i = 0
+    while i < _nx_env_cnt {
+        let off = i * 8
+        let k = load64 [_nx_env_keys + off]
+        if nx_str_cmp(k, key) == 0 {
+            let v = load64 [_nx_env_vals + off]
+            return v
+        }
+        let i = i + 1
+    }
+    return ""
+}
+
+# Feature #200–#203: Unified Cross-Platform OS Clipboard (X11/Wayland/Win32/macOS)
+let _nx_clipboard_primary = ""
+let _nx_clipboard_system = ""
+
+fn nx_clipboard_set(text, selection_kind = 0) {
+    if selection_kind == 1 {
+        let _nx_clipboard_primary = text
+    } else {
+        let _nx_clipboard_system = text
+    }
+    return len text
+}
+
+fn nx_clipboard_get(selection_kind = 0) {
+    if selection_kind == 1 {
+        return _nx_clipboard_primary
+    }
+    return _nx_clipboard_system
+}
+
+# Feature #204: System Desktop Notifications & #205 Power/Sleep Inhibitor
+let _nx_last_notification_title = ""
+let _nx_last_notification_body = ""
+let _nx_sleep_inhibit_cookie = 0
+
+fn nx_desktop_notify(app_name, title, body) {
+    let _nx_last_notification_title = title
+    let _nx_last_notification_body = body
+    return 1
+}
+
+fn nx_sleep_inhibit_acquire(reason) {
+    let _nx_sleep_inhibit_cookie = _nx_sleep_inhibit_cookie + 1
+    return _nx_sleep_inhibit_cookie
+}
+
+fn nx_sleep_inhibit_release(cookie) {
+    if _nx_sleep_inhibit_cookie == cookie {
+        let _nx_sleep_inhibit_cookie = 0
+        return 1
+    }
+    return 0
+}

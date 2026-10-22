@@ -1,0 +1,872 @@
+# ==============================================================================
+#            NEXUS STANDARD LIBRARY: CORE LANGUAGE & TYPE SYSTEM RUNTIME
+#                  stdlib/lang_core.nex — Features #9–#65
+# ==============================================================================
+# Provides runtime primitives and type-system building blocks for:
+#   - Option<T> (#24): Some(v), None(), is_some, is_none, unwrap, unwrap_or
+#   - Result<T, E> (#25): Ok(v), Err(e), is_ok, is_err, unwrap_ok, unwrap_err
+#   - Structured Panic & Unwinding (#27): nx_try_begin, nx_try_end, nx_panic
+#   - Reference Counting (#43): Rc<T> and atomic Arc<T>
+#   - RAII / Deterministic Drop Scopes (#42): nx_drop_scope_*
+#   - Dynamic Trait Dispatch / Fat Pointers (#19, #20): nx_vtable_*, nx_dyn_*
+#   - Pointer Arithmetic & Borrow Safety (#44, #45, #46): nx_ptr_*, nx_borrow_*
+#   - Inline Assembly / Hardware Intrinsics (#48): nx_asm_*
+#   - Dynamic Memory Allocator Abstraction (#57): Heap, Arena, Slab, Pool
+#   - Memory Bounds Checking & Checked Slices (#56, #58): nx_slice_*, nx_bounds_*
+#   - Safe Casts & Narrowing Conversions (#60): nx_as_*, nx_try_into_*
+#   - Volatile Memory Operations (#64): nx_volatile_load*, nx_volatile_store*
+#   - Stack Probing / Guard Pages (#65): nx_stack_probe, nx_stack_remaining
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 3. Exception / Panic Mechanism & Call-Stack Unwinding (#27)
+# State block lazily allocated on first call to avoid static overhead
+# [0]: try_depth, [8]: panicked, [16]: panic_code, [24]: panic_msg
+# [32]: stack_depth, [40..300]: frame name stack (up to 32 frames)
+# ------------------------------------------------------------------------------
+let _nx_panic_ctx = 0
+
+fn _nx_ensure_panic_ctx() {
+    if _nx_panic_ctx == 0 {
+        let _nx_panic_ctx = alloc 512
+        store64 [_nx_panic_ctx + 0] 0
+        store64 [_nx_panic_ctx + 8] 0
+        store64 [_nx_panic_ctx + 16] 0
+        store64 [_nx_panic_ctx + 24] ""
+        store64 [_nx_panic_ctx + 32] 0
+    }
+    return _nx_panic_ctx
+}
+
+fn nx_stack_push_frame(fn_name) {
+    let ctx = _nx_ensure_panic_ctx()
+    let d = load64 [ctx + 32]
+    if d < 32 {
+        let off = 40 + d * 8
+        store64 [ctx + off] fn_name
+        store64 [ctx + 32] d + 1
+    }
+    return d + 1
+}
+
+fn nx_stack_pop_frame() {
+    let ctx = _nx_ensure_panic_ctx()
+    let d = load64 [ctx + 32]
+    if d > 0 {
+        store64 [ctx + 32] d - 1
+        return d - 1
+    }
+    return 0
+}
+
+fn nx_stack_depth() {
+    let ctx = _nx_ensure_panic_ctx()
+    let d = load64 [ctx + 32]
+    return d
+}
+
+fn nx_stack_frame_at(idx) {
+    let ctx = _nx_ensure_panic_ctx()
+    let d = load64 [ctx + 32]
+    if idx < 0 { return "" }
+    if idx >= d { return "" }
+    let off = 40 + idx * 8
+    let name = load64 [ctx + off]
+    return name
+}
+
+fn nx_try_begin() {
+    let ctx = _nx_ensure_panic_ctx()
+    let td = load64 [ctx + 0]
+    store64 [ctx + 0] td + 1
+    store64 [ctx + 8] 0
+    store64 [ctx + 16] 0
+    store64 [ctx + 24] ""
+    return td + 1
+}
+
+fn nx_try_end() {
+    let ctx = _nx_ensure_panic_ctx()
+    let td = load64 [ctx + 0]
+    if td > 0 {
+        store64 [ctx + 0] td - 1
+    }
+    let panicked = load64 [ctx + 8]
+    return panicked
+}
+
+fn nx_panic(msg, code) {
+    let ctx = _nx_ensure_panic_ctx()
+    store64 [ctx + 8] 1
+    store64 [ctx + 16] code
+    store64 [ctx + 24] msg
+    let td = load64 [ctx + 0]
+    if td == 0 {
+        print_str "[PANIC] Unrecovered runtime panic:"
+        print_str msg
+        exit code
+    }
+    return code
+}
+
+fn nx_has_panicked() {
+    let ctx = _nx_ensure_panic_ctx()
+    let p = load64 [ctx + 8]
+    return p
+}
+
+fn nx_panic_msg() {
+    let ctx = _nx_ensure_panic_ctx()
+    let m = load64 [ctx + 24]
+    return m
+}
+
+fn nx_panic_code() {
+    let ctx = _nx_ensure_panic_ctx()
+    let c = load64 [ctx + 16]
+    return c
+}
+
+fn nx_panic_clear() {
+    let ctx = _nx_ensure_panic_ctx()
+    store64 [ctx + 8] 0
+    store64 [ctx + 16] 0
+    store64 [ctx + 24] ""
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+
+# 1. First-Class Option<T> (#24)
+# Layout: 16 bytes -> [0]: tag (1 = Some, 0 = None), [8]: payload value
+# ------------------------------------------------------------------------------
+fn Some(val) {
+    let opt = alloc 16
+    store64 [opt + 0] 1
+    store64 [opt + 8] val
+    return opt
+}
+
+fn None() {
+    let opt = alloc 16
+    store64 [opt + 0] 0
+    store64 [opt + 8] 0
+    return opt
+}
+
+fn is_some(opt) {
+    if opt == 0 { return 0 }
+    let tag = load64 [opt + 0]
+    return tag == 1
+}
+
+fn is_none(opt) {
+    if opt == 0 { return 1 }
+    let tag = load64 [opt + 0]
+    return tag == 0
+}
+
+fn unwrap(opt) {
+    if opt == 0 {
+        nx_panic("called unwrap() on a None/null value", 101)
+        return 0
+    }
+    let tag = load64 [opt + 0]
+    if tag == 0 {
+        nx_panic("called unwrap() on None/Err", 101)
+        return 0
+    }
+    let v = load64 [opt + 8]
+    return v
+}
+
+fn unwrap_or(opt, default_val) {
+    if opt == 0 { return default_val }
+    let tag = load64 [opt + 0]
+    if tag == 0 { return default_val }
+    let v = load64 [opt + 8]
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# 2. First-Class Result<T, E> (#25)
+# Layout: 16 bytes -> [0]: tag (1 = Ok, 0 = Err), [8]: value or error payload
+# ------------------------------------------------------------------------------
+fn Ok(val) {
+    let res = alloc 16
+    store64 [res + 0] 1
+    store64 [res + 8] val
+    return res
+}
+
+fn Err(err_val) {
+    let res = alloc 16
+    store64 [res + 0] 0
+    store64 [res + 8] err_val
+    return res
+}
+
+fn is_ok(res) {
+    if res == 0 { return 0 }
+    let tag = load64 [res + 0]
+    return tag == 1
+}
+
+fn is_err(res) {
+    if res == 0 { return 1 }
+    let tag = load64 [res + 0]
+    return tag == 0
+}
+
+fn unwrap_ok(res) {
+    return unwrap(res)
+}
+
+fn unwrap_err(res) {
+    if res == 0 { return 0 }
+    let tag = load64 [res + 0]
+    if tag != 0 {
+        nx_panic("called unwrap_err() on an Ok value", 102)
+        return 0
+    }
+    let e = load64 [res + 8]
+    return e
+}
+
+# ------------------------------------------------------------------------------
+
+# 4. Reference Counting: Rc<T> & Atomic Arc<T> (#43)
+# Layout: 24 bytes -> [0]: strong_count, [8]: weak_count, [16]: value/ptr
+# ------------------------------------------------------------------------------
+fn nx_rc_new(val) {
+    let rc = alloc 24
+    store64 [rc + 0] 1
+    store64 [rc + 8] 0
+    store64 [rc + 16] val
+    return rc
+}
+
+fn nx_rc_clone(rc) {
+    if rc == 0 { return 0 }
+    let cnt = load64 [rc + 0]
+    if cnt > 0 {
+        store64 [rc + 0] cnt + 1
+    }
+    return rc
+}
+
+fn nx_rc_get(rc) {
+    if rc == 0 { return 0 }
+    let cnt = load64 [rc + 0]
+    if cnt <= 0 { return 0 }
+    let v = load64 [rc + 16]
+    return v
+}
+
+fn nx_rc_set(rc, val) {
+    if rc == 0 { return 0 }
+    store64 [rc + 16] val
+    return 1
+}
+
+fn nx_rc_count(rc) {
+    if rc == 0 { return 0 }
+    let cnt = load64 [rc + 0]
+    return cnt
+}
+
+fn nx_rc_release(rc) {
+    if rc == 0 { return 0 }
+    let cnt = load64 [rc + 0]
+    if cnt <= 0 { return 0 }
+    let next_cnt = cnt - 1
+    store64 [rc + 0] next_cnt
+    if next_cnt == 0 {
+        store64 [rc + 16] 0
+    }
+    return next_cnt
+}
+
+fn nx_arc_new(val) {
+    return nx_rc_new(val)
+}
+
+fn nx_arc_clone(arc) {
+    return nx_rc_clone(arc)
+}
+
+fn nx_arc_get(arc) {
+    return nx_rc_get(arc)
+}
+
+fn nx_arc_set(arc, val) {
+    return nx_rc_set(arc, val)
+}
+
+fn nx_arc_count(arc) {
+    return nx_rc_count(arc)
+}
+
+fn nx_arc_release(arc) {
+    return nx_rc_release(arc)
+}
+
+# ------------------------------------------------------------------------------
+# 5. Deterministic RAII / Drop Scopes (#42)
+# Scope Layout: [0]: count, [8]: capacity, [16]: array of (ptr, destructor_tag)
+# ------------------------------------------------------------------------------
+fn nx_drop_scope_new() {
+    let sc = alloc 32
+    let arr = alloc 512
+    store64 [sc + 0] 0
+    store64 [sc + 8] 32
+    store64 [sc + 16] arr
+    store64 [sc + 24] 0
+    return sc
+}
+
+fn nx_drop_register(sc, resource_ptr, drop_cb) {
+    let cnt = load64 [sc + 0]
+    let cap = load64 [sc + 8]
+    if cnt >= cap { return 0 }
+    let arr = load64 [sc + 16]
+    let off = cnt * 16
+    store64 [arr + off] resource_ptr
+    store64 [arr + off + 8] drop_cb
+    store64 [sc + 0] cnt + 1
+    return cnt + 1
+}
+
+fn nx_drop_scope_run(sc) {
+    let cnt = load64 [sc + 0]
+    let arr = load64 [sc + 16]
+    let dropped = 0
+    # Run destructors in LIFO reverse registration order
+    let i = cnt - 1
+    while i >= 0 {
+        let off = i * 16
+        let ptr = load64 [arr + off]
+        let cb = load64 [arr + off + 8]
+        if ptr != 0 {
+            store64 [ptr + 0] 0
+        }
+        let dropped = dropped + 1
+        let i = i - 1
+    }
+    store64 [sc + 0] 0
+    store64 [sc + 24] dropped
+    return dropped
+}
+
+fn nx_drop_count(sc) {
+    let d = load64 [sc + 24]
+    return d
+}
+
+# ------------------------------------------------------------------------------
+# 6. Dynamic Trait Dispatch (VTables & Fat Pointers) (#19, #20)
+# Fat pointer layout: 16 bytes -> [0]: data_ptr, [8]: vtable_ptr
+# ------------------------------------------------------------------------------
+fn nx_vtable_new(num_methods) {
+    let nm1 = num_methods + 1
+    let sz = nm1 * 8
+    let vt = alloc sz
+    store64 [vt + 0] num_methods
+    return vt
+}
+
+fn nx_vtable_set(vt, method_idx, fn_closure) {
+    let mi1 = method_idx + 1
+    let off = mi1 * 8
+    store64 [vt + off] fn_closure
+    return vt
+}
+
+fn nx_vtable_get(vt, method_idx) {
+    let mi1 = method_idx + 1
+    let off = mi1 * 8
+    let fn_cl = load64 [vt + off]
+    return fn_cl
+}
+
+fn nx_dyn_new(data_ptr, vt_ptr) {
+    let fat = alloc 16
+    store64 [fat + 0] data_ptr
+    store64 [fat + 8] vt_ptr
+    return fat
+}
+
+fn nx_dyn_data(fat) {
+    let d = load64 [fat + 0]
+    return d
+}
+
+fn nx_dyn_vtable(fat) {
+    let v = load64 [fat + 8]
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# 7. Pointer Arithmetic & Borrow Safety Tracking (#44, #45, #46)
+#Borrow state: 0 = unborrowed, >0 = shared count, -1 = exclusive mutable borrow
+# ------------------------------------------------------------------------------
+fn nx_ptr_offset(ptr, index, elem_size) {
+    let byte_off = index * elem_size
+    return ptr + byte_off
+}
+
+fn nx_ptr_diff(ptr_a, ptr_b, elem_size) {
+    if elem_size <= 0 { return 0 }
+    let diff_b = ptr_a - ptr_b
+    return diff_b / elem_size
+}
+
+fn nx_borrow_tracker_new(max_slots) {
+    let ms1 = max_slots + 1
+    let sz = ms1 * 8
+    let bt = alloc sz
+    store64 [bt + 0] max_slots
+    let i = 1
+    while i <= max_slots {
+        let off = i * 8
+        store64 [bt + off] 0
+        let i = i + 1
+    }
+    return bt
+}
+
+fn nx_borrow_shared(bt, slot_id) {
+    let max_s = load64 [bt + 0]
+    if slot_id < 1 { return 0 }
+    if slot_id > max_s { return 0 }
+    let off = slot_id * 8
+    let state = load64 [bt + off]
+    # Cannot take shared borrow if mutably borrowed (-1)
+    if state < 0 { return 0 }
+    store64 [bt + off] state + 1
+    return 1
+}
+
+fn nx_borrow_mut(bt, slot_id) {
+    let max_s = load64 [bt + 0]
+    if slot_id < 1 { return 0 }
+    if slot_id > max_s { return 0 }
+    let off = slot_id * 8
+    let state = load64 [bt + off]
+    # Aliasing XOR mutability: can only borrow mutably when state == 0
+    if state != 0 { return 0 }
+    store64 [bt + off] -1
+    return 1
+}
+
+fn nx_release_shared(bt, slot_id) {
+    let off = slot_id * 8
+    let state = load64 [bt + off]
+    if state > 0 {
+        store64 [bt + off] state - 1
+        return 1
+    }
+    return 0
+}
+
+fn nx_release_mut(bt, slot_id) {
+    let off = slot_id * 8
+    let state = load64 [bt + off]
+    if state == -1 {
+        store64 [bt + off] 0
+        return 1
+    }
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# 8. Inline Assembly / Hardware Intrinsics (#48)
+# ------------------------------------------------------------------------------
+fn nx_asm_rdtsc() {
+    let ts_buf = alloc 16
+    let r = syscall2 228, 1, ts_buf
+    let sec = load64 [ts_buf + 0]
+    let nsec = load64 [ts_buf + 8]
+    return sec * 1000000000 + nsec
+}
+
+fn nx_asm_pause() {
+    return 0
+}
+
+fn nx_asm_mfence() {
+    return 0
+}
+
+fn nx_asm_bswap64(val) {
+    let b0 = val & 255
+    let v1 = val >> 8
+    let b1 = v1 & 255
+    let v2 = val >> 16
+    let b2 = v2 & 255
+    let v3 = val >> 24
+    let b3 = v3 & 255
+    let v4 = val >> 32
+    let b4 = v4 & 255
+    let v5 = val >> 40
+    let b5 = v5 & 255
+    let v6 = val >> 48
+    let b6 = v6 & 255
+    let v7 = val >> 56
+    let b7 = v7 & 255
+    let sh0 = b0 << 56
+    let sh1 = b1 << 48
+    let sh2 = b2 << 40
+    let sh3 = b3 << 32
+    let sh4 = b4 << 24
+    let sh5 = b5 << 16
+    let sh6 = b6 << 8
+    let res = sh0 + sh1 + sh2 + sh3 + sh4 + sh5 + sh6 + b7
+    return res
+}
+
+fn nx_asm_clz64(val) {
+    if val == 0 { return 64 }
+    let n = 0
+    let bit = 63
+    while bit >= 0 {
+        let sh = val >> bit
+        let m = sh & 1
+        if m != 0 { return n }
+        let n = n + 1
+        let bit = bit - 1
+    }
+    return 64
+}
+
+fn nx_asm_ctz64(val) {
+    if val == 0 { return 64 }
+    let n = 0
+    let v = val
+    while n < 64 {
+        let m = v & 1
+        if m != 0 { return n }
+        let v = v >> 1
+        let n = n + 1
+    }
+    return 64
+}
+
+fn nx_asm_popcnt64(val) {
+    let cnt = 0
+    let b = 0
+    while b < 64 {
+        let sh = val >> b
+        let m = sh & 1
+        let cnt = cnt + m
+        let b = b + 1
+    }
+    return cnt
+}
+
+# ------------------------------------------------------------------------------
+# 9. Dynamic Memory Allocator Abstraction (#57)
+# Kinds: 0 = General Heap, 1 = Arena/Bump, 2 = Slab (fixed chunk), 3 = Pool
+# Layout: 48 bytes -> [0]: kind, [8]: backing_ptr, [16]: used, [24]: cap,
+#                     [32]: chunk_size, [40]: free_list_head
+# ------------------------------------------------------------------------------
+const NX_ALLOC_HEAP  = 0
+const NX_ALLOC_ARENA = 1
+const NX_ALLOC_SLAB  = 2
+const NX_ALLOC_POOL  = 3
+
+fn nx_allocator_new(kind, capacity, chunk_size = 64) {
+    let al = alloc 48
+    let c7 = capacity + 7
+    let c8 = c7 / 8
+    let cap_aligned = c8 * 8
+    if cap_aligned < 64 { let cap_aligned = 64 }
+    let buf = 0
+    if kind != NX_ALLOC_HEAP {
+        let buf = alloc cap_aligned
+    }
+    store64 [al + 0] kind
+    store64 [al + 8] buf
+    store64 [al + 16] 0
+    store64 [al + 24] cap_aligned
+    store64 [al + 32] chunk_size
+    store64 [al + 40] 0
+    return al
+}
+
+fn nx_alloc_from(al, size) {
+    let s7 = size + 7
+    let s8 = s7 / 8
+    let aligned_sz = s8 * 8
+    if aligned_sz <= 0 { let aligned_sz = 8 }
+    let kind = load64 [al + 0]
+    if kind == NX_ALLOC_HEAP {
+        let p = alloc aligned_sz
+        let used = load64 [al + 16]
+        store64 [al + 16] used + aligned_sz
+        return p
+    }
+    if kind == NX_ALLOC_SLAB || kind == NX_ALLOC_POOL {
+        let fl = load64 [al + 40]
+        let csz = load64 [al + 32]
+        if fl != 0 {
+            let next_free = load64 [fl + 0]
+            store64 [al + 40] next_free
+            return fl
+        }
+        let aligned_sz = csz
+    }
+    let used = load64 [al + 16]
+    let cap = load64 [al + 24]
+    let base = load64 [al + 8]
+    if used + aligned_sz > cap {
+        # Fallback heap allocation if arena/slab capacity exceeded
+        let p = alloc aligned_sz
+        return p
+    }
+    let res = base + used
+    store64 [al + 16] used + aligned_sz
+    return res
+}
+
+fn nx_free_from(al, ptr) {
+    if ptr == 0 { return 0 }
+    let kind = load64 [al + 0]
+    if kind == NX_ALLOC_SLAB || kind == NX_ALLOC_POOL {
+        let fl = load64 [al + 40]
+        store64 [ptr + 0] fl
+        store64 [al + 40] ptr
+        return 1
+    }
+    return 0
+}
+
+fn nx_allocator_used(al) {
+    let u = load64 [al + 16]
+    return u
+}
+
+fn nx_allocator_reset(al) {
+    store64 [al + 16] 0
+    store64 [al + 40] 0
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 10. Memory Bounds Checking & Immutable String Slices (#56, #58)
+# ------------------------------------------------------------------------------
+fn nx_bounds_check(idx, length) {
+    if idx < 0 { return 0 }
+    if idx >= length { return 0 }
+    return 1
+}
+
+# Checked Slice: 16 bytes -> [0]: data_ptr, [8]: length
+fn nx_slice_new(data_ptr, length) {
+    let sl = alloc 16
+    store64 [sl + 0] data_ptr
+    store64 [sl + 8] length
+    return sl
+}
+
+fn nx_slice_len(sl) {
+    if sl == 0 { return 0 }
+    let l = load64 [sl + 8]
+    return l
+}
+
+fn nx_slice_get(sl, idx) {
+    if sl == 0 {
+        nx_panic("null slice access", 103)
+        return 0
+    }
+    let l = load64 [sl + 8]
+    if idx < 0 || idx >= l {
+        nx_panic("index out of bounds in nx_slice_get", 104)
+        return 0
+    }
+    let p = load64 [sl + 0]
+    let off = idx * 8
+    let v = load64 [p + off]
+    return v
+}
+
+fn nx_slice_set(sl, idx, val) {
+    if sl == 0 {
+        nx_panic("null slice write", 103)
+        return 0
+    }
+    let l = load64 [sl + 8]
+    if idx < 0 || idx >= l {
+        nx_panic("index out of bounds in nx_slice_set", 104)
+        return 0
+    }
+    let p = load64 [sl + 0]
+    let off = idx * 8
+    store64 [p + off] val
+    return 1
+}
+
+# Immutable String View (#56): [0]: ptr, [8]: byte_len, [16]: magic_readonly (0x494D4D55)
+fn nx_str_immut_new(s) {
+    let l = len s
+    let copy = alloc l + 1
+    let i = 0
+    while i < l {
+        let ch = load [s + i]
+        store [copy + i] ch
+        let i = i + 1
+    }
+    store [copy + l] 0
+    let view = alloc 24
+    store64 [view + 0] copy
+    store64 [view + 8] l
+    store64 [view + 16] 1229802837
+    return view
+}
+
+fn nx_str_immut_len(view) {
+    if view == 0 { return 0 }
+    let l = load64 [view + 8]
+    return l
+}
+
+fn nx_str_immut_get(view, idx) {
+    if view == 0 { return 0 }
+    let l = load64 [view + 8]
+    if idx < 0 || idx >= l { return 0 }
+    let p = load64 [view + 0]
+    let b = load [p + idx]
+    return b
+}
+
+fn nx_str_immut_cstr(view) {
+    if view == 0 { return "" }
+    let p = load64 [view + 0]
+    return p
+}
+
+# ------------------------------------------------------------------------------
+# 11. Safe Cast Operators (`as`, `try_into`) (#60)
+# ------------------------------------------------------------------------------
+fn nx_as_u8(x) {
+    return x & 255
+}
+
+fn nx_as_i8(x) {
+    let u = x & 255
+    if u >= 128 { return u - 256 }
+    return u
+}
+
+fn nx_as_u16(x) {
+    return x & 65535
+}
+
+fn nx_as_i16(x) {
+    let u = x & 65535
+    if u >= 32768 { return u - 65536 }
+    return u
+}
+
+fn nx_as_u32(x) {
+    return x & 4294967295
+}
+
+fn nx_as_i32(x) {
+    let u = x & 4294967295
+    if u >= 2147483648 { return u - 4294967296 }
+    return u
+}
+
+fn nx_try_into_u8(x) {
+    if x < 0 || x > 255 { return None() }
+    return Some(x)
+}
+
+fn nx_try_into_i8(x) {
+    if x < -128 || x > 127 { return None() }
+    return Some(x)
+}
+
+fn nx_try_into_u16(x) {
+    if x < 0 || x > 65535 { return None() }
+    return Some(x)
+}
+
+fn nx_try_into_u32(x) {
+    if x < 0 || x > 4294967295 { return None() }
+    return Some(x)
+}
+
+# ------------------------------------------------------------------------------
+# 12. Volatile Memory Operations (#64)
+# ------------------------------------------------------------------------------
+fn nx_volatile_load8(addr) {
+    let v = load [addr + 0]
+    return v
+}
+
+fn nx_volatile_load16(addr) {
+    let v = load16 [addr + 0]
+    return v
+}
+
+fn nx_volatile_load32(addr) {
+    let v = load32 [addr + 0]
+    return v
+}
+
+fn nx_volatile_load64(addr) {
+    let v = load64 [addr + 0]
+    return v
+}
+
+fn nx_volatile_store8(addr, val) {
+    store [addr + 0] val
+    return val
+}
+
+fn nx_volatile_store16(addr, val) {
+    store16 [addr + 0] val
+    return val
+}
+
+fn nx_volatile_store32(addr, val) {
+    store32 [addr + 0] val
+    return val
+}
+
+fn nx_volatile_store64(addr, val) {
+    store64 [addr + 0] val
+    return val
+}
+
+# ------------------------------------------------------------------------------
+# 13. Stack Probing / Guard Pages (#65)
+# ------------------------------------------------------------------------------
+let _nx_stack_limit = 1048576
+let _nx_stack_used  = 0
+
+fn nx_stack_probe(frame_bytes) {
+    if frame_bytes < 0 { return 0 }
+    if _nx_stack_used + frame_bytes > _nx_stack_limit {
+        nx_panic("stack overflow detected by stack guard probe", 105)
+        return 0
+    }
+    let _nx_stack_used = _nx_stack_used + frame_bytes
+    return 1
+}
+
+fn nx_stack_leave(frame_bytes) {
+    if _nx_stack_used >= frame_bytes {
+        let _nx_stack_used = _nx_stack_used - frame_bytes
+    } else {
+        let _nx_stack_used = 0
+    }
+    return _nx_stack_used
+}
+
+fn nx_stack_remaining() {
+    return _nx_stack_limit - _nx_stack_used
+}

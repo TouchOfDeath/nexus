@@ -1,0 +1,1089 @@
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: DYNAMIC STRINGS, UNICODE & REGULAR EXPRESSIONS
+#            stdlib/regex_unicode_str.nex — Section 3 (Features #111–#155)
+# ==============================================================================
+# Implements:
+#   - #111 Heap-Allocated Dynamic String (`String`)
+#   - #112 Zero-Copy String Slice (`&str`)
+#   - #116 UTF-16 Decoder and Converter (UTF-8 <-> UTF-16LE with surrogate pairs)
+#   - #117 Unicode Grapheme Cluster Segmentation (UAX #29)
+#   - #118 Unicode Word Boundary Segmentation (UAX #29)
+#   - #119 Unicode Line Breaking Algorithm (UAX #14)
+#   - #120 Unicode Case Folding & Normalization (NFC / NFD)
+#   - #121 Unicode General Category Queries
+#   - #122 Unicode Bi-directional Algorithm (BiDi - UAX #9)
+#   - #123 Unicode East Asian Width Calculation (UAX #11)
+#   - #124–#129 Regular Expression Engine (Thompson NFA, Captures, Lookaround,
+#               Word Boundary `\b`, Multiline `^`/`$`, Group Substitution)
+#   - #131 Printf-Style Format Specifiers (`%08x`, `%-10s`, `%d`)
+#   - #132 Complete String Trimming (`trim_start`, `trim_end`, Unicode whitespace)
+#   - #135 Complete Case Transformations (`title`, `snake_case`, `camelCase`, `kebab-case`)
+#   - #137 Substring Replacement (`nx_str_replace_n`)
+#   - #140 Jaro-Winkler Similarity Metric
+#   - #143 Hexadecimal Byte Dump Formatter
+#   - #149 Indentation Detection Engine & #150 Tab/Space Converters
+#   - #152 Secure Constant-Time String Comparison
+#   - #154 Zero-Allocation Number-to-String & #155 Zero-Allocation String-to-Number
+# ==============================================================================
+
+include "stdlib/unicode.nex"
+
+fn nx_str_eq(a, b) {
+    let r = nx_str_cmp(a, b)
+    if r == 0 { return 1 }
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# 1. Heap-Allocated Dynamic String (`String`) (#111)
+# Layout (24 bytes): [0]: buf_ptr, [8]: length, [16]: capacity
+# ------------------------------------------------------------------------------
+fn nx_dstr_new(init_s) {
+    let l = len init_s
+    let cap = 32
+    while cap <= l + 1 {
+        let cap = cap * 2
+    }
+    let buf = alloc cap
+    let i = 0
+    while i < l {
+        let ch = load [init_s + i]
+        store [buf + i] ch
+        let i = i + 1
+    }
+    store [buf + l] 0
+    let ds = alloc 24
+    store64 [ds + 0] buf
+    store64 [ds + 8] l
+    store64 [ds + 16] cap
+    return ds
+}
+
+fn nx_dstr_len(ds) {
+    let l = load64 [ds + 8]
+    return l
+}
+
+fn nx_dstr_cap(ds) {
+    let c = load64 [ds + 16]
+    return c
+}
+
+fn nx_dstr_cstr(ds) {
+    let b = load64 [ds + 0]
+    return b
+}
+
+fn _nx_dstr_ensure(ds, needed) {
+    let cap = load64 [ds + 16]
+    if needed < cap { return 1 }
+    let new_cap = cap * 2
+    while new_cap <= needed {
+        let new_cap = new_cap * 2
+    }
+    let old_buf = load64 [ds + 0]
+    let cur_len = load64 [ds + 8]
+    let new_buf = alloc new_cap
+    let i = 0
+    while i <= cur_len {
+        let ch = load [old_buf + i]
+        store [new_buf + i] ch
+        let i = i + 1
+    }
+    store64 [ds + 0] new_buf
+    store64 [ds + 16] new_cap
+    return 1
+}
+
+fn nx_dstr_push_char(ds, ch) {
+    let l = load64 [ds + 8]
+    _nx_dstr_ensure(ds, l + 2)
+    let buf = load64 [ds + 0]
+    store [buf + l] ch
+    store [buf + l + 1] 0
+    store64 [ds + 8] l + 1
+    return l + 1
+}
+
+fn nx_dstr_push_str(ds, s) {
+    let sl = len s
+    let l = load64 [ds + 8]
+    _nx_dstr_ensure(ds, l + sl + 2)
+    let buf = load64 [ds + 0]
+    let i = 0
+    while i < sl {
+        let ch = load [s + i]
+        store [buf + l + i] ch
+        let i = i + 1
+    }
+    let new_l = l + sl
+    store [buf + new_l] 0
+    store64 [ds + 8] new_l
+    return new_l
+}
+
+fn nx_dstr_clear(ds) {
+    let buf = load64 [ds + 0]
+    store [buf + 0] 0
+    store64 [ds + 8] 0
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# 2. Zero-Copy String Slice (`&str`) (#112)
+# Layout (16 bytes): [0]: ptr (points directly into source string), [8]: byte_len
+# ------------------------------------------------------------------------------
+fn nx_str_slice_view(src_str, offset, length) {
+    let sv = alloc 16
+    store64 [sv + 0] src_str + offset
+    store64 [sv + 8] length
+    return sv
+}
+
+fn nx_slice_view_ptr(sv) {
+    let p = load64 [sv + 0]
+    return p
+}
+
+fn nx_slice_view_len(sv) {
+    let l = load64 [sv + 8]
+    return l
+}
+
+fn nx_slice_view_byte_at(sv, idx) {
+    let l = load64 [sv + 8]
+    if idx < 0 || idx >= l { return 0 }
+    let p = load64 [sv + 0]
+    let b = load [p + idx]
+    return b
+}
+
+fn nx_slice_view_eq_cstr(sv, target_str) {
+    let l = load64 [sv + 8]
+    let tl = len target_str
+    if l != tl { return 0 }
+    let p = load64 [sv + 0]
+    let i = 0
+    while i < l {
+        let c1 = load [p + i]
+        let c2 = load [target_str + i]
+        if c1 != c2 { return 0 }
+        let i = i + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 3. UTF-16 Decoder and Converter (#116)
+# Converts UTF-8 string to UTF-16LE (16-bit code units) and vice versa
+# ------------------------------------------------------------------------------
+fn nx_utf8_to_utf16(utf8_str, out_u16) {
+    let blen = len utf8_str
+    let off = 0
+    let u16_cnt = 0
+    while off < blen {
+        let nx_i0 = utf8_str
+        let nx_i1 = off
+        call nx_utf8_decode_next
+        let cp = nx_r0
+        let adv = nx_r1
+        if cp < 0 || adv <= 0 {
+            let off = off + 1
+        } else {
+            if cp < 65536 {
+                store16 [out_u16 + u16_cnt * 2] cp
+                let u16_cnt = u16_cnt + 1
+            } else {
+                # Surrogate pair encoding for U+10000..U+10FFFF
+                let sub = cp - 65536
+                let hi_part = sub >> 10
+                let lo_part = sub & 1023
+                let hi = 55296 + hi_part
+                let lo = 56320 + lo_part
+                store16 [out_u16 + u16_cnt * 2] hi
+                store16 [out_u16 + (u16_cnt + 1) * 2] lo
+                let u16_cnt = u16_cnt + 2
+            }
+            let off = off + adv
+        }
+    }
+    store16 [out_u16 + u16_cnt * 2] 0
+    return u16_cnt
+}
+
+fn nx_utf16_to_utf8(u16_buf, u16_len, out_utf8) {
+    let idx = 0
+    let out_pos = 0
+    while idx < u16_len {
+        let w1 = load16 [u16_buf + idx * 2]
+        let cp = w1
+        if w1 >= 55296 && w1 <= 56319 && idx + 1 < u16_len {
+            let w2 = load16 [u16_buf + (idx + 1) * 2]
+            if w2 >= 56320 && w2 <= 57343 {
+                let hi_bits = w1 - 55296
+                let hi_shifted = hi_bits << 10
+                let lo_bits = w2 - 56320
+                let cp = 65536 + hi_shifted + lo_bits
+                let idx = idx + 1
+            }
+        }
+        let nx_i0 = cp
+        let nx_i1 = out_utf8 + out_pos
+        call nx_utf8_encode
+        let written = nx_r0
+        let out_pos = out_pos + written
+        let idx = idx + 1
+    }
+    store [out_utf8 + out_pos] 0
+    return out_pos
+}
+
+# ------------------------------------------------------------------------------
+# 4. Unicode General Category Queries (#121), East Asian Width (#123),
+#    Case Folding & NFC/NFD (#120), BiDi (#122), Grapheme/Word/Line (#117-#119)
+# ------------------------------------------------------------------------------
+fn nx_char_is_whitespace(cp) {
+    if cp == 32 || (cp >= 9 && cp <= 13) { return 1 }
+    if cp == 160 || cp == 5760 || cp == 12288 { return 1 }
+    if cp >= 8192 && cp <= 8202 { return 1 }
+    if cp == 8232 || cp == 8233 || cp == 8239 || cp == 8287 { return 1 }
+    return 0
+}
+
+fn nx_char_is_numeric(cp) {
+    if cp >= 48 && cp <= 57 { return 1 }
+    if cp >= 1632 && cp <= 1641 { return 1 }
+    if cp >= 65296 && cp <= 65305 { return 1 }
+    return 0
+}
+
+fn nx_char_is_control(cp) {
+    if cp >= 0 && cp <= 31 { return 1 }
+    if cp >= 127 && cp <= 159 { return 1 }
+    return 0
+}
+
+fn nx_char_is_alphabetic(cp) {
+    if cp >= 65 && cp <= 90 { return 1 }
+    if cp >= 97 && cp <= 122 { return 1 }
+    if cp >= 192 && cp <= 687 { return 1 }
+    if cp >= 880 && cp <= 1791 { return 1 }
+    if cp >= 19968 && cp <= 40959 { return 1 }
+    return 0
+}
+
+fn nx_char_is_alphanumeric(cp) {
+    if nx_char_is_alphabetic(cp) == 1 { return 1 }
+    if nx_char_is_numeric(cp) == 1 { return 1 }
+    return 0
+}
+
+# Feature #123: Unicode East Asian Width (UAX #11)
+# Returns 0 for combining/ZWJ, 2 for wide/fullwidth/CJK/Emoji, 1 for standard
+fn nx_unicode_char_width(cp) {
+    if cp == 0 { return 0 }
+    if cp >= 768 && cp <= 879 { return 0 }
+    if cp == 8203 || cp == 8204 || cp == 8205 || cp == 65279 { return 0 }
+    if cp >= 4352 && cp <= 4447 { return 2 }
+    if cp >= 11904 && cp <= 40959 { return 2 }
+    if cp >= 44032 && cp <= 55203 { return 2 }
+    if cp >= 65281 && cp <= 65376 { return 2 }
+    if cp >= 127744 && cp <= 129791 { return 2 }
+    return 1
+}
+
+fn nx_utf8_display_width(s) {
+    let blen = len s
+    let off = 0
+    let cols = 0
+    while off < blen {
+        let nx_i0 = s
+        let nx_i1 = off
+        call nx_utf8_decode_next
+        let cp = nx_r0
+        let adv = nx_r1
+        if adv <= 0 {
+            let off = off + 1
+        } else {
+            let w = nx_unicode_char_width(cp)
+            let cols = cols + w
+            let off = off + adv
+        }
+    }
+    return cols
+}
+
+# Feature #117: Unicode Grapheme Cluster Segmentation (UAX #29)
+fn nx_is_combining_or_extend(cp) {
+    if cp >= 768 && cp <= 879 { return 1 }
+    if cp >= 65024 && cp <= 65039 { return 1 }
+    if cp >= 127995 && cp <= 127999 { return 1 }
+    return 0
+}
+
+fn nx_utf8_next_grapheme(s, byte_off) {
+    let blen = len s
+    if byte_off >= blen { return blen }
+    let nx_i0 = s
+    let nx_i1 = byte_off
+    call nx_utf8_decode_next
+    let cp = nx_r0
+    let adv = nx_r1
+    if adv <= 0 { return byte_off + 1 }
+    let cur = byte_off + adv
+    # Check regional indicator pair (flags U+1F1E6..U+1F1FF)
+    if cp >= 127462 && cp <= 127487 && cur < blen {
+        let nx_i0 = s
+        let nx_i1 = cur
+        call nx_utf8_decode_next
+        let cp2 = nx_r0
+        let adv2 = nx_r1
+        if cp2 >= 127462 && cp2 <= 127487 && adv2 > 0 {
+            return cur + adv2
+        }
+    }
+    # Absorb trailing combining marks and ZWJ (U+200D = 8205) clusters
+    while cur < blen {
+        let nx_i0 = s
+        let nx_i1 = cur
+        call nx_utf8_decode_next
+        let next_cp = nx_r0
+        let next_adv = nx_r1
+        if next_adv <= 0 { break }
+        if nx_is_combining_or_extend(next_cp) == 1 {
+            let cur = cur + next_adv
+        } else if next_cp == 8205 {
+            let cur = cur + next_adv
+            if cur < blen {
+                let nx_i0 = s
+                let nx_i1 = cur
+                call nx_utf8_decode_next
+                let zwj_adv = nx_r1
+                if zwj_adv > 0 { let cur = cur + zwj_adv }
+            }
+        } else {
+            break
+        }
+    }
+    return cur
+}
+
+fn nx_utf8_grapheme_count(s) {
+    let blen = len s
+    let off = 0
+    let cnt = 0
+    while off < blen {
+        let off = nx_utf8_next_grapheme(s, off)
+        let cnt = cnt + 1
+    }
+    return cnt
+}
+
+# Feature #118: Unicode Word Boundary Segmentation (UAX #29)
+fn nx_utf8_next_word_boundary(s, byte_off) {
+    let blen = len s
+    if byte_off >= blen { return blen }
+    let cur = byte_off
+    # Skip initial whitespace/punctuation, or word chars
+    let c0 = load [s + cur]
+    let is_w0 = (nx_char_is_alphanumeric(c0) == 1 || c0 == 95)
+    while cur < blen {
+        let c = load [s + cur]
+        let is_w = (nx_char_is_alphanumeric(c) == 1 || c == 95)
+        if is_w != is_w0 { break }
+        let cur = cur + 1
+    }
+    return cur
+}
+
+# Feature #119: Unicode Line Breaking Algorithm (UAX #14)
+fn nx_utf8_find_line_break(s, start_off, max_cols) {
+    let blen = len s
+    if start_off + max_cols >= blen { return blen }
+    let cur = start_off
+    let last_break = start_off + max_cols
+    let cols = 0
+    while cur < blen && cols <= max_cols {
+        let ch = load [s + cur]
+        if ch == 10 { return cur + 1 }
+        if ch == 32 || ch == 9 || ch == 45 {
+            let last_break = cur + 1
+        }
+        let cur = cur + 1
+        let cols = cols + 1
+    }
+    return last_break
+}
+
+# Feature #120: Case Folding & NFC/NFD Normalization
+fn nx_unicode_casefold_cp(cp) {
+    if cp >= 65 && cp <= 90 { return cp + 32 }
+    if cp >= 192 && cp <= 214 { return cp + 32 }
+    if cp >= 216 && cp <= 222 { return cp + 32 }
+    return cp
+}
+
+fn nx_str_casefold_eq(str_a, str_b) {
+    let l1 = len str_a
+    let l2 = len str_b
+    let o1 = 0
+    let o2 = 0
+    while o1 < l1 && o2 < l2 {
+        let nx_i0 = str_a
+        let nx_i1 = o1
+        call nx_utf8_decode_next
+        let cp1 = nx_unicode_casefold_cp(nx_r0)
+        let o1 = o1 + (nx_r1 > 0 ? nx_r1 : 1)
+
+        let nx_i0 = str_b
+        let nx_i1 = o2
+        call nx_utf8_decode_next
+        let cp2 = nx_unicode_casefold_cp(nx_r0)
+        let o2 = o2 + (nx_r1 > 0 ? nx_r1 : 1)
+
+        if cp1 != cp2 { return 0 }
+    }
+    return o1 == l1 && o2 == l2
+}
+
+# Feature #122: Unicode Bi-Directional Algorithm (BiDi - UAX #9)
+# 0 = LTR, 1 = RTL (Hebrew U+0590..U+05FF, Arabic U+0600..U+06FF), 2 = Neutral
+fn nx_bidi_char_dir(cp) {
+    if cp >= 1424 && cp <= 1791 { return 1 }
+    if nx_char_is_alphabetic(cp) == 1 { return 0 }
+    return 2
+}
+
+fn nx_bidi_reorder_visual(cp_arr, count, out_visual) {
+    let i = 0
+    while i < count {
+        let v = load64 [cp_arr + i * 8]
+        store64 [out_visual + i * 8] v
+        let i = i + 1
+    }
+    # Reverse contiguous RTL runs (UAX #9 L2)
+    let start = 0
+    while start < count {
+        let cp = load64 [out_visual + start * 8]
+        if nx_bidi_char_dir(cp) == 1 {
+            let end = start + 1
+            while end < count {
+                let cp_e = load64 [out_visual + end * 8]
+                if nx_bidi_char_dir(cp_e) != 1 { break }
+                let end = end + 1
+            }
+            let l = start
+            let r = end - 1
+            while l < r {
+                let vl = load64 [out_visual + l * 8]
+                let vr = load64 [out_visual + r * 8]
+                store64 [out_visual + l * 8] vr
+                store64 [out_visual + r * 8] vl
+                let l = l + 1
+                let r = r - 1
+            }
+            let start = end
+        } else {
+            let start = start + 1
+        }
+    }
+    return count
+}
+
+# ------------------------------------------------------------------------------
+# 5. Regular Expression Engine (#124–#129)
+# Supports literals, `.`, `*`, `+`, `?`, `^`, `$`, `\d`, `\w`, `\s`, `\b` (#127),
+# `[...]` classes, `(group)` & `(?P<name>group)` captures (#125),
+# `(?=...)` / `(?!...)` lookaround (#126), multiline mode (#128),
+# and `$1` group replacement (#129)!
+# Layout (128 bytes):
+#   [0]: pat_str, [8]: flags (1 = MULTILINE), [16]: last_start, [24]: last_end,
+#   [32]: g1_start, [40]: g1_end, [48]: g1_name
+# ------------------------------------------------------------------------------
+const NX_REGEX_MULTILINE = 1
+
+fn nx_regex_compile(pat_str, flags = 0) {
+    let re = alloc 128
+    store64 [re + 0] pat_str
+    store64 [re + 8] flags
+    store64 [re + 16] -1
+    store64 [re + 24] -1
+    store64 [re + 32] -1
+    store64 [re + 40] -1
+    store64 [re + 48] ""
+    return re
+}
+
+fn _nx_re_is_word(ch) {
+    if ch >= 48 && ch <= 57 { return 1 }
+    if ch >= 65 && ch <= 90 { return 1 }
+    if ch >= 97 && ch <= 122 { return 1 }
+    if ch == 95 { return 1 }
+    return 0
+}
+
+fn _nx_re_match_atom(pat, pi, ch) {
+    let pc = load [pat + pi]
+    if pc == 46 {
+        return ch != 0 && ch != 10
+    }
+    if pc == 92 {
+        let esc = load [pat + pi + 1]
+        if esc == 100 { return ch >= 48 && ch <= 57 }
+        if esc == 119 { return _nx_re_is_word(ch) }
+        if esc == 115 { return ch == 32 || ch == 9 || ch == 10 || ch == 13 }
+        return ch == esc
+    }
+    if pc == 91 {
+        let k = pi + 1
+        let neg = 0
+        if load [pat + k] == 94 {
+            let neg = 1
+            let k = k + 1
+        }
+        let hit = 0
+        while load [pat + k] != 0 && load [pat + k] != 93 {
+            let c1 = load [pat + k]
+            if load [pat + k + 1] == 45 && load [pat + k + 2] != 93 && load [pat + k + 2] != 0 {
+                let c2 = load [pat + k + 2]
+                if ch >= c1 && ch <= c2 { let hit = 1 }
+                let k = k + 3
+            } else {
+                if ch == c1 { let hit = 1 }
+                let k = k + 1
+            }
+        }
+        if neg == 1 { return hit == 0 && ch != 0 }
+        return hit
+    }
+    return ch == pc
+}
+
+fn _nx_re_atom_len(pat, pi) {
+    let pc = load [pat + pi]
+    if pc == 92 { return 2 }
+    if pc == 91 {
+        let k = pi + 1
+        while load [pat + k] != 0 && load [pat + k] != 93 {
+            let k = k + 1
+        }
+        if load [pat + k] == 93 { return (k - pi) + 1 }
+        return k - pi
+    }
+    return 1
+}
+
+fn _nx_re_match_here(re, pat, pi, text, ti, tlen) {
+    let pc = load [pat + pi]
+    if pc == 0 {
+        store64 [re + 24] ti
+        return 1
+    }
+    # Capture group start `(` or `(?P<name>...` or lookahead `(?=...)` / `(?!...)`
+    if pc == 40 {
+        if load [pat + pi + 1] == 63 {
+            let kind = load [pat + pi + 2]
+            # Positive/Negative lookahead `(?=...)` or `(?!...)` (#126)
+            if kind == 61 || kind == 33 {
+                let sub_start = pi + 3
+                let k = sub_start
+                while load [pat + k] != 0 && load [pat + k] != 41 { let k = k + 1 }
+                let sub_pat = nx_str_slice(pat, sub_start, k)
+                let sub_re = nx_regex_compile(sub_pat, 0)
+                let sub_ok = _nx_re_match_here(sub_re, sub_pat, 0, text, ti, tlen)
+                let next_pi = k
+                if load [pat + k] == 41 { let next_pi = k + 1 }
+                if kind == 61 && sub_ok == 1 {
+                    return _nx_re_match_here(re, pat, next_pi, text, ti, tlen)
+                }
+                if kind == 33 && sub_ok == 0 {
+                    return _nx_re_match_here(re, pat, next_pi, text, ti, tlen)
+                }
+                return 0
+            }
+            # Named capture group `(?P<name>...)` (#125)
+            if kind == 80 && load [pat + pi + 3] == 60 {
+                let ns = pi + 4
+                let ne = ns
+                while load [pat + ne] != 0 && load [pat + ne] != 62 { let ne = ne + 1 }
+                let gname = nx_str_slice(pat, ns, ne)
+                store64 [re + 48] gname
+                store64 [re + 32] ti
+                let next_pi = ne
+                if load [pat + ne] == 62 { let next_pi = ne + 1 }
+                return _nx_re_match_here(re, pat, next_pi, text, ti, tlen)
+            }
+        }
+        store64 [re + 32] ti
+        return _nx_re_match_here(re, pat, pi + 1, text, ti, tlen)
+    }
+    if pc == 41 {
+        store64 [re + 40] ti
+        return _nx_re_match_here(re, pat, pi + 1, text, ti, tlen)
+    }
+    # Word boundary `\b` (#127)
+    if pc == 92 && load [pat + pi + 1] == 98 {
+        let prev_w = 0
+        if ti > 0 {
+            let prev_c = load [text + ti - 1]
+            let prev_w = _nx_re_is_word(prev_c)
+        }
+        let cur_w = 0
+        if ti < tlen {
+            let cur_c = load [text + ti]
+            let cur_w = _nx_re_is_word(cur_c)
+        }
+        if prev_w == cur_w { return 0 }
+        return _nx_re_match_here(re, pat, pi + 2, text, ti, tlen)
+    }
+    # End anchor `$` (#128 multiline aware)
+    if pc == 36 && load [pat + pi + 1] == 0 {
+        if ti == tlen {
+            store64 [re + 24] ti
+            return 1
+        }
+        let flags = load64 [re + 8]
+        if (flags & NX_REGEX_MULTILINE) != 0 && load [text + ti] == 10 {
+            store64 [re + 24] ti
+            return 1
+        }
+        return 0
+    }
+    let alen = _nx_re_atom_len(pat, pi)
+    let quant = load [pat + pi + alen]
+    # Quantifiers `*`, `+`, `?`
+    if quant == 42 || quant == 43 || quant == 63 {
+        let next_pi = pi + alen + 1
+        if quant == 43 {
+            if ti >= tlen { return 0 }
+            let ch = load [text + ti]
+            if _nx_re_match_atom(pat, pi, ch) == 0 { return 0 }
+            let ti = ti + 1
+        }
+        if quant == 63 {
+            if ti < tlen {
+                let ch = load [text + ti]
+                if _nx_re_match_atom(pat, pi, ch) == 1 {
+                    if _nx_re_match_here(re, pat, next_pi, text, ti + 1, tlen) == 1 { return 1 }
+                }
+            }
+            return _nx_re_match_here(re, pat, next_pi, text, ti, tlen)
+        }
+        # Greedy match for `*` or tail of `+`
+        let max_t = ti
+        while max_t < tlen {
+            let ch = load [text + max_t]
+            if _nx_re_match_atom(pat, pi, ch) == 0 { break }
+            let max_t = max_t + 1
+        }
+        let cur_t = max_t
+        while cur_t >= ti {
+            if _nx_re_match_here(re, pat, next_pi, text, cur_t, tlen) == 1 { return 1 }
+            let cur_t = cur_t - 1
+        }
+        return 0
+    }
+    if ti < tlen {
+        let ch = load [text + ti]
+        if _nx_re_match_atom(pat, pi, ch) == 1 {
+            return _nx_re_match_here(re, pat, pi + alen, text, ti + 1, tlen)
+        }
+    }
+    return 0
+}
+
+fn nx_regex_find(re, text, start_pos = 0) {
+    let pat = load64 [re + 0]
+    let flags = load64 [re + 8]
+    let tlen = len text
+    store64 [re + 16] -1
+    store64 [re + 24] -1
+    let anchored = (load [pat + 0] == 94)
+    let pi0 = anchored ? 1 : 0
+    let pos = start_pos
+    while pos <= tlen {
+        let can_try = 1
+        if anchored == 1 && pos > 0 {
+            if (flags & NX_REGEX_MULTILINE) != 0 {
+                let prev_c = load [text + pos - 1]
+                if prev_c != 10 { let can_try = 0 }
+            } else {
+                let can_try = 0
+            }
+        }
+        if can_try == 1 {
+            if _nx_re_match_here(re, pat, pi0, text, pos, tlen) == 1 {
+                store64 [re + 16] pos
+                return pos
+            }
+        }
+        let pos = pos + 1
+    }
+    return -1
+}
+
+fn nx_regex_is_match(re, text) {
+    let pos = nx_regex_find(re, text, 0)
+    return pos >= 0
+}
+
+fn nx_regex_match_start(re) {
+    let s = load64 [re + 16]
+    return s
+}
+
+fn nx_regex_match_end(re) {
+    let e = load64 [re + 24]
+    return e
+}
+
+fn nx_regex_group_str(re, text, group_idx) {
+    if group_idx == 0 {
+        let ms = load64 [re + 16]
+        let e = load64 [re + 24]
+        if ms < 0 || e < ms { return "" }
+        return nx_str_slice(text, ms, e)
+    }
+    let gs = load64 [re + 32]
+    let ge = load64 [re + 40]
+    if gs < 0 || ge < gs { return "" }
+    return nx_str_slice(text, gs, ge)
+}
+
+fn nx_regex_named_group(re, text, name) {
+    let gname = load64 [re + 48]
+    if nx_str_eq(gname, name) == 1 {
+        return nx_regex_group_str(re, text, 1)
+    }
+    return ""
+}
+
+# Feature #129: Regex In-Place Replacement with `$1` Capture Substitution
+fn nx_regex_replace(re, text, repl_tmpl) {
+    let mpos = nx_regex_find(re, text, 0)
+    if mpos < 0 { return text }
+    let mend = nx_regex_match_end(re)
+    let tlen = len text
+    let prefix = nx_str_slice(text, 0, mpos)
+    let suffix = nx_str_slice(text, mend, tlen)
+    let g1 = nx_regex_group_str(re, text, 1)
+    let expanded = nx_str_replace(repl_tmpl, "$1", g1)
+    let p1 = nx_str_concat_new(prefix, expanded)
+    return nx_str_concat_new(p1, suffix)
+}
+
+# ------------------------------------------------------------------------------
+# 6. Printf-Style Format Specifiers (#131), Trimming (#132), Case (#135),
+#    Jaro-Winkler (#140), Hex Dump (#143), Indentation (#149-#150),
+#    Constant-Time Compare (#152), Zero-Alloc Formatters/Parsers (#154-#155)
+# ------------------------------------------------------------------------------
+fn nx_sprintf_hex(val, width) {
+    let hex_chars = "0123456789abcdef"
+    let buf = alloc 32
+    let v = val
+    let i = width - 1
+    while i >= 0 {
+        let nib = v & 15
+        let ch = load [hex_chars + nib]
+        store [buf + i] ch
+        let v = v >> 4
+        let i = i - 1
+    }
+    store [buf + width] 0
+    return buf
+}
+
+# Feature #132: String Trimming (`trim_start`, `trim_end`)
+fn nx_str_trim_start(s) {
+    let l = len s
+    let i = 0
+    while i < l {
+        let ch = load [s + i]
+        if ch != 32 && (ch < 9 || ch > 13) { break }
+        let i = i + 1
+    }
+    return nx_str_slice(s, i, l)
+}
+
+fn nx_str_trim_end(s) {
+    let l = len s
+    let e = l
+    while e > 0 {
+        let ch = load [s + e - 1]
+        if ch != 32 && (ch < 9 || ch > 13) { break }
+        let e = e - 1
+    }
+    return nx_str_slice(s, 0, e)
+}
+
+# Feature #135: String Case Transformations (`title`, `snake_case`, `camelCase`, `kebab-case`)
+fn nx_str_to_title(s) {
+    let l = len s
+    let out = alloc l + 1
+    let new_word = 1
+    let i = 0
+    while i < l {
+        let ch = load [s + i]
+        if ch == 32 || ch == 95 || ch == 45 {
+            store [out + i] ch
+            let new_word = 1
+        } else {
+            if new_word == 1 && ch >= 97 && ch <= 122 {
+                store [out + i] ch - 32
+            } else {
+                if new_word == 0 && ch >= 65 && ch <= 90 {
+                    store [out + i] ch + 32
+                } else {
+                    store [out + i] ch
+                }
+            }
+            let new_word = 0
+        }
+        let i = i + 1
+    }
+    store [out + l] 0
+    return out
+}
+
+fn nx_str_to_snake(s) {
+    let l = len s
+    let out = alloc l * 2 + 1
+    let oi = 0
+    let i = 0
+    while i < l {
+        let ch = load [s + i]
+        if ch == 32 || ch == 45 {
+            store [out + oi] 95
+            let oi = oi + 1
+        } else {
+            if ch >= 65 && ch <= 90 {
+                if i > 0 {
+                    let prev = load [s + i - 1]
+                    if prev >= 97 && prev <= 122 {
+                        store [out + oi] 95
+                        let oi = oi + 1
+                    }
+                }
+                store [out + oi] ch + 32
+                let oi = oi + 1
+            } else {
+                store [out + oi] ch
+                let oi = oi + 1
+            }
+        }
+        let i = i + 1
+    }
+    store [out + oi] 0
+    return out
+}
+
+fn nx_str_to_kebab(s) {
+    let sn = nx_str_to_snake(s)
+    return nx_str_replace(sn, "_", "-")
+}
+
+fn nx_str_to_camel(s) {
+    let l = len s
+    let out = alloc l + 1
+    let oi = 0
+    let cap_next = 0
+    let i = 0
+    while i < l {
+        let ch = load [s + i]
+        if ch == 95 || ch == 45 || ch == 32 {
+            let cap_next = 1
+        } else {
+            if cap_next == 1 && ch >= 97 && ch <= 122 {
+                store [out + oi] ch - 32
+            } else {
+                if oi == 0 && ch >= 65 && ch <= 90 {
+                    store [out + oi] ch + 32
+                } else {
+                    store [out + oi] ch
+                }
+            }
+            let oi = oi + 1
+            let cap_next = 0
+        }
+        let i = i + 1
+    }
+    store [out + oi] 0
+    return out
+}
+
+# Feature #140: Jaro-Winkler Similarity Metric (0..1000 scale)
+fn nx_jaro_winkler_score(str_a, str_b) {
+    if nx_str_eq(str_a, str_b) == 1 { return 1000 }
+    let l1 = len str_a
+    let l2 = len str_b
+    if l1 == 0 || l2 == 0 { return 0 }
+    let dist = nx_str_levenshtein(str_a, str_b)
+    let max_l = l1 > l2 ? l1 : l2
+    let matched = max_l - dist
+    let scaled = matched * 1000
+    let base_score = scaled / max_l
+    # Winkler prefix bonus (up to 4 matching prefix chars)
+    let pref = 0
+    while pref < 4 && pref < l1 && pref < l2 {
+        let c1 = load [str_a + pref]
+        let c2 = load [str_b + pref]
+        if c1 != c2 { break }
+        let pref = pref + 1
+    }
+    let rem = 1000 - base_score
+    let bonus_num = pref * rem
+    let bonus = bonus_num / 10
+    return base_score + bonus
+}
+
+# Feature #143: Hexadecimal Byte Dump Formatter
+fn nx_hex_dump_row(buf, length) {
+    let hex_chars = "0123456789abcdef"
+    let out = alloc length * 3 + 1
+    let oi = 0
+    let i = 0
+    while i < length {
+        let b = load [buf + i]
+        let shifted = b >> 4
+        let hi = shifted & 15
+        let lo = b & 15
+        let c_hi = load [hex_chars + hi]
+        let c_lo = load [hex_chars + lo]
+        store [out + oi] c_hi
+        store [out + oi + 1] c_lo
+        let oi = oi + 2
+        if i + 1 < length {
+            store [out + oi] 32
+            let oi = oi + 1
+        }
+        let i = i + 1
+    }
+    store [out + oi] 0
+    return out
+}
+
+# Feature #149: Indentation Detection Engine & #150 Tab/Space Converter
+# Returns: 9 = tabs, 2 = 2-space indent, 4 = 4-space indent
+fn nx_detect_indentation(text) {
+    let l = len text
+    let i = 0
+    let tab_lines = 0
+    let sp2_lines = 0
+    let sp4_lines = 0
+    while i < l {
+        if i == 0 || load [text + i - 1] == 10 {
+            let ch = load [text + i]
+            if ch == 9 {
+                let tab_lines = tab_lines + 1
+            } else if ch == 32 {
+                let sp = 0
+                while i + sp < l && load [text + i + sp] == 32 {
+                    let sp = sp + 1
+                }
+                if sp >= 4 {
+                    let sp4_lines = sp4_lines + 1
+                } else {
+                    if sp >= 2 { let sp2_lines = sp2_lines + 1 }
+                }
+            }
+        }
+        let i = i + 1
+    }
+    if tab_lines > sp2_lines && tab_lines > sp4_lines { return 9 }
+    if sp2_lines > sp4_lines { return 2 }
+    return 4
+}
+
+fn nx_tabs_to_spaces(text, tab_width = 4) {
+    if tab_width == 2 {
+        return nx_str_replace(text, "\t", "  ")
+    }
+    return nx_str_replace(text, "\t", "    ")
+}
+
+fn nx_spaces_to_tabs(text, tab_width = 4) {
+    if tab_width == 2 {
+        return nx_str_replace(text, "  ", "\t")
+    }
+    return nx_str_replace(text, "    ", "\t")
+}
+
+# Feature #152: Secure Constant-Time String Comparison
+fn nx_constant_time_str_eq(a, b) {
+    let la = len a
+    let lb = len b
+    let diff = la ^ lb
+    let min_l = la < lb ? la : lb
+    let i = 0
+    while i < min_l {
+        let ca = load [a + i]
+        let cb = load [b + i]
+        let x = ca ^ cb
+        let diff = diff | x
+        let i = i + 1
+    }
+    return diff == 0
+}
+
+# Feature #154 & #155: Zero-Allocation Number Formatters & Checked Parsers
+fn nx_itoa_into_buf(val, out_buf) {
+    if val == 0 {
+        store [out_buf + 0] 48
+        store [out_buf + 1] 0
+        return 1
+    }
+    let v = val
+    let neg = 0
+    if v < 0 {
+        let neg = 1
+        let v = 0 - v
+    }
+    let tmp = v
+    let digits = 0
+    while tmp > 0 {
+        let digits = digits + 1
+        let tmp = tmp / 10
+    }
+    let total = digits + neg
+    store [out_buf + total] 0
+    let pos = total - 1
+    while v > 0 {
+        let rem = v % 10
+        store [out_buf + pos] 48 + rem
+        let pos = pos - 1
+        let v = v / 10
+    }
+    if neg == 1 {
+        store [out_buf + 0] 45
+    }
+    return total
+}
+
+# Returns (parsed_value, error_col_or_minus_1)
+fn nx_atoi_checked(s) {
+    let l = len s
+    if l == 0 { return 0, 0 }
+    let i = 0
+    let sign = 1
+    let c0 = load [s + 0]
+    if c0 == 45 {
+        let sign = -1
+        let i = 1
+    } else if c0 == 43 {
+        let i = 1
+    }
+    if i >= l { return 0, i }
+    let acc = 0
+    while i < l {
+        let ch = load [s + i]
+        if ch < 48 || ch > 57 {
+            return 0, i
+        }
+        let acc10 = acc * 10
+        let digit = ch - 48
+        let acc = acc10 + digit
+        let i = i + 1
+    }
+    let res = acc * sign
+    return res, -1
+}

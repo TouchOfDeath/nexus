@@ -1,0 +1,30 @@
+# ==============================================================================
+#        NEXUS STUDIO & LANGUAGE COMPLETE 500-FEATURE UMBRELLA MODULE
+#                     stdlib/nexus_studio_full.nex
+# ==============================================================================
+# Single-line import providing all 11 architectural sections (#1–#500):
+#   - Section 1: Core Language, Generics, Traits, Option/Result, Allocators (`lang_core.nex`)
+#   - Section 2: Rope, Radix Tree, QuadTree, Undo/Redo, Diff, COW (`collections_ext.nex`)
+#   - Section 3: Dynamic String, UTF-16, UAX #9/#11/#14/#29, Regex (`regex_unicode_str.nex`)
+#   - Section 4: POSIX OS Process, PTY, Futex, Atomics, Channels (`os_posix.nex`)
+#   - Section 5: Wayland, X11 Handshake/XKB/Atom Cache, Multi-Monitor (`window_desktop.nex`)
+#   - Section 6: 2D Vector Graphics, Blending, WCAG, Bezier, Atlas (`graphics2d_full.nex`)
+#   - Section 7: TrueType/OpenType Font Parser, Ligatures, Shaping (`font_shaping_ttf.nex`)
+#   - Section 8: Retained GUI Widget Tree, Flexbox/Grid/Dock, Themes (`gui_widgets.nex`)
+#   - Section 9: LSP Client, JSON-RPC, Semantic Tokens, Refactoring (`editor_lsp.nex`)
+#   - Section 10: VT100/xterm ANSI Terminal Emulator & Diagnostics (`terminal_vt100.nex`)
+#   - Section 11: TOML Config, Keymap, DWARF, Debugger, ASan, i18n (`toolchain_eco.nex`)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/lang_core.nex"
+include "stdlib/collections_ext.nex"
+include "stdlib/regex_unicode_str.nex"
+include "stdlib/os_posix.nex"
+include "stdlib/window_desktop.nex"
+include "stdlib/graphics2d_full.nex"
+include "stdlib/font_shaping_ttf.nex"
+include "stdlib/gui_widgets.nex"
+include "stdlib/editor_lsp.nex"
+include "stdlib/terminal_vt100.nex"
+include "stdlib/toolchain_eco.nex"

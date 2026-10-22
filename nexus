@@ -208,7 +208,7 @@ for f in ('app.exe', 'app.elf'):
     if os.path.exists(p):
         os.remove(p)
 code_txt = open(os.path.join(compiler_dir, 'code.nex'), 'r', errors='ignore').read()
-use_xl = ('_ae_' in code_txt or '_np_' in code_txt or len(code_txt) > 48000) and os.path.exists(os.path.join(compiler_dir, 'nexc_xl.elf'))
+use_xl = ('_ae_' in code_txt or '_np_' in code_txt or '_xl_' in code_txt or len(code_txt) > 30000) and os.path.exists(os.path.join(compiler_dir, 'nexc_xl.elf'))
 nexc = os.path.join(compiler_dir, 'nexc_xl.elf' if use_xl else 'nexc.elf')
 r = subprocess.run([nexc], cwd=compiler_dir, capture_output=True, text=True)
 if not os.path.exists(os.path.join(compiler_dir, 'app.elf')) and os.path.exists(os.path.join(compiler_dir, 'app.exe')):
@@ -240,7 +240,7 @@ PYBUILD
         src="$(realpath "$2")"
         "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
         rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
-        if [ -f "$COMPILER_DIR/nexc_xl.elf" ] && grep -Eq "_ae_|_np_" "$COMPILER_DIR/code.nex" 2>/dev/null; then
+        if [ -f "$COMPILER_DIR/nexc_xl.elf" ] && (grep -Eq "_ae_|_np_|_xl_" "$COMPILER_DIR/code.nex" 2>/dev/null || [ "$(wc -c < "$COMPILER_DIR/code.nex" 2>/dev/null || echo 0)" -gt 30000 ]); then
             comp_out=$(cd "$COMPILER_DIR" && ./nexc_xl.elf)
         elif [ -f "$COMPILER_DIR/nexc.elf" ]; then
             comp_out=$(cd "$COMPILER_DIR" && ./nexc.elf)
@@ -261,7 +261,7 @@ PYBUILD
         src="$(realpath "$2")"
         "$NEXPREP" "$src" "$COMPILER_DIR/code.nex"
         rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
-        if [ -f "$COMPILER_DIR/nexc_xl.elf" ] && grep -Eq "_ae_|_np_" "$COMPILER_DIR/code.nex" 2>/dev/null; then
+        if [ -f "$COMPILER_DIR/nexc_xl.elf" ] && (grep -Eq "_ae_|_np_|_xl_" "$COMPILER_DIR/code.nex" 2>/dev/null || [ "$(wc -c < "$COMPILER_DIR/code.nex" 2>/dev/null || echo 0)" -gt 30000 ]); then
             comp_out=$(cd "$COMPILER_DIR" && ./nexc_xl.elf)
         elif [ -f "$COMPILER_DIR/nexc.elf" ]; then
             comp_out=$(cd "$COMPILER_DIR" && ./nexc.elf)
@@ -323,7 +323,7 @@ PYBUILD
                 ;;
             ""|tri|all)
                 rm -f "$COMPILER_DIR/app.exe" "$COMPILER_DIR/app.elf"
-                if [ -f "$COMPILER_DIR/nexc_xl.elf" ] && grep -Eq "_ae_|_np_" "$COMPILER_DIR/code.nex" 2>/dev/null; then
+                if [ -f "$COMPILER_DIR/nexc_xl.elf" ] && (grep -Eq "_ae_|_np_|_xl_" "$COMPILER_DIR/code.nex" 2>/dev/null || [ "$(wc -c < "$COMPILER_DIR/code.nex" 2>/dev/null || echo 0)" -gt 30000 ]); then
                     (cd "$COMPILER_DIR" && ./nexc_xl.elf)
                 elif [ -f "$COMPILER_DIR/nexc.elf" ]; then
                     (cd "$COMPILER_DIR" && ./nexc.elf)
@@ -466,7 +466,7 @@ for ex in examples:
         if os.path.exists(p): os.remove(p)
     
     code_str = open(os.path.join(compiler_dir, "code.nex"), "r", errors="ignore").read()
-    if ("_ae_" in code_str or "_np_" in code_str) and os.path.exists(os.path.join(compiler_dir, "nexc_xl.elf")):
+    if ("_ae_" in code_str or "_np_" in code_str or "_xl_" in code_str or len(code_str) > 30000) and os.path.exists(os.path.join(compiler_dir, "nexc_xl.elf")):
         r_comp = subprocess.run([os.path.join(compiler_dir, "nexc_xl.elf")], cwd=compiler_dir, capture_output=True)
     else:
         r_comp = subprocess.run([nexload, os.path.join(compiler_dir, "nexc.exe")], cwd=compiler_dir, capture_output=True)
@@ -1087,7 +1087,12 @@ v87_suites = [
     ("tests/test_numpy_math_reduce.nex", "NUMPY_MATH_REDUCE_TEST_PASS", "NumPy Math Functions, IEEE-754 & Reductions Suite (106 assertions)"),
     ("tests/test_numpy_linalg.nex", "NUMPY_LINALG_TEST_PASS", "NumPy Linear Algebra, LU/QR/SVD & Solvers Suite (78 assertions)"),
     ("tests/test_numpy_stats_random_io.nex", "NUMPY_STATS_RANDOM_IO_TEST_PASS", "NumPy Sort, Statistics, PRNG & Binary/CSV I/O Suite (106 assertions)"),
-    ("tests/test_numpy_failures.nex", "NUMPY_FAILURES_TEST_PASS", "NumPy Failure Modes, Bounds, Domains & Corrupted I/O Suite (94 assertions)")
+    ("tests/test_numpy_failures.nex", "NUMPY_FAILURES_TEST_PASS", "NumPy Failure Modes, Bounds, Domains & Corrupted I/O Suite (94 assertions)"),
+    ("tests/test_lang_phase_a.nex", "PHASE_A_LANG_TEST_PASS", "Phase A Core Language, Generics, Traits, Option/Result & Allocators Suite (#9-#65, 93 assertions)"),
+    ("tests/test_collections_text_phase_b.nex", "PHASE_B_COLLECTIONS_TEXT_PASS", "Phase B Collections, Rope, Radix, Diff, Unicode UAX & Regex Engine Suite (#68-#155, 111 assertions)"),
+    ("tests/test_os_concurrency_phase_c.nex", "PHASE_C_OS_CONCURRENCY_PASS", "Phase C OS POSIX Process, Pipes, PTY, Futex, Atomics & Channels Suite (#156-#205, 87 assertions)"),
+    ("tests/test_window_gfx_font_phase_d.nex", "PHASE_D_WINDOW_GFX_FONT_PASS", "Phase D Wayland, X11, 2D Vector Graphics, WCAG & TTF Font Shaping Suite (#206-#335, 65 assertions)"),
+    ("tests/test_gui_editor_term_toolchain_phase_ef.nex", "PHASE_EF_GUI_EDITOR_TERM_TOOLCHAIN_PASS", "Phase E & F Retained GUI, Flexbox/Grid/Dock, LSP, VT100 & Toolchain Suite (#336-#499, 71 assertions)")
 ]
 v87_ok = True
 for rel_p, marker, desc in v87_suites:
@@ -1098,7 +1103,7 @@ for rel_p, marker, desc in v87_suites:
             fp = os.path.join(compiler_dir, f_clean)
             if os.path.exists(fp): os.remove(fp)
         c_txt = open(os.path.join(compiler_dir, "code.nex"), "r", errors="ignore").read()
-        c_bin = "nexc_xl.elf" if (("_ae_" in c_txt or "_np_" in c_txt) and os.path.exists(os.path.join(compiler_dir, "nexc_xl.elf"))) else "nexc.elf"
+        c_bin = "nexc_xl.elf" if (("_ae_" in c_txt or "_np_" in c_txt or "_xl_" in c_txt or len(c_txt) > 30000) and os.path.exists(os.path.join(compiler_dir, "nexc_xl.elf"))) else "nexc.elf"
         subprocess.run([os.path.join(compiler_dir, c_bin)], cwd=compiler_dir, capture_output=True)
         if not os.path.exists(os.path.join(compiler_dir, "app.elf")):
             subprocess.run([nexelf, os.path.join(compiler_dir, "app.exe"), os.path.join(compiler_dir, "app.elf")], capture_output=True)

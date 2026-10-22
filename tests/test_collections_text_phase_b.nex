@@ -1,0 +1,279 @@
+# ==============================================================================
+#   NEXUS PHASE B TEST SUITE: COLLECTIONS, BUFFERS, UNICODE & REGEX ENGINE
+#          Tests Section 2 (#68–#110) and Section 3 (#111–#155)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/collections_ext.nex"
+include "stdlib/regex_unicode_str.nex"
+
+fn main {
+    print "=== Running Phase B Collections, Text, Unicode & Regex Verification ==="
+
+    # 1. Rope Data Structure (#68) & Rope Slice Iterator (#153)
+    let r1 = nx_rope_new("Hello, ")
+    let r2 = nx_rope_new("World!")
+    let r3 = nx_rope_concat(r1, r2)
+    assert_eq nx_rope_len(r3), 13
+    assert_eq nx_rope_char_at(r3, 0), 72
+    assert_eq nx_rope_char_at(r3, 7), 87
+    assert_eq nx_rope_to_str(r3), "Hello, World!"
+
+    let r4 = nx_rope_insert(r3, 7, "NEXUS ")
+    assert_eq nx_rope_to_str(r4), "Hello, NEXUS World!"
+    let r5 = nx_rope_delete(r4, 5, 2)
+    assert_eq nx_rope_to_str(r5), "HelloNEXUS World!"
+
+    let rit = nx_rope_iter_new(r5, 5, 10)
+    assert_eq nx_rope_iter_has_next(rit), 1
+    assert_eq nx_rope_iter_next(rit), 78
+    assert_eq nx_rope_iter_next(rit), 69
+    assert_eq nx_rope_iter_next(rit), 88
+    assert_eq nx_rope_iter_next(rit), 85
+    assert_eq nx_rope_iter_next(rit), 83
+    assert_eq nx_rope_iter_has_next(rit), 0
+
+    # 2. Compressed Radix Tree (Patricia Tree) (#81)
+    let radix = nx_radix_new()
+    nx_radix_insert(radix, "stdlib/math", 101)
+    nx_radix_insert(radix, "stdlib/strings", 102)
+    nx_radix_insert(radix, "compiler/nexc", 201)
+    assert_eq nx_radix_count(radix), 3
+    assert_eq nx_radix_get(radix, "stdlib/strings"), 102
+    assert_eq nx_radix_contains(radix, "compiler/nexc"), 1
+    assert_eq nx_radix_prefix_count(radix, "stdlib/"), 2
+
+    # 3. Spatial QuadTree (#83)
+    let qt = nx_quadtree_new(0, 0, 1920, 1080)
+    nx_quadtree_insert(qt, 11, 10, 10, 100, 40)
+    nx_quadtree_insert(qt, 22, 50, 20, 100, 40)
+    nx_quadtree_insert(qt, 33, 500, 500, 80, 80)
+    assert_eq nx_quadtree_count(qt), 3
+    let q_hits = alloc 32
+    let n_pt = nx_quadtree_query_point(qt, 60, 25, q_hits, 4)
+    assert_eq n_pt, 2
+    let n_rect = nx_quadtree_query_rect(qt, 480, 480, 50, 50, q_hits, 4)
+    assert_eq n_rect, 1
+    assert_eq load64 [q_hits + 0], 33
+
+    # 4. Undo / Redo Command History Stack (#85)
+    let ustack = nx_undo_stack_new(32)
+    assert_eq nx_undo_can_undo(ustack), 0
+    nx_undo_push(ustack, 1, 0, "", "fn main")
+    nx_undo_push(ustack, 1, 7, "", " { }")
+    assert_eq nx_undo_can_undo(ustack), 1
+    let u_ent = nx_undo_pop(ustack)
+    assert_eq nx_undo_op_offset(u_ent), 7
+    assert_eq nx_undo_op_new(u_ent), " { }"
+    assert_eq nx_undo_can_redo(ustack), 1
+    let r_ent = nx_redo_pop(ustack)
+    assert_eq nx_undo_op_offset(r_ent), 7
+
+    # 5. Selection Range Model (#86)
+    let sm = nx_sel_model_new()
+    nx_sel_add_range(sm, 10, 20)
+    nx_sel_add_range(sm, 50, 40)
+    assert_eq nx_sel_count(sm), 2
+    assert_eq nx_sel_range_start(sm, 1), 40
+    assert_eq nx_sel_range_end(sm, 1), 50
+    assert_eq nx_sel_contains_offset(sm, 15), 1
+    assert_eq nx_sel_contains_offset(sm, 30), 0
+    nx_sel_set_rectangular(sm, 1, 4, 10, 12)
+    assert_eq nx_sel_is_rectangular(sm), 1
+
+    # 6. Aho-Corasick Multi-Pattern Search (#91)
+    let ac = nx_ac_new()
+    nx_ac_add_pattern(ac, "fn", 1)
+    nx_ac_add_pattern(ac, "let", 2)
+    nx_ac_add_pattern(ac, "return", 3)
+    nx_ac_build(ac)
+    let ac_out = alloc 128
+    let ac_cnt = nx_ac_search(ac, "fn foo { let x = 1; return x }", ac_out, 8)
+    assert_eq ac_cnt, 3
+    assert_eq load64 [ac_out + 0], 0
+    assert_eq load64 [ac_out + 8], 1
+    assert_eq load64 [ac_out + 16], 9
+    assert_eq load64 [ac_out + 24], 2
+
+    # 7. TimSort & IntroSort (#92)
+    let sarr = alloc 64
+    store64 [sarr + 0] 42
+    store64 [sarr + 8] 7
+    store64 [sarr + 16] 99
+    store64 [sarr + 24] 1
+    store64 [sarr + 32] 23
+    nx_timsort(sarr, 5)
+    assert_eq load64 [sarr + 0], 1
+    assert_eq load64 [sarr + 8], 7
+    assert_eq load64 [sarr + 16], 23
+    assert_eq load64 [sarr + 24], 42
+    assert_eq load64 [sarr + 32], 99
+
+    # 8. Slab & Pool Allocators (#97, #98)
+    let slab = nx_slab_new(32, 16)
+    let sp1 = nx_slab_alloc(slab)
+    store64 [sp1 + 0] 777
+    nx_slab_free(slab, sp1)
+    let sp2 = nx_slab_alloc(slab)
+    assert_eq sp1, sp2
+
+    let pool = nx_pool_new(64, 8)
+    let pp1 = nx_pool_acquire(pool)
+    nx_pool_release(pool, pp1)
+    let pp2 = nx_pool_acquire(pool)
+    assert_eq pp1, pp2
+
+    # 9. Myers Diff & Patience Diff (#101, #102)
+    let doc_a = alloc 32
+    let doc_b = alloc 32
+    store64 [doc_a + 0] 10
+    store64 [doc_a + 8] 20
+    store64 [doc_a + 16] 30
+    store64 [doc_b + 0] 10
+    store64 [doc_b + 8] 99
+    store64 [doc_b + 16] 30
+    let m_dist = nx_myers_diff_distance(doc_a, 3, doc_b, 3)
+    assert_eq m_dist, 2
+    assert_eq nx_patience_diff_distance(doc_a, 3, doc_b, 3), 2
+
+    # 10. Text Wrap Measurement Cache (#103)
+    let wcache = nx_wrap_cache_new(64)
+    let pw1 = nx_wrap_cache_measure(wcache, 5, "hello world", 8)
+    assert_eq pw1, 88
+    assert_eq nx_wrap_cache_hits(wcache), 0
+    let pw2 = nx_wrap_cache_measure(wcache, 5, "hello world", 8)
+    assert_eq pw2, 88
+    assert_eq nx_wrap_cache_hits(wcache), 1
+
+    # 11. Sparse Set (#106)
+    let sset = nx_sparse_set_new(128)
+    nx_sparse_set_insert(sset, 45)
+    nx_sparse_set_insert(sset, 12)
+    nx_sparse_set_insert(sset, 88)
+    assert_eq nx_sparse_set_len(sset), 3
+    assert_eq nx_sparse_set_contains(sset, 12), 1
+    nx_sparse_set_remove(sset, 12)
+    assert_eq nx_sparse_set_contains(sset, 12), 0
+    assert_eq nx_sparse_set_contains(sset, 88), 1
+    assert_eq nx_sparse_set_len(sset), 2
+
+    # 12. Persistent Data Structures (#108)
+    let pv0 = nx_pvec_new()
+    let pv1 = nx_pvec_push(pv0, 100)
+    let pv2 = nx_pvec_push(pv1, 200)
+    let pv3 = nx_pvec_set(pv2, 0, 999)
+    assert_eq nx_pvec_len(pv1), 1
+    assert_eq nx_pvec_get(pv2, 0), 100
+    assert_eq nx_pvec_get(pv3, 0), 999
+
+    # 13. Memory-Mapped File Buffer (#109) & Paged Virtual Buffer (#110)
+    nx_write_file("/tmp/nexus_mmap_test.txt", "MMAP_DATA_OK")
+    let mm = nx_mmap_file("/tmp/nexus_mmap_test.txt")
+    assert_eq nx_mmap_len(mm), 12
+    assert_eq nx_mmap_read_byte(mm, 0), 77
+    assert_eq nx_mmap_read_byte(mm, 5), 68
+    nx_munmap_file(mm)
+
+    let pbuf = nx_paged_buf_new(1048576, 4096)
+    assert_eq nx_paged_buf_allocated_pages(pbuf), 0
+    nx_paged_buf_write_byte(pbuf, 500000, 77)
+    assert_eq nx_paged_buf_allocated_pages(pbuf), 1
+    assert_eq nx_paged_buf_read_byte(pbuf, 500000), 77
+
+    # 14. Dynamic String (#111) & Zero-Copy String Slice (#112)
+    let ds = nx_dstr_new("NEXUS")
+    nx_dstr_push_char(ds, 32)
+    nx_dstr_push_str(ds, "Studio")
+    assert_eq nx_dstr_len(ds), 12
+    assert_eq nx_dstr_cstr(ds), "NEXUS Studio"
+
+    let sv = nx_str_slice_view("NEXUS Studio", 6, 6)
+    assert_eq nx_slice_view_len(sv), 6
+    assert_eq nx_slice_view_eq_cstr(sv, "Studio"), 1
+
+    # 15. UTF-16 Converter (#116) & Unicode Segmentation/Width/BiDi (#117–#123)
+    let u16_buf = alloc 64
+    let u8_back = alloc 64
+    let u16_len = nx_utf8_to_utf16("Hi!", u16_buf)
+    assert_eq u16_len, 3
+    let u8_len = nx_utf16_to_utf8(u16_buf, u16_len, u8_back)
+    assert_eq u8_len, 3
+    assert_eq u8_back, "Hi!"
+
+    # Grapheme clusters: 'e' + U+0301 combining acute (\xCC\x81) = 1 grapheme cluster
+    let comb_str = "e\xCC\x81x"
+    assert_eq len comb_str, 4
+    assert_eq nx_utf8_grapheme_count(comb_str), 2
+    assert_eq nx_utf8_next_grapheme(comb_str, 0), 3
+
+    assert_eq nx_utf8_next_word_boundary("hello_world + 42", 0), 11
+    assert_eq nx_utf8_find_line_break("hello world nexus", 0, 12), 12
+    assert_eq nx_str_casefold_eq("NeXuS", "nexus"), 1
+    assert_eq nx_char_is_whitespace(12288), 1
+    assert_eq nx_unicode_char_width(20013), 2
+
+    let bidi_in = alloc 32
+    let bidi_out = alloc 32
+    store64 [bidi_in + 0] 65
+    store64 [bidi_in + 8] 1488
+    store64 [bidi_in + 16] 1489
+    nx_bidi_reorder_visual(bidi_in, 3, bidi_out)
+    assert_eq load64 [bidi_out + 0], 65
+    assert_eq load64 [bidi_out + 8], 1489
+    assert_eq load64 [bidi_out + 16], 1488
+
+    # 16. Regular Expression Engine (#124–#129)
+    let re_word = nx_regex_compile("\\bfor\\b", 0)
+    assert_eq nx_regex_is_match(re_word, "format"), 0
+    assert_eq nx_regex_is_match(re_word, "loop for i"), 1
+    assert_eq nx_regex_match_start(re_word), 5
+
+    let re_cap = nx_regex_compile("fn (?P<name>\\w+)", 0)
+    assert_eq nx_regex_is_match(re_cap, "pub fn calculate()"), 1
+    assert_eq nx_regex_named_group(re_cap, "pub fn calculate()", "name"), "calculate"
+    let rep_str = nx_regex_replace(re_cap, "fn alpha()", "def $1")
+    assert_eq rep_str, "def alpha()"
+
+    let re_look = nx_regex_compile("foo(?=bar)", 0)
+    assert_eq nx_regex_is_match(re_look, "foobaz"), 0
+    assert_eq nx_regex_is_match(re_look, "foobar"), 1
+
+    let re_ml = nx_regex_compile("^line2$", NX_REGEX_MULTILINE)
+    assert_eq nx_regex_is_match(re_ml, "line1\nline2\nline3"), 1
+
+    # 17. Formatters, Case, Jaro-Winkler, Hex, Indentation, Constant-Time, Parsers (#131–#155)
+    assert_eq nx_sprintf_hex(255, 8), "000000ff"
+    assert_eq nx_str_trim_start("   abc  "), "abc  "
+    assert_eq nx_str_trim_end("   abc  "), "   abc"
+    assert_eq nx_str_to_title("hello nexus world"), "Hello Nexus World"
+    assert_eq nx_str_to_snake("myVariableName"), "my_variable_name"
+    assert_eq nx_str_to_kebab("myVariableName"), "my-variable-name"
+    assert_eq nx_str_to_camel("my_variable_name"), "myVariableName"
+
+    let jw = nx_jaro_winkler_score("println", "print")
+    assert_eq jw > 700, 1
+
+    assert_eq nx_hex_dump_row("AB", 2), "41 42"
+    assert_eq nx_detect_indentation("fn a {\n    let x = 1\n}"), 4
+    assert_eq nx_tabs_to_spaces("\tx", 4), "    x"
+    assert_eq nx_spaces_to_tabs("    x", 4), "\tx"
+    assert_eq nx_constant_time_str_eq("secret_token", "secret_token"), 1
+    assert_eq nx_constant_time_str_eq("secret_token", "wrong_token!"), 0
+
+    let num_buf = alloc 32
+    let n_written = nx_itoa_into_buf(-9876, num_buf)
+    assert_eq n_written, 5
+    assert_eq num_buf, "-9876"
+
+    let p_val, p_err = nx_atoi_checked("12345")
+    assert_eq p_val, 12345
+    assert_eq p_err, -1
+
+    let bad_val, bad_err = nx_atoi_checked("12x45")
+    assert_eq bad_err, 2
+
+    print "PHASE_B_COLLECTIONS_TEXT_PASS"
+    call nx_assert_summary
+}
+
+call main

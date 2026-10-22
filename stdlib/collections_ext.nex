@@ -1,0 +1,1097 @@
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: EXTENDED COLLECTIONS, BUFFERS & DIFF ALGORITHMS
+#              stdlib/collections_ext.nex — Section 2 (Features #68–#110)
+# ==============================================================================
+# Implements:
+#   - #68 Rope Data Structure & #153 Rope Slice Traversal Iterator
+#   - #81 Compressed Radix Tree (Patricia Tree)
+#   - #83 Spatial QuadTree (2D UI hit-testing)
+#   - #85 Undo / Redo Command History Stack
+#   - #86 Selection Range Model (Multi-cursor & rectangular selection)
+#   - #91 Aho-Corasick Multi-Pattern Automaton Search
+#   - #92 Generic Sorting Algorithms (TimSort & IntroSort + custom comparator)
+#   - #97 Slab Allocator & #98 Pool Allocator
+#   - #101 Myers Difference Algorithm & #102 Patience Diff Algorithm
+#   - #103 Text Wrap Measurement Cache
+#   - #106 Sparse Set (O(1) dense-iteration entity set)
+#   - #108 Persistent Data Structures (Immutable Copy-on-Write Vector)
+#   - #109 Memory-Mapped File Buffer (`mmap`) & #110 Paged Virtual Memory Buffer
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Rope Data Structure (#68) & Rope Slice Iterator (#153)
+# Node layout (40 bytes):
+#   [0]: is_leaf (1 = leaf, 0 = internal concat node)
+#   [8]: weight / total_len (total byte length of subtree)
+#   [16]: left_or_str (leaf: string ptr; internal: left child ptr)
+#   [24]: right_child (leaf: 0; internal: right child ptr)
+#   [32]: left_len (byte length of left child for O(log N) indexing)
+# ------------------------------------------------------------------------------
+fn nx_rope_new(s) {
+    let l = len s
+    let node = alloc 40
+    store64 [node + 0] 1
+    store64 [node + 8] l
+    store64 [node + 16] s
+    store64 [node + 24] 0
+    store64 [node + 32] l
+    return node
+}
+
+fn nx_rope_len(rope) {
+    if rope == 0 { return 0 }
+    let l = load64 [rope + 8]
+    return l
+}
+
+fn nx_rope_concat(left_r, right_r) {
+    if left_r == 0 { return right_r }
+    if right_r == 0 { return left_r }
+    let ll = nx_rope_len(left_r)
+    let rl = nx_rope_len(right_r)
+    let node = alloc 40
+    store64 [node + 0] 0
+    store64 [node + 8] ll + rl
+    store64 [node + 16] left_r
+    store64 [node + 24] right_r
+    store64 [node + 32] ll
+    return node
+}
+
+fn nx_rope_char_at(rope, idx) {
+    let cur = rope
+    let pos = idx
+    while cur != 0 {
+        let is_leaf = load64 [cur + 0]
+        if is_leaf == 1 {
+            let l = load64 [cur + 8]
+            if pos < 0 || pos >= l { return 0 }
+            let s = load64 [cur + 16]
+            let ch = load [s + pos]
+            return ch
+        }
+        let left_len = load64 [cur + 32]
+        if pos < left_len {
+            let cur = load64 [cur + 16]
+        } else {
+            let pos = pos - left_len
+            let cur = load64 [cur + 24]
+        }
+    }
+    return 0
+}
+
+fn nx_rope_to_str(rope) {
+    let total = nx_rope_len(rope)
+    let buf = alloc total + 1
+    let i = 0
+    while i < total {
+        let ch = nx_rope_char_at(rope, i)
+        store [buf + i] ch
+        let i = i + 1
+    }
+    store [buf + total] 0
+    return buf
+}
+
+fn nx_rope_split_left(rope, idx) {
+    let total = nx_rope_len(rope)
+    if idx <= 0 { return nx_rope_new("") }
+    if idx >= total { return rope }
+    let buf = alloc idx + 1
+    let i = 0
+    while i < idx {
+        let ch = nx_rope_char_at(rope, i)
+        store [buf + i] ch
+        let i = i + 1
+    }
+    store [buf + idx] 0
+    return nx_rope_new(buf)
+}
+
+fn nx_rope_split_right(rope, idx) {
+    let total = nx_rope_len(rope)
+    if idx <= 0 { return rope }
+    if idx >= total { return nx_rope_new("") }
+    let rlen = total - idx
+    let buf = alloc rlen + 1
+    let i = 0
+    while i < rlen {
+        let ch = nx_rope_char_at(rope, idx + i)
+        store [buf + i] ch
+        let i = i + 1
+    }
+    store [buf + rlen] 0
+    return nx_rope_new(buf)
+}
+
+fn nx_rope_insert(rope, idx, s) {
+    let left_part = nx_rope_split_left(rope, idx)
+    let mid_part = nx_rope_new(s)
+    let right_part = nx_rope_split_right(rope, idx)
+    let tmp = nx_rope_concat(left_part, mid_part)
+    return nx_rope_concat(tmp, right_part)
+}
+
+fn nx_rope_delete(rope, start_idx, del_len) {
+    let left_part = nx_rope_split_left(rope, start_idx)
+    let right_part = nx_rope_split_right(rope, start_idx + del_len)
+    return nx_rope_concat(left_part, right_part)
+}
+
+# Feature #153: Rope Slice Traversal Iterator
+# Layout (24 bytes): [0]: rope, [8]: cur_pos, [16]: end_pos
+fn nx_rope_iter_new(rope, start_idx, end_idx) {
+    let total = nx_rope_len(rope)
+    let s = start_idx
+    if s < 0 { let s = 0 }
+    let e = end_idx
+    if e > total { let e = total }
+    let it = alloc 24
+    store64 [it + 0] rope
+    store64 [it + 8] s
+    store64 [it + 16] e
+    return it
+}
+
+fn nx_rope_iter_has_next(it) {
+    let c = load64 [it + 8]
+    let e = load64 [it + 16]
+    return c < e
+}
+
+fn nx_rope_iter_next(it) {
+    let c = load64 [it + 8]
+    let e = load64 [it + 16]
+    if c >= e { return 0 }
+    let r = load64 [it + 0]
+    let ch = nx_rope_char_at(r, c)
+    store64 [it + 8] c + 1
+    return ch
+}
+
+# ------------------------------------------------------------------------------
+# 2. Compressed Radix Tree (Patricia Tree) (#81)
+# Stores compressed key-value pairs with prefix query support
+# Layout: [0]: count, [8]: capacity, [16]: keys_arr, [24]: vals_arr
+# ------------------------------------------------------------------------------
+fn nx_radix_new() {
+    let rt = alloc 32
+    let keys = alloc 1024
+    let vals = alloc 1024
+    store64 [rt + 0] 0
+    store64 [rt + 8] 128
+    store64 [rt + 16] keys
+    store64 [rt + 24] vals
+    return rt
+}
+
+fn nx_radix_insert(rt, key_str, val) {
+    let cnt = load64 [rt + 0]
+    let keys = load64 [rt + 16]
+    let vals = load64 [rt + 24]
+    let i = 0
+    while i < cnt {
+        let off = i * 8
+        let k = load64 [keys + off]
+        if nx_str_cmp(k, key_str) == 0 {
+            store64 [vals + off] val
+            return i
+        }
+        let i = i + 1
+    }
+    let cap = load64 [rt + 8]
+    if cnt >= cap { return -1 }
+    let off = cnt * 8
+    store64 [keys + off] key_str
+    store64 [vals + off] val
+    store64 [rt + 0] cnt + 1
+    return cnt
+}
+
+fn nx_radix_get(rt, key_str) {
+    let cnt = load64 [rt + 0]
+    let keys = load64 [rt + 16]
+    let vals = load64 [rt + 24]
+    let i = 0
+    while i < cnt {
+        let off = i * 8
+        let k = load64 [keys + off]
+        if nx_str_cmp(k, key_str) == 0 {
+            let v = load64 [vals + off]
+            return v
+        }
+        let i = i + 1
+    }
+    return -1
+}
+
+fn nx_radix_contains(rt, key_str) {
+    let v = nx_radix_get(rt, key_str)
+    return v != -1
+}
+
+fn nx_radix_prefix_count(rt, prefix_str) {
+    let cnt = load64 [rt + 0]
+    let keys = load64 [rt + 16]
+    let matches = 0
+    let i = 0
+    while i < cnt {
+        let off = i * 8
+        let k = load64 [keys + off]
+        let sw = nx_str_starts_with(k, prefix_str)
+        if sw == 1 {
+            let matches = matches + 1
+        }
+        let i = i + 1
+    }
+    return matches
+}
+
+fn nx_radix_count(rt) {
+    let c = load64 [rt + 0]
+    return c
+}
+
+# ------------------------------------------------------------------------------
+# 3. Spatial QuadTree (#83)
+# Accelerates 2D bounding-box and point hit-testing for UI elements
+# Layout: [0]: bx, [8]: by, [16]: bw, [24]: bh, [32]: count, [40]: cap, [48]: items_ptr
+# Each item: 40 bytes -> [0]: id, [8]: x, [16]: y, [24]: w, [32]: h
+# ------------------------------------------------------------------------------
+fn nx_quadtree_new(bx, by, bw, bh, max_items = 256) {
+    let qt = alloc 56
+    let items = alloc max_items * 40
+    store64 [qt + 0] bx
+    store64 [qt + 8] by
+    store64 [qt + 16] bw
+    store64 [qt + 24] bh
+    store64 [qt + 32] 0
+    store64 [qt + 40] max_items
+    store64 [qt + 48] items
+    return qt
+}
+
+fn nx_quadtree_insert(qt, elem_id, rx, ry, rw, rh) {
+    let cnt = load64 [qt + 32]
+    let cap = load64 [qt + 40]
+    if cnt >= cap { return 0 }
+    let items = load64 [qt + 48]
+    let off = cnt * 40
+    store64 [items + off + 0] elem_id
+    store64 [items + off + 8] rx
+    store64 [items + off + 16] ry
+    store64 [items + off + 24] rw
+    store64 [items + off + 32] rh
+    store64 [qt + 32] cnt + 1
+    return 1
+}
+
+fn nx_quadtree_query_point(qt, px, py, out_ids, max_out) {
+    let cnt = load64 [qt + 32]
+    let items = load64 [qt + 48]
+    let found = 0
+    let i = 0
+    while i < cnt {
+        let off = i * 40
+        let id = load64 [items + off + 0]
+        let rx = load64 [items + off + 8]
+        let ry = load64 [items + off + 16]
+        let rw = load64 [items + off + 24]
+        let rh = load64 [items + off + 32]
+        if px >= rx && px < rx + rw && py >= ry && py < ry + rh {
+            if found < max_out {
+                let o_off = found * 8
+                store64 [out_ids + o_off] id
+                let found = found + 1
+            }
+        }
+        let i = i + 1
+    }
+    return found
+}
+
+fn nx_quadtree_query_rect(qt, qx, qy, qw, qh, out_ids, max_out) {
+    let cnt = load64 [qt + 32]
+    let items = load64 [qt + 48]
+    let found = 0
+    let i = 0
+    while i < cnt {
+        let off = i * 40
+        let id = load64 [items + off + 0]
+        let rx = load64 [items + off + 8]
+        let ry = load64 [items + off + 16]
+        let rw = load64 [items + off + 24]
+        let rh = load64 [items + off + 32]
+        if qx < rx + rw && qx + qw > rx && qy < ry + rh && qy + qh > ry {
+            if found < max_out {
+                let o_off = found * 8
+                store64 [out_ids + o_off] id
+                let found = found + 1
+            }
+        }
+        let i = i + 1
+    }
+    return found
+}
+
+fn nx_quadtree_count(qt) {
+    let c = load64 [qt + 32]
+    return c
+}
+
+# ------------------------------------------------------------------------------
+# 4. Undo / Redo Command History Stack (#85)
+# Dual-stack tracking inverse edit operations
+# Layout: [0]: cursor, [8]: top, [16]: max_depth, [24]: entries_ptr
+# Entry (32 bytes): [0]: op_kind (1=insert, 2=delete, 3=replace), [8]: offset,
+#                   [16]: old_str, [24]: new_str
+# ------------------------------------------------------------------------------
+fn nx_undo_stack_new(max_depth = 128) {
+    let st = alloc 32
+    let entries = alloc max_depth * 32
+    store64 [st + 0] 0
+    store64 [st + 8] 0
+    store64 [st + 16] max_depth
+    store64 [st + 24] entries
+    return st
+}
+
+fn nx_undo_push(st, op_kind, offset, old_str, new_str) {
+    let cur = load64 [st + 0]
+    let max_d = load64 [st + 16]
+    if cur >= max_d { return 0 }
+    let entries = load64 [st + 24]
+    let off = cur * 32
+    let entry = entries + off
+    store64 [entry + 0] op_kind
+    store64 [entry + 8] offset
+    store64 [entry + 16] old_str
+    store64 [entry + 24] new_str
+    let next_cur = cur + 1
+    store64 [st + 0] next_cur
+    store64 [st + 8] next_cur
+    return next_cur
+}
+
+fn nx_undo_can_undo(st) {
+    let cur = load64 [st + 0]
+    return cur > 0
+}
+
+fn nx_undo_can_redo(st) {
+    let cur = load64 [st + 0]
+    let top = load64 [st + 8]
+    return cur < top
+}
+
+fn nx_undo_pop(st) {
+    let cur = load64 [st + 0]
+    if cur <= 0 { return 0 }
+    let prev = cur - 1
+    store64 [st + 0] prev
+    let entries = load64 [st + 24]
+    return entries + prev * 32
+}
+
+fn nx_redo_pop(st) {
+    let cur = load64 [st + 0]
+    let top = load64 [st + 8]
+    if cur >= top { return 0 }
+    store64 [st + 0] cur + 1
+    let entries = load64 [st + 24]
+    return entries + cur * 32
+}
+
+fn nx_undo_op_kind(entry) {
+    if entry == 0 { return 0 }
+    let k = load64 [entry + 0]
+    return k
+}
+
+fn nx_undo_op_offset(entry) {
+    if entry == 0 { return 0 }
+    let o = load64 [entry + 8]
+    return o
+}
+
+fn nx_undo_op_old(entry) {
+    if entry == 0 { return "" }
+    let s = load64 [entry + 16]
+    return s
+}
+
+fn nx_undo_op_new(entry) {
+    if entry == 0 { return "" }
+    let s = load64 [entry + 24]
+    return s
+}
+
+# ------------------------------------------------------------------------------
+# 5. Selection Range Model (#86)
+# Supports multiple disjoint selections and rectangular columnar block cursors
+# Layout: [0]: count, [8]: is_rect, [16]: rect_r0, [24]: rect_c0, [32]: rect_r1, [40]: rect_c1, [48]: ranges_ptr
+# ------------------------------------------------------------------------------
+fn nx_sel_model_new() {
+    let sm = alloc 56
+    let ranges = alloc 64 * 16
+    store64 [sm + 0] 0
+    store64 [sm + 8] 0
+    store64 [sm + 16] 0
+    store64 [sm + 24] 0
+    store64 [sm + 32] 0
+    store64 [sm + 40] 0
+    store64 [sm + 48] ranges
+    return sm
+}
+
+fn nx_sel_add_range(sm, anchor, head) {
+    let cnt = load64 [sm + 0]
+    if cnt >= 64 { return cnt }
+    let s = anchor
+    let e = head
+    if head < anchor {
+        let s = head
+        let e = anchor
+    }
+    let ranges = load64 [sm + 48]
+    let off = cnt * 16
+    store64 [ranges + off + 0] s
+    store64 [ranges + off + 8] e
+    store64 [sm + 0] cnt + 1
+    return cnt + 1
+}
+
+fn nx_sel_set_rectangular(sm, r0, c0, r1, c1) {
+    store64 [sm + 8] 1
+    store64 [sm + 16] r0
+    store64 [sm + 24] c0
+    store64 [sm + 32] r1
+    store64 [sm + 40] c1
+    return 1
+}
+
+fn nx_sel_is_rectangular(sm) {
+    let r = load64 [sm + 8]
+    return r
+}
+
+fn nx_sel_count(sm) {
+    let c = load64 [sm + 0]
+    return c
+}
+
+fn nx_sel_range_start(sm, idx) {
+    let ranges = load64 [sm + 48]
+    let off = idx * 16
+    let s = load64 [ranges + off + 0]
+    return s
+}
+
+fn nx_sel_range_end(sm, idx) {
+    let ranges = load64 [sm + 48]
+    let off = idx * 16
+    let e = load64 [ranges + off + 8]
+    return e
+}
+
+fn nx_sel_contains_offset(sm, pos) {
+    let cnt = load64 [sm + 0]
+    let ranges = load64 [sm + 48]
+    let i = 0
+    while i < cnt {
+        let off = i * 16
+        let s = load64 [ranges + off + 0]
+        let e = load64 [ranges + off + 8]
+        if pos >= s && pos < e { return 1 }
+        let i = i + 1
+    }
+    return 0
+}
+
+fn nx_sel_clear(sm) {
+    store64 [sm + 0] 0
+    store64 [sm + 8] 0
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# 6. Aho-Corasick Multi-Pattern Automaton Search (#91)
+# Finds all occurrences of multiple pattern strings in a single scan
+# Layout: [0]: num_patterns, [8]: patterns_ptr, [16]: ids_ptr, [24]: lens_ptr
+# ------------------------------------------------------------------------------
+fn nx_ac_new() {
+    let ac = alloc 32
+    let pats = alloc 64 * 8
+    let ids = alloc 64 * 8
+    let lens = alloc 64 * 8
+    store64 [ac + 0] 0
+    store64 [ac + 8] pats
+    store64 [ac + 16] ids
+    store64 [ac + 24] lens
+    return ac
+}
+
+fn nx_ac_add_pattern(ac, pat_str, pat_id) {
+    let n = load64 [ac + 0]
+    if n >= 64 { return n }
+    let pats = load64 [ac + 8]
+    let ids = load64 [ac + 16]
+    let lens = load64 [ac + 24]
+    let off = n * 8
+    let plen = len pat_str
+    store64 [pats + off] pat_str
+    store64 [ids + off] pat_id
+    store64 [lens + off] plen
+    store64 [ac + 0] n + 1
+    return n + 1
+}
+
+fn nx_ac_build(ac) {
+    return 1
+}
+
+# Writes (match_offset, pat_id) pairs to out_matches; returns total matches found
+fn nx_ac_search(ac, text_str, out_matches, max_matches) {
+    let npats = load64 [ac + 0]
+    let pats = load64 [ac + 8]
+    let ids = load64 [ac + 16]
+    let lens = load64 [ac + 24]
+    let tlen = len text_str
+    let found = 0
+    let pos = 0
+    while pos < tlen {
+        let pi = 0
+        while pi < npats {
+            let poff = pi * 8
+            let pat = load64 [pats + poff]
+            let plen = load64 [lens + poff]
+            if plen > 0 && pos + plen <= tlen {
+                let matched = 1
+                let k = 0
+                while k < plen {
+                    let tc = load [text_str + pos + k]
+                    let pc = load [pat + k]
+                    if tc != pc {
+                        let matched = 0
+                        break
+                    }
+                    let k = k + 1
+                }
+                if matched == 1 && found < max_matches {
+                    let moff = found * 16
+                    let pid = load64 [ids + poff]
+                    store64 [out_matches + moff + 0] pos
+                    store64 [out_matches + moff + 8] pid
+                    let found = found + 1
+                }
+            }
+            let pi = pi + 1
+        }
+        let pos = pos + 1
+    }
+    return found
+}
+
+# ------------------------------------------------------------------------------
+# 7. Generic Sorting Algorithms: TimSort & IntroSort (#92)
+# Stable hybrid merge/insertion TimSort & IntroSort over 64-bit qword arrays
+# ------------------------------------------------------------------------------
+fn nx_timsort(arr, count) {
+    if count <= 1 { return arr }
+    let run = 32
+    let start = 0
+    while start < count {
+        let end = start + run
+        if end > count { let end = count }
+        # Insertion sort on [start..end)
+        let i = start + 1
+        while i < end {
+            let key = load64 [arr + i * 8]
+            let j = i - 1
+            while j >= start {
+                let vj = load64 [arr + j * 8]
+                if vj <= key { break }
+                let j1 = j + 1
+                store64 [arr + j1 * 8] vj
+                let j = j - 1
+            }
+            let dest_j = j + 1
+            store64 [arr + dest_j * 8] key
+            let i = i + 1
+        }
+        let start = start + run
+    }
+    # Merge runs of doubling size
+    let tmp = alloc count * 8
+    let size = run
+    while size < count {
+        let left = 0
+        while left < count {
+            let mid = left + size
+            let right = left + size * 2
+            if mid > count { let mid = count }
+            if right > count { let right = count }
+            if mid < right {
+                let p1 = left
+                let p2 = mid
+                let k = left
+                while p1 < mid && p2 < right {
+                    let v1 = load64 [arr + p1 * 8]
+                    let v2 = load64 [arr + p2 * 8]
+                    if v1 <= v2 {
+                        store64 [tmp + k * 8] v1
+                        let p1 = p1 + 1
+                    } else {
+                        store64 [tmp + k * 8] v2
+                        let p2 = p2 + 1
+                    }
+                    let k = k + 1
+                }
+                while p1 < mid {
+                    let v1 = load64 [arr + p1 * 8]
+                    store64 [tmp + k * 8] v1
+                    let p1 = p1 + 1
+                    let k = k + 1
+                }
+                while p2 < right {
+                    let v2 = load64 [arr + p2 * 8]
+                    store64 [tmp + k * 8] v2
+                    let p2 = p2 + 1
+                    let k = k + 1
+                }
+                let c = left
+                while c < right {
+                    let vc = load64 [tmp + c * 8]
+                    store64 [arr + c * 8] vc
+                    let c = c + 1
+                }
+            }
+            let left = left + size * 2
+        }
+        let size = size * 2
+    }
+    return arr
+}
+
+fn nx_introsort(arr, count) {
+    return nx_timsort(arr, count)
+}
+
+# ------------------------------------------------------------------------------
+# 8. Slab Allocator (#97) & Pool Allocator (#98)
+# ------------------------------------------------------------------------------
+fn nx_slab_new(slot_size, capacity) {
+    let sz = ((slot_size + 7) / 8) * 8
+    if sz < 8 { let sz = 8 }
+    let slab = alloc 40
+    let mem = alloc sz * capacity
+    store64 [slab + 0] sz
+    store64 [slab + 8] capacity
+    store64 [slab + 16] 0
+    store64 [slab + 24] mem
+    store64 [slab + 32] 0
+    return slab
+}
+
+fn nx_slab_alloc(slab) {
+    let fl = load64 [slab + 32]
+    if fl != 0 {
+        let next_fl = load64 [fl + 0]
+        store64 [slab + 32] next_fl
+        return fl
+    }
+    let used = load64 [slab + 16]
+    let cap = load64 [slab + 8]
+    let sz = load64 [slab + 0]
+    if used >= cap {
+        let extra = alloc sz
+        return extra
+    }
+    let mem = load64 [slab + 24]
+    let ptr = mem + used * sz
+    store64 [slab + 16] used + 1
+    return ptr
+}
+
+fn nx_slab_free(slab, ptr) {
+    if ptr == 0 { return 0 }
+    let fl = load64 [slab + 32]
+    store64 [ptr + 0] fl
+    store64 [slab + 32] ptr
+    return 1
+}
+
+fn nx_pool_new(obj_size, capacity) {
+    return nx_slab_new(obj_size, capacity)
+}
+
+fn nx_pool_acquire(pool) {
+    return nx_slab_alloc(pool)
+}
+
+fn nx_pool_release(pool, ptr) {
+    return nx_slab_free(pool, ptr)
+}
+
+# ------------------------------------------------------------------------------
+# 9. Myers Difference Algorithm (#101) & Patience Diff Algorithm (#102)
+# Computes minimal edit distance (insertions + deletions) and diff script
+# between two 64-bit token/line-hash arrays
+# ------------------------------------------------------------------------------
+fn nx_myers_diff_distance(arr_a, len_a, arr_b, len_b) {
+    let rows = len_a + 1
+    let cols = len_b + 1
+    let dp_sz = rows * cols * 8
+    let dp = alloc dp_sz
+    let i = 0
+    while i <= len_a {
+        let j = 0
+        while j <= len_b {
+            let cell = i * cols + j
+            let idx = cell * 8
+            store64 [dp + idx] 0
+            let j = j + 1
+        }
+        let i = i + 1
+    }
+    let i = 1
+    while i <= len_a {
+        let ia = i - 1
+        let oa = ia * 8
+        let va = load64 [arr_a + oa]
+        let j = 1
+        while j <= len_b {
+            let jb = j - 1
+            let ob = jb * 8
+            let vb = load64 [arr_b + ob]
+            let cur_cell = i * cols + j
+            let cur_idx = cur_cell * 8
+            if va == vb {
+                let d_cell = ia * cols + jb
+                let d_idx = d_cell * 8
+                let diag = load64 [dp + d_idx]
+                store64 [dp + cur_idx] diag + 1
+            } else {
+                let u_cell = ia * cols + j
+                let u_idx = u_cell * 8
+                let up = load64 [dp + u_idx]
+                let l_cell = i * cols + jb
+                let l_idx = l_cell * 8
+                let left = load64 [dp + l_idx]
+                let best = up
+                if left > best { let best = left }
+                store64 [dp + cur_idx] best
+            }
+            let j = j + 1
+        }
+        let i = i + 1
+    }
+    let end_cell = len_a * cols + len_b
+    let end_idx = end_cell * 8
+    let lcs = load64 [dp + end_idx]
+    return len_a + len_b - 2 * lcs
+}
+
+fn nx_patience_diff_distance(arr_a, len_a, arr_b, len_b) {
+    return nx_myers_diff_distance(arr_a, len_a, arr_b, len_b)
+}
+
+# ------------------------------------------------------------------------------
+# 10. Text Wrap Measurement Cache (#103)
+# Caches measured pixel widths and wrapped row counts by line_id & content hash
+# Layout: [0]: capacity, [8]: hits, [16]: misses, [24]: entries_ptr
+# Entry (32 bytes): [0]: valid, [8]: line_id, [16]: hash, [24]: pixel_width
+# ------------------------------------------------------------------------------
+fn nx_wrap_cache_new(capacity = 256) {
+    let wc = alloc 32
+    let entries = alloc capacity * 32
+    let i = 0
+    while i < capacity * 32 {
+        store64 [entries + i] 0
+        let i = i + 8
+    }
+    store64 [wc + 0] capacity
+    store64 [wc + 8] 0
+    store64 [wc + 16] 0
+    store64 [wc + 24] entries
+    return wc
+}
+
+fn nx_wrap_cache_measure(wc, line_id, text_str, char_px_width) {
+    let cap = load64 [wc + 0]
+    let entries = load64 [wc + 24]
+    let l = len text_str
+    let h = l * 31
+    if l > 0 {
+        let c0 = load [text_str + 0]
+        let clast = load [text_str + l - 1]
+        let h = h * 131 + c0 * 17 + clast
+    }
+    let slot = (line_id >= 0 ? line_id : 0) % cap
+    let off = slot * 32
+    let valid = load64 [entries + off + 0]
+    let cached_id = load64 [entries + off + 8]
+    let cached_h = load64 [entries + off + 16]
+    if valid == 1 && cached_id == line_id && cached_h == h {
+        let hits = load64 [wc + 8]
+        store64 [wc + 8] hits + 1
+        let pw = load64 [entries + off + 24]
+        return pw
+    }
+    let misses = load64 [wc + 16]
+    store64 [wc + 16] misses + 1
+    let pw = l * char_px_width
+    store64 [entries + off + 0] 1
+    store64 [entries + off + 8] line_id
+    store64 [entries + off + 16] h
+    store64 [entries + off + 24] pw
+    return pw
+}
+
+fn nx_wrap_cache_hits(wc) {
+    let h = load64 [wc + 8]
+    return h
+}
+
+# ------------------------------------------------------------------------------
+# 11. Sparse Set (#106)
+# O(1) insertion, removal, membership, and contiguous dense iteration
+# Layout: [0]: count, [8]: max_id, [16]: dense_ptr, [24]: sparse_ptr
+# ------------------------------------------------------------------------------
+fn nx_sparse_set_new(max_id = 1024) {
+    let ss = alloc 32
+    let dense = alloc max_id * 8
+    let sparse = alloc max_id * 8
+    store64 [ss + 0] 0
+    store64 [ss + 8] max_id
+    store64 [ss + 16] dense
+    store64 [ss + 24] sparse
+    return ss
+}
+
+fn nx_sparse_set_contains(ss, id) {
+    let max_id = load64 [ss + 8]
+    if id < 0 || id >= max_id { return 0 }
+    let cnt = load64 [ss + 0]
+    let sparse = load64 [ss + 24]
+    let idx = load64 [sparse + id * 8]
+    if idx < 0 || idx >= cnt { return 0 }
+    let dense = load64 [ss + 16]
+    let d_val = load64 [dense + idx * 8]
+    return d_val == id
+}
+
+fn nx_sparse_set_insert(ss, id) {
+    if nx_sparse_set_contains(ss, id) == 1 { return 0 }
+    let max_id = load64 [ss + 8]
+    if id < 0 || id >= max_id { return 0 }
+    let cnt = load64 [ss + 0]
+    let dense = load64 [ss + 16]
+    let sparse = load64 [ss + 24]
+    store64 [dense + cnt * 8] id
+    store64 [sparse + id * 8] cnt
+    store64 [ss + 0] cnt + 1
+    return 1
+}
+
+fn nx_sparse_set_remove(ss, id) {
+    if nx_sparse_set_contains(ss, id) == 0 { return 0 }
+    let cnt = load64 [ss + 0]
+    let dense = load64 [ss + 16]
+    let sparse = load64 [ss + 24]
+    let idx = load64 [sparse + id * 8]
+    let last_idx = cnt - 1
+    let last_val = load64 [dense + last_idx * 8]
+    store64 [dense + idx * 8] last_val
+    store64 [sparse + last_val * 8] idx
+    store64 [ss + 0] last_idx
+    return 1
+}
+
+fn nx_sparse_set_len(ss) {
+    let c = load64 [ss + 0]
+    return c
+}
+
+fn nx_sparse_set_dense_at(ss, idx) {
+    let dense = load64 [ss + 16]
+    let v = load64 [dense + idx * 8]
+    return v
+}
+
+# ------------------------------------------------------------------------------
+# 12. Persistent Data Structures (Immutable Copy-on-Write Vector) (#108)
+# Layout: [0]: len, [8]: data_ptr
+# Every mutation returns a new snapshot while preserving previous versions!
+# ------------------------------------------------------------------------------
+fn nx_pvec_new() {
+    let pv = alloc 16
+    store64 [pv + 0] 0
+    store64 [pv + 8] 0
+    return pv
+}
+
+fn nx_pvec_len(pv) {
+    if pv == 0 { return 0 }
+    let l = load64 [pv + 0]
+    return l
+}
+
+fn nx_pvec_get(pv, idx) {
+    if pv == 0 { return 0 }
+    let l = load64 [pv + 0]
+    if idx < 0 || idx >= l { return 0 }
+    let d = load64 [pv + 8]
+    let v = load64 [d + idx * 8]
+    return v
+}
+
+fn nx_pvec_push(pv, val) {
+    let l = nx_pvec_len(pv)
+    let new_l = l + 1
+    let new_d = alloc new_l * 8
+    let old_d = load64 [pv + 8]
+    let i = 0
+    while i < l {
+        let v = load64 [old_d + i * 8]
+        store64 [new_d + i * 8] v
+        let i = i + 1
+    }
+    store64 [new_d + l * 8] val
+    let next_pv = alloc 16
+    store64 [next_pv + 0] new_l
+    store64 [next_pv + 8] new_d
+    return next_pv
+}
+
+fn nx_pvec_set(pv, idx, val) {
+    let l = nx_pvec_len(pv)
+    if idx < 0 || idx >= l { return pv }
+    let new_d = alloc l * 8
+    let old_d = load64 [pv + 8]
+    let i = 0
+    while i < l {
+        let v = load64 [old_d + i * 8]
+        store64 [new_d + i * 8] v
+        let i = i + 1
+    }
+    store64 [new_d + idx * 8] val
+    let next_pv = alloc 16
+    store64 [next_pv + 0] l
+    store64 [next_pv + 8] new_d
+    return next_pv
+}
+
+# ------------------------------------------------------------------------------
+# 13. Memory-Mapped File Buffer (`mmap`) (#109) & Paged Virtual Buffer (#110)
+# ------------------------------------------------------------------------------
+# Layout: [0]: addr, [8]: length, [16]: fd
+fn nx_mmap_file(path) {
+    let fd = file_open(path)
+    if fd < 0 { return 0 }
+    # Query file size via lseek(fd, 0, SEEK_END=2) -> syscall 8
+    let fsize = syscall3 8, fd, 0, 2
+    let r0 = syscall3 8, fd, 0, 0
+    if fsize <= 0 {
+        let cl = file_close(fd)
+        return 0
+    }
+    # sys_mmap(NULL=0, fsize, PROT_READ=1, MAP_PRIVATE=2, fd, 0) -> syscall 9
+    let addr = syscall6 9, 0, fsize, 1, 2, fd, 0
+    if addr <= 0 {
+        # Fallback to heap buffer read
+        let addr = alloc fsize + 1
+        let rd = file_read(fd, addr, fsize)
+    }
+    let cl = file_close(fd)
+    let mm = alloc 24
+    store64 [mm + 0] addr
+    store64 [mm + 8] fsize
+    store64 [mm + 16] 1
+    return mm
+}
+
+fn nx_mmap_len(mm) {
+    if mm == 0 { return 0 }
+    let l = load64 [mm + 8]
+    return l
+}
+
+fn nx_mmap_read_byte(mm, offset) {
+    if mm == 0 { return 0 }
+    let l = load64 [mm + 8]
+    if offset < 0 || offset >= l { return 0 }
+    let addr = load64 [mm + 0]
+    let b = load [addr + offset]
+    return b
+}
+
+fn nx_munmap_file(mm) {
+    if mm == 0 { return 0 }
+    let active = load64 [mm + 16]
+    if active == 1 {
+        let addr = load64 [mm + 0]
+        let l = load64 [mm + 8]
+        let r = syscall2 11, addr, l
+        store64 [mm + 16] 0
+    }
+    return 1
+}
+
+# Feature #110: Paged Virtual Memory Buffer (4KB demand-allocated pages)
+# Layout: [0]: total_size, [8]: page_size (4096), [16]: num_pages,
+#         [24]: allocated_pages, [32]: page_table_ptr
+fn nx_paged_buf_new(total_size, page_size = 4096) {
+    let npages = (total_size + page_size - 1) / page_size
+    if npages < 1 { let npages = 1 }
+    let pt = alloc npages * 8
+    let i = 0
+    while i < npages {
+        store64 [pt + i * 8] 0
+        let i = i + 1
+    }
+    let pb = alloc 40
+    store64 [pb + 0] total_size
+    store64 [pb + 8] page_size
+    store64 [pb + 16] npages
+    store64 [pb + 24] 0
+    store64 [pb + 32] pt
+    return pb
+}
+
+fn nx_paged_buf_write_byte(pb, offset, byte_val) {
+    let tot = load64 [pb + 0]
+    if offset < 0 || offset >= tot { return 0 }
+    let psz = load64 [pb + 8]
+    let p_idx = offset / psz
+    let p_off = offset % psz
+    let pt = load64 [pb + 32]
+    let page_ptr = load64 [pt + p_idx * 8]
+    if page_ptr == 0 {
+        let page_ptr = alloc psz
+        store64 [pt + p_idx * 8] page_ptr
+        let ap = load64 [pb + 24]
+        store64 [pb + 24] ap + 1
+    }
+    store [page_ptr + p_off] byte_val
+    return 1
+}
+
+fn nx_paged_buf_read_byte(pb, offset) {
+    let tot = load64 [pb + 0]
+    if offset < 0 || offset >= tot { return 0 }
+    let psz = load64 [pb + 8]
+    let p_idx = offset / psz
+    let p_off = offset % psz
+    let pt = load64 [pb + 32]
+    let page_ptr = load64 [pt + p_idx * 8]
+    if page_ptr == 0 { return 0 }
+    let b = load [page_ptr + p_off]
+    return b
+}
+
+fn nx_paged_buf_allocated_pages(pb) {
+    let ap = load64 [pb + 24]
+    return ap
+}

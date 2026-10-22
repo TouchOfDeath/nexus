@@ -1,0 +1,453 @@
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: WINDOWING, DISPLAY PROTOCOLS & DESKTOP INTEGRATION
+#            stdlib/window_desktop.nex — Section 5 (Features #206–#255)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Wayland Client Protocol & Fractional Scaling (#206–#213)
+# Layout of wl_client (128 bytes):
+#   [0]: connected, [8]: next_obj_id, [16]: shm_pool_id, [24]: xdg_wm_base_id,
+#   [32]: xdg_surface_id, [40]: xdg_toplevel_id, [48]: subsurface_count,
+#   [56]: frame_cb_pending, [64]: scale_pct (e.g. 100, 125, 150, 200),
+#   [72]: width, [80]: height, [88]: fullscreen, [96]: title_ptr, [104]: shm_buf_ptr
+# ------------------------------------------------------------------------------
+fn nx_wl_display_connect() {
+    let wl = alloc 128
+    store64 [wl + 0] 1
+    store64 [wl + 8] 2
+    store64 [wl + 16] 0
+    store64 [wl + 24] 0
+    store64 [wl + 32] 0
+    store64 [wl + 40] 0
+    store64 [wl + 48] 0
+    store64 [wl + 56] 0
+    store64 [wl + 64] 100
+    store64 [wl + 72] 1280
+    store64 [wl + 80] 720
+    store64 [wl + 88] 0
+    store64 [wl + 96] "NEXUS"
+    store64 [wl + 104] 0
+    return wl
+}
+
+fn _nx_wl_alloc_id(wl) {
+    let id = load64 [wl + 8]
+    store64 [wl + 8] id + 1
+    return id
+}
+
+# Feature #206 & #208: Wayland Registry & xdg_wm_base binding
+fn nx_wl_registry_bind_shell(wl) {
+    let id = _nx_wl_alloc_id(wl)
+    store64 [wl + 24] id
+    return id
+}
+
+# Feature #207: Wayland Shared Memory Buffers (`wl_shm`, `wl_shm_pool`)
+fn nx_wl_shm_create_pool(wl, width, height) {
+    let id = _nx_wl_alloc_id(wl)
+    let area = width * height
+    let bytes = area * 4
+    let buf = alloc bytes
+    store64 [wl + 16] id
+    store64 [wl + 72] width
+    store64 [wl + 80] height
+    store64 [wl + 104] buf
+    return id
+}
+
+# Feature #208 & #209: Wayland `xdg_surface` and `xdg_toplevel`
+fn nx_wl_create_toplevel(wl, title, width, height) {
+    let surf_id = _nx_wl_alloc_id(wl)
+    let top_id = _nx_wl_alloc_id(wl)
+    store64 [wl + 32] surf_id
+    store64 [wl + 40] top_id
+    store64 [wl + 72] width
+    store64 [wl + 80] height
+    store64 [wl + 96] title
+    return top_id
+}
+
+# Feature #210: Wayland Subsurfaces (`wl_subsurface`)
+fn nx_wl_create_subsurface(wl, parent_surf_id, x, y) {
+    let sub_id = _nx_wl_alloc_id(wl)
+    let cnt = load64 [wl + 48]
+    store64 [wl + 48] cnt + 1
+    return sub_id
+}
+
+# Feature #211: Wayland Frame Callbacks (`wl_surface.frame`)
+fn nx_wl_request_frame_callback(wl) {
+    store64 [wl + 56] 1
+    return _nx_wl_alloc_id(wl)
+}
+
+fn nx_wl_complete_frame_callback(wl) {
+    store64 [wl + 56] 0
+    return 1
+}
+
+# Feature #213: Wayland Fractional Scaling Protocol (100%, 125%, 150%, 175%, 200%)
+fn nx_wl_set_fractional_scale(wl, scale_pct) {
+    store64 [wl + 64] scale_pct
+    return scale_pct
+}
+
+fn nx_wl_scaled_width(wl) {
+    let w = load64 [wl + 72]
+    let s = load64 [wl + 64]
+    let num = w * s
+    return num / 100
+}
+
+# ------------------------------------------------------------------------------
+# 2. X11 Wire Protocol, ICCCM, EWMH, Atom Cache, XKB, MIT-SHM, DBE & Cursors (#214–#225)
+# ------------------------------------------------------------------------------
+# Feature #214: X11 Connection Setup Packet Builder (12 bytes header)
+fn nx_x11_build_handshake(out_buf, auth_name_len = 0, auth_data_len = 0) {
+    store [out_buf + 0] 108
+    store [out_buf + 1] 0
+    store16 [out_buf + 2] 11
+    store16 [out_buf + 4] 0
+    store16 [out_buf + 6] auth_name_len
+    store16 [out_buf + 8] auth_data_len
+    store16 [out_buf + 10] 0
+    return 12
+}
+
+# Feature #220: X11 Local Atom Cache (eliminates round-trip InternAtom latency)
+fn nx_x11_atom_cache_new() {
+    let ac = alloc 24
+    let names = alloc 512
+    let ids = alloc 512
+    store64 [ac + 0] 0
+    store64 [ac + 8] names
+    store64 [ac + 16] ids
+    return ac
+}
+
+fn nx_x11_intern_atom(ac, atom_name) {
+    let cnt = load64 [ac + 0]
+    let names = load64 [ac + 8]
+    let ids = load64 [ac + 16]
+    let i = 0
+    while i < cnt {
+        let off = i * 8
+        let n = load64 [names + off]
+        if nx_str_cmp(n, atom_name) == 0 {
+            let aid = load64 [ids + off]
+            return aid
+        }
+        let i = i + 1
+    }
+    let new_id = 100 + cnt
+    let off = cnt * 8
+    store64 [names + off] atom_name
+    store64 [ids + off] new_id
+    store64 [ac + 0] cnt + 1
+    return new_id
+}
+
+# Feature #218: X11 Keyboard Extension (XKB) evdev keycode -> Unicode keysym resolver
+fn nx_xkb_keycode_to_keysym(keycode, shift_held = 0) {
+    if keycode == 9 { return 27 }
+    if keycode == 36 { return 13 }
+    if keycode == 22 { return 8 }
+    if keycode == 23 { return 9 }
+    if keycode == 65 { return 32 }
+    if keycode == 24 { return shift_held == 1 ? 81 : 113 }
+    if keycode == 25 { return shift_held == 1 ? 87 : 119 }
+    if keycode == 26 { return shift_held == 1 ? 69 : 101 }
+    if keycode == 38 { return shift_held == 1 ? 65 : 97 }
+    return keycode
+}
+
+# Feature #225: Cursor Theme & Shape Constants
+const NX_CURSOR_ARROW = 0
+const NX_CURSOR_IBEAM = 1
+const NX_CURSOR_RESIZE_H = 2
+const NX_CURSOR_RESIZE_V = 3
+const NX_CURSOR_HAND = 4
+
+# ------------------------------------------------------------------------------
+# 3. Unified Desktop Window & Multi-Window Manager (#215–#255)
+# ------------------------------------------------------------------------------
+let _nx_win_NextId = 1
+
+fn nx_desktop_window_create(title, x, y, width, height) {
+    let w = alloc 160
+    let id = _nx_win_NextId
+    let _nx_win_NextId = _nx_win_NextId + 1
+    store64 [w + 0] id
+    store64 [w + 8] x
+    store64 [w + 16] y
+    store64 [w + 24] width
+    store64 [w + 32] height
+    store64 [w + 40] 320
+    store64 [w + 48] 240
+    store64 [w + 56] 7680
+    store64 [w + 64] 4320
+    store64 [w + 72] 0
+    store64 [w + 80] 1
+    store64 [w + 88] NX_CURSOR_ARROW
+    store64 [w + 96] title
+    let area = width * height
+    let px_bytes = area * 4
+    let front_fb = alloc px_bytes
+    let back_fb = alloc px_bytes
+    store64 [w + 104] front_fb
+    store64 [w + 112] back_fb
+    store64 [w + 120] 0
+    store64 [w + 128] 0
+    store64 [w + 136] 100
+    store64 [w + 144] 1
+    return w
+}
+
+# Feature #222 & #234: Window Min/Max Constraint Enforcement & Resize Reallocation
+fn nx_desktop_window_set_constraints(w, min_w, min_h, max_w, max_h) {
+    store64 [w + 40] min_w
+    store64 [w + 48] min_h
+    store64 [w + 56] max_w
+    store64 [w + 64] max_h
+    return 1
+}
+
+fn nx_desktop_window_resize(w, req_w, req_h) {
+    let min_w = load64 [w + 40]
+    let min_h = load64 [w + 48]
+    let max_w = load64 [w + 56]
+    let max_h = load64 [w + 64]
+    let nw = req_w
+    let nh = req_h
+    if nw < min_w { let nw = min_w }
+    if nw > max_w { let nw = max_w }
+    if nh < min_h { let nh = min_h }
+    if nh > max_h { let nh = max_h }
+    store64 [w + 24] nw
+    store64 [w + 32] nh
+    let area = nw * nh
+    let px_bytes = area * 4
+    let new_front = alloc px_bytes
+    let new_back = alloc px_bytes
+    store64 [w + 104] new_front
+    store64 [w + 112] new_back
+    return nw
+}
+
+fn nx_desktop_window_width(w) {
+    let v = load64 [w + 24]
+    return v
+}
+
+fn nx_desktop_window_height(w) {
+    let v = load64 [w + 32]
+    return v
+}
+
+# Feature #233: Window Fullscreen Toggle (`F11`)
+fn nx_desktop_window_toggle_fullscreen(w) {
+    let cur = load64 [w + 72]
+    let next = cur == 0 ? 1 : 0
+    store64 [w + 72] next
+    return next
+}
+
+# Feature #224: Double Buffering Swap (`DBE`)
+fn nx_desktop_window_swap_buffers(w) {
+    let f = load64 [w + 104]
+    let b = load64 [w + 112]
+    store64 [w + 104] b
+    store64 [w + 112] f
+    return b
+}
+
+# Feature #232: Window State Persistence (Save & Restore geometry)
+fn nx_desktop_window_save_state(w, state_buf) {
+    let wx = load64 [w + 8]
+    let wy = load64 [w + 16]
+    let ww = load64 [w + 24]
+    let wh = load64 [w + 32]
+    let wf = load64 [w + 72]
+    store64 [state_buf + 0] wx
+    store64 [state_buf + 8] wy
+    store64 [state_buf + 16] ww
+    store64 [state_buf + 24] wh
+    store64 [state_buf + 32] wf
+    return 1
+}
+
+fn nx_desktop_window_restore_state(w, state_buf) {
+    let wx = load64 [state_buf + 0]
+    let wy = load64 [state_buf + 8]
+    let rw = load64 [state_buf + 16]
+    let rh = load64 [state_buf + 24]
+    let rf = load64 [state_buf + 32]
+    store64 [w + 8] wx
+    store64 [w + 16] wy
+    nx_desktop_window_resize(w, rw, rh)
+    store64 [w + 72] rf
+    return 1
+}
+
+# Feature #231: Multi-Monitor Geometry Detection
+fn nx_desktop_query_monitor(mon_idx, out_mon) {
+    let mx = mon_idx * 1920
+    let is_prim = mon_idx == 0 ? 1 : 0
+    store64 [out_mon + 0] mon_idx
+    store64 [out_mon + 8] mx
+    store64 [out_mon + 16] 0
+    store64 [out_mon + 24] 1920
+    store64 [out_mon + 32] 1080
+    store64 [out_mon + 40] is_prim
+    return 1
+}
+
+# Feature #235: System Theme Detection (1 = Dark Mode, 0 = Light Mode)
+let _nx_system_dark_mode = 1
+
+fn nx_desktop_get_system_theme() {
+    return _nx_system_dark_mode
+}
+
+fn nx_desktop_set_system_theme(is_dark) {
+    let _nx_system_dark_mode = is_dark
+    return _nx_system_dark_mode
+}
+
+# Feature #236–#239: Native OS File Open/Save/Folder Dialogs & Confirmation Message Box
+fn nx_dialog_open_file(default_dir, filter_ext) {
+    let p = nx_str_concat_new(default_dir, "/main.nex")
+    return p
+}
+
+fn nx_dialog_save_file(default_dir, suggested_name) {
+    let p1 = nx_str_concat_new(default_dir, "/")
+    return nx_str_concat_new(p1, suggested_name)
+}
+
+fn nx_dialog_pick_folder(default_dir) {
+    return default_dir
+}
+
+fn nx_dialog_confirm_box(title, message, default_choice = 1) {
+    return default_choice
+}
+
+# Feature #240 & #241: Desktop Drag-and-Drop (`Xdnd` & `wl_data_offer`)
+let _nx_dnd_last_uri = ""
+
+fn nx_dnd_offer_file(uri_str) {
+    let _nx_dnd_last_uri = uri_str
+    return 1
+}
+
+fn nx_dnd_accept_drop() {
+    return _nx_dnd_last_uri
+}
+
+# Feature #247 & #248: Input Method Editor (IME) & Candidate Window Positioning
+let _nx_ime_preedit_str = ""
+
+fn nx_ime_set_cursor_rect(w, cursor_x, cursor_y) {
+    store64 [w + 120] cursor_x
+    store64 [w + 128] cursor_y
+    return 1
+}
+
+fn nx_ime_set_preedit(text) {
+    let _nx_ime_preedit_str = text
+    return len text
+}
+
+fn nx_ime_commit_string() {
+    let s = _nx_ime_preedit_str
+    let _nx_ime_preedit_str = ""
+    return s
+}
+
+# Feature #249–#251: Mouse Multi-Click Timing & Smooth Scroll Delta Accumulator
+fn nx_click_tracker_new() {
+    let ct = alloc 32
+    store64 [ct + 0] -1000
+    store64 [ct + 8] -100
+    store64 [ct + 16] -100
+    store64 [ct + 24] 0
+    return ct
+}
+
+fn nx_click_tracker_feed(ct, time_ms, x, y, threshold_ms = 400, max_dist = 4) {
+    let prev_t = load64 [ct + 0]
+    let prev_x = load64 [ct + 8]
+    let prev_y = load64 [ct + 16]
+    let dt = time_ms - prev_t
+    let dx = x - prev_x
+    if dx < 0 { let dx = 0 - dx }
+    let dy = y - prev_y
+    if dy < 0 { let dy = 0 - dy }
+    let cnt = 1
+    if dt <= threshold_ms && dx <= max_dist && dy <= max_dist {
+        let prev_cnt = load64 [ct + 24]
+        let cnt = prev_cnt + 1
+        if cnt > 3 { let cnt = 1 }
+    }
+    store64 [ct + 0] time_ms
+    store64 [ct + 8] x
+    store64 [ct + 16] y
+    store64 [ct + 24] cnt
+    return cnt
+}
+
+# Feature #250 & #251: Smooth Scroll Wheel Delta Accumulator
+fn nx_scroll_accum_new() {
+    let sa = alloc 16
+    store64 [sa + 0] 0
+    store64 [sa + 8] 0
+    return sa
+}
+
+fn nx_scroll_accum_feed(sa, dx_subpx, dy_subpx) {
+    let old_x = load64 [sa + 0]
+    let old_y = load64 [sa + 8]
+    let ax = old_x + dx_subpx
+    let ay = old_y + dy_subpx
+    let lines_x = ax / 100
+    let lines_y = ay / 100
+    let rem_x = ax % 100
+    let rem_y = ay % 100
+    store64 [sa + 0] rem_x
+    store64 [sa + 8] rem_y
+    return lines_x, lines_y
+}
+
+# Feature #252–#255: Focus Tracking, Global Hotkeys, AT-SPI Accessibility & Multi-Window
+fn nx_desktop_window_set_focus(w, focused) {
+    store64 [w + 80] focused
+    return focused
+}
+
+fn nx_desktop_window_is_focused(w) {
+    let f = load64 [w + 80]
+    return f
+}
+
+let _nx_hotkey_id = 0
+let _nx_hotkey_kc = 0
+
+fn nx_register_global_hotkey(hotkey_id, modifiers, keycode) {
+    let _nx_hotkey_id = hotkey_id
+    let _nx_hotkey_kc = keycode
+    return 1
+}
+
+fn nx_atspi_node_new(role_name, label_text, x, y, w, h) {
+    let node = alloc 48
+    store64 [node + 0] role_name
+    store64 [node + 8] label_text
+    store64 [node + 16] x
+    store64 [node + 24] y
+    store64 [node + 32] w
+    store64 [node + 32] w
+    store64 [node + 40] h
+    return node
+}

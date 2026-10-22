@@ -1,0 +1,183 @@
+# ==============================================================================
+#   NEXUS PHASE E & F TEST SUITE: GUI, EDITOR/LSP, VT100 TERMINAL & TOOLCHAIN
+#     Tests Section 8 (#336–#395), Section 9 (#396–#440), Section 10 (#441–#470),
+#     and Section 11 (#471–#499)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/regex_unicode_str.nex"
+include "stdlib/gui_widgets.nex"
+include "stdlib/editor_lsp.nex"
+include "stdlib/terminal_vt100.nex"
+include "stdlib/toolchain_eco.nex"
+
+fn main {
+    print "=== Running Phase E & F GUI, Editor/LSP, VT100 Terminal & Toolchain ==="
+
+    # 1. Section 8: Widget Tree, Flexbox, Grid, Docking, Bubbling & Editor Widgets (#336–#395)
+    let root = nx_widget_new(NX_WIDGET_PANEL, "root", 0, 0, 1000, 600)
+    let btn1 = nx_widget_new(NX_WIDGET_BUTTON, "Run", 0, 0, 100, 30)
+    let btn2 = nx_widget_new(NX_WIDGET_CHECKBOX, "AutoSave", 0, 0, 100, 30)
+    store64 [btn1 + 48] 1
+    store64 [btn2 + 48] 3
+    nx_widget_add_child(root, btn1)
+    nx_widget_add_child(root, btn2)
+    nx_layout_flexbox(root, 0, 0)
+    assert_eq nx_widget_w(btn1), 250
+    assert_eq nx_widget_w(btn2), 750
+    assert_eq nx_widget_x(btn2), 250
+
+    let hit_w = nx_widget_hit_test(root, 300, 10)
+    assert_eq hit_w, btn2
+    let hops = nx_widget_dispatch_click(btn2)
+    assert_eq hops, 2
+    assert_eq load64 [btn2 + 88], 1
+
+    # Grid layout
+    let grid_p = nx_widget_new(NX_WIDGET_PANEL, "grid", 0, 0, 400, 200)
+    let g0 = nx_widget_new(NX_WIDGET_BUTTON, "g0", 0, 0, 10, 10)
+    let g1 = nx_widget_new(NX_WIDGET_BUTTON, "g1", 0, 0, 10, 10)
+    let g2 = nx_widget_new(NX_WIDGET_BUTTON, "g2", 0, 0, 10, 10)
+    nx_widget_add_child(grid_p, g0)
+    nx_widget_add_child(grid_p, g1)
+    nx_widget_add_child(grid_p, g2)
+    nx_layout_grid(grid_p, 2, 50)
+    assert_eq nx_widget_x(g1), 200
+    assert_eq nx_widget_y(g2), 50
+
+    # Docking layout
+    let dock_p = nx_widget_new(NX_WIDGET_PANEL, "dock", 0, 0, 1000, 800)
+    let top_bar = nx_widget_new(NX_WIDGET_PANEL, "top", 0, 0, 100, 40)
+    let left_nav = nx_widget_new(NX_WIDGET_PANEL, "left", 0, 0, 200, 100)
+    let center_ed = nx_widget_new(NX_WIDGET_EDITOR, "ed", 0, 0, 100, 100)
+    store64 [top_bar + 56] NX_DOCK_TOP
+    store64 [left_nav + 56] NX_DOCK_LEFT
+    store64 [center_ed + 56] NX_DOCK_FILL
+    nx_widget_add_child(dock_p, top_bar)
+    nx_widget_add_child(dock_p, left_nav)
+    nx_widget_add_child(dock_p, center_ed)
+    nx_layout_dock(dock_p)
+    assert_eq nx_widget_x(center_ed), 200
+    assert_eq nx_widget_y(center_ed), 40
+    assert_eq nx_widget_w(center_ed), 800
+    assert_eq nx_widget_h(center_ed), 760
+
+    # Smart Home, Auto-Indent, Outdent, Scrollbar, Tabs, Virtual Viewport, Tweener, Theme
+    assert_eq nx_editor_smart_home_col("    let x = 1", 10), 4
+    assert_eq nx_editor_smart_home_col("    let x = 1", 4), 0
+    assert_eq nx_editor_compute_next_indent("    if x > 0 {", 4), 8
+    assert_eq nx_editor_compute_next_indent("    let y = 2", 4), 4
+    assert_eq nx_editor_compute_outdent(8, 4), 4
+    assert_eq nx_scrollbar_thumb_height(400, 50, 200, 20), 100
+
+    let tbar = nx_tab_bar_new()
+    assert_eq nx_tab_bar_add(tbar, "main.nex"), 0
+    assert_eq nx_tab_bar_add(tbar, "utils.nex"), 1
+    assert_eq nx_tab_bar_set_dirty(tbar, 1, 1), 1
+
+    let vr_start, vr_end = nx_virtual_viewport_range(200, 20, 100, 1000, 5)
+    assert_eq vr_start, 5
+    assert_eq vr_end, 21
+
+    assert_eq nx_tween_ease_out(0, 100, 500), 75
+    let hc_theme = nx_theme_create_preset(2)
+    assert_eq load64 [hc_theme + 40], 1
+
+    # 2. Section 9: LSP, JSON-RPC, Semantic Tokens, Fuzzy Complete, Snippets, Refactoring (#396–#440)
+    let rpc_msg = nx_lsp_frame_message("{\"method\":\"initialize\"}")
+    assert_eq nx_lsp_parse_content_length(rpc_msg), 23
+    assert_eq nx_json_get_string("{\"method\": \"textDocument/didOpen\", \"uri\": \"file:///a.nex\"}", "method"), "textDocument/didOpen"
+
+    assert_eq nx_classify_token("fn"), NX_TOK_KEYWORD
+    assert_eq nx_classify_token("Point"), NX_TOK_TYPE
+    assert_eq nx_classify_token("# comment"), NX_TOK_COMMENT
+    assert_eq nx_classify_token("12345"), NX_TOK_NUMBER
+
+    assert_eq nx_editor_auto_close_char(40), 41
+    assert_eq nx_editor_auto_close_char(123), 125
+    assert_eq nx_bracket_color_index(4), 1
+
+    assert_eq nx_fuzzy_subseq_score("fbi", "framebuffer_init") > 0, 1
+    assert_eq nx_fuzzy_subseq_score("xyz", "framebuffer_init"), 0
+
+    let snip = nx_snippet_expand("fn")
+    assert_eq nx_str_starts_with(snip, "fn name"), 1
+
+    assert_eq nx_refactor_rename_symbol("let old_v = old_v + 1", "old_v", "new_v"), "let new_v = new_v + 1"
+    let commented = nx_editor_toggle_line_comment("let x = 5")
+    assert_eq commented, "# let x = 5"
+    assert_eq nx_editor_toggle_line_comment(commented), "let x = 5"
+    assert_eq nx_editor_clean_for_save("let x = 1   \n\n"), "let x = 1\n"
+
+    let lhist = nx_local_history_new()
+    nx_local_history_snapshot(lhist, "v1 code", 1000)
+    nx_local_history_snapshot(lhist, "v2 code", 1005)
+    assert_eq nx_local_history_restore(lhist, 0), "v1 code"
+    assert_eq nx_local_history_restore(lhist, 1), "v2 code"
+
+    # 3. Section 10: VT100 / xterm Terminal Emulator & Diagnostic Parser (#441–#470)
+    let vt = nx_vt100_new(24, 80)
+    nx_vt100_feed(vt, "\x1b[3;5H\x1b[1m\x1b[38;2;255;128;0mOK\x07")
+    assert_eq nx_vt100_cell_char(vt, 2, 4), 79
+    assert_eq nx_vt100_cell_char(vt, 2, 5), 75
+    assert_eq load64 [vt + 48], NX_TERM_ATTR_BOLD
+    assert_eq load64 [vt + 32], 16744448
+    assert_eq load64 [vt + 80], 1
+
+    nx_vt100_feed(vt, "\x1b[?1049h")
+    assert_eq load64 [vt + 72], 1
+    nx_vt100_feed(vt, "\x1b[?1049l")
+    assert_eq load64 [vt + 72], 0
+
+    let d_line, d_col = nx_terminal_parse_diagnostic("src/main.nex:42:13: error: undefined symbol")
+    assert_eq d_line, 42
+    assert_eq d_col, 13
+
+    # 4. Section 11: Toolchain, TOML, Keymap, DWARF, Debugger, ASan, Profiler, Git, i18n (#471–#499)
+    let toml_cfg = "name = \"nexus-app\"\nversion = \"1.2.0\"\n"
+    assert_eq nx_toml_get_value(toml_cfg, "name"), "nexus-app"
+    assert_eq nx_toml_get_value(toml_cfg, "version"), "1.2.0"
+
+    let km = nx_keymap_new()
+    nx_keymap_bind(km, "editor.save", "Ctrl+S")
+    nx_keymap_bind(km, "editor.palette", "Ctrl+Shift+P")
+    assert_eq nx_keymap_lookup_action(km, "Ctrl+Shift+P"), "editor.palette"
+
+    let dwarf_buf = alloc 16
+    assert_eq nx_dwarf_emit_cu_header(dwarf_buf, 120, 0), 11
+    assert_eq load16 [dwarf_buf + 4], 4
+    assert_eq load [dwarf_buf + 10], 8
+
+    assert_eq nx_gdb_mi_format_break_insert("main.nex", 55), "-break-insert main.nex:55"
+
+    let bp = nx_breakpoint_new(55, 10)
+    assert_eq nx_breakpoint_should_stop(bp, 5), 0
+    assert_eq nx_breakpoint_should_stop(bp, 10), 1
+
+    assert_eq nx_demangle_symbol("_nx_m_Vec_push"), "Vec::push"
+
+    let asan = nx_asan_tracker_new()
+    nx_asan_record_alloc(asan, 128)
+    nx_asan_record_alloc(asan, 64)
+    nx_asan_record_free(asan, 128)
+    assert_eq nx_asan_leaked_bytes(asan), 64
+
+    let prof = nx_profiler_new()
+    nx_profiler_record_sample(prof, "compile_fn", 10)
+    assert_eq nx_profiler_record_sample(prof, "compile_fn", 15), 25
+
+    let cov = nx_coverage_new(128)
+    assert_eq nx_coverage_mark_line(cov, 42), 1
+    assert_eq nx_coverage_mark_line(cov, 42), 2
+
+    assert_eq nx_git_resolve_conflict("let v = 1", "let v = 2", 2), "let v = 2"
+    assert_eq nx_i18n_translate("menu.file", 1), "Archivo"
+    assert_eq nx_i18n_translate("menu.file", 2), "Datei"
+    assert_eq nx_i18n_translate("menu.file", 3), "ファイル"
+    assert_eq nx_semver_is_newer(1, 2, 0, 1, 3, 0), 1
+
+    print "PHASE_EF_GUI_EDITOR_TERM_TOOLCHAIN_PASS"
+    call nx_assert_summary
+}
+
+call main

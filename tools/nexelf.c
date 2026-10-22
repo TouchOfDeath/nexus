@@ -4,6 +4,8 @@
  *
  * Converts any standalone NEXUS PE32+ executable (app.exe) into a standalone,
  * native Linux ELF64 binary (app.elf) capable of direct kernel execution.
+ * Supports optional DWARF v4 debug sections (.debug_info, .debug_abbrev,
+ * .debug_line) via `--dwarf` flag (Feature #477).
  * ============================================================================== */
 
 #include <stdio.h>
@@ -40,6 +42,19 @@ typedef struct {
     uint64_t p_memsz;
     uint64_t p_align;
 } Elf64_Phdr;
+
+typedef struct {
+    uint32_t sh_name;
+    uint32_t sh_type;
+    uint64_t sh_flags;
+    uint64_t sh_addr;
+    uint64_t sh_offset;
+    uint64_t sh_size;
+    uint32_t sh_link;
+    uint32_t sh_info;
+    uint64_t sh_addralign;
+    uint64_t sh_entsize;
+} Elf64_Shdr;
 #pragma pack(pop)
 
 // 607 bytes of native bare-metal x86-64 syscall bridge stubs:
@@ -84,15 +99,72 @@ static const uint8_t g_stubs[] = {
     0x00, 0x00, 0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5e, 0x5f, 0x5d, 0x5b, 0xc3,
 };
 
+// Minimal DWARF v4 .debug_info, .debug_abbrev, and .debug_line payloads (Feature #477)
+static const uint8_t g_dwarf_abbrev[] = {
+    0x01, 0x11, 0x00,       // Abbrev 1: DW_TAG_compile_unit, DW_CHILDREN_no
+    0x25, 0x08,             // DW_AT_producer, DW_FORM_string
+    0x13, 0x0b,             // DW_AT_language, DW_FORM_data1
+    0x11, 0x01,             // DW_AT_low_pc, DW_FORM_addr
+    0x12, 0x07,             // DW_AT_high_pc, DW_FORM_data8
+    0x10, 0x17,             // DW_AT_stmt_list, DW_FORM_sec_offset
+    0x00, 0x00, 0x00        // End of abbrev table
+};
+
+static const uint8_t g_dwarf_info[] = {
+    34, 0, 0, 0,            // unit_length = 34 bytes
+    4, 0,                   // version = 4 (DWARF v4)
+    0, 0, 0, 0,             // debug_abbrev_offset = 0
+    8,                      // address_size = 8
+    1,                      // abbrev code = 1 (DW_TAG_compile_unit)
+    'N','E','X','C', 0,     // DW_AT_producer = "NEXC"
+    0x0c,                   // DW_AT_language = DW_LANG_C99
+    0x00, 0x10, 0x40, 0x00, 0, 0, 0, 0, // DW_AT_low_pc = 0x401000
+    0x00, 0xd0, 0x00, 0x00, 0, 0, 0, 0, // DW_AT_high_pc = 0xd000
+    0, 0, 0, 0              // DW_AT_stmt_list = 0
+};
+
+static const uint8_t g_dwarf_line[] = {
+    45, 0, 0, 0,            // unit_length = 45 bytes
+    4, 0,                   // version = 4
+    25, 0, 0, 0,            // header_length = 25
+    1,                      // minimum_instruction_length = 1
+    1,                      // maximum_operations_per_instruction = 1
+    1,                      // default_is_stmt = 1
+    (uint8_t)-5,            // line_base = -5
+    14,                     // line_range = 14
+    13,                     // opcode_base = 13
+    0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, // standard_opcode_lengths
+    0,                      // include_directories (empty)
+    'c','o','d','e','.','n','e','x', 0, 0, 0, 0, // file_names: "code.nex"
+    0,                      // end of file_names
+    // Line program: DW_LNE_set_address(0x401000), advance line, DW_LNE_end_sequence
+    0, 9, 2, 0x00, 0x10, 0x40, 0x00, 0, 0, 0, 0,
+    1,                      // DW_LNS_copy
+    0, 1, 1                 // DW_LNE_end_sequence
+};
+
+static const char g_shstrtab[] = "\0.text\0.debug_abbrev\0.debug_info\0.debug_line\0.shstrtab\0";
+
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        printf("NEXUS Native ELF64 Emitter\n");
-        printf("Usage: %s <input_app.exe> <output_app.elf>\n", argv[0]);
-        return 1;
+    int emit_dwarf = 0;
+    const char* in_path = NULL;
+    const char* out_path = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--dwarf") == 0 || strcmp(argv[i], "-g") == 0) {
+            emit_dwarf = 1;
+        } else if (!in_path) {
+            in_path = argv[i];
+        } else if (!out_path) {
+            out_path = argv[i];
+        }
     }
 
-    const char* in_path = argv[1];
-    const char* out_path = argv[2];
+    if (!in_path || !out_path) {
+        printf("NEXUS Native ELF64 Emitter\n");
+        printf("Usage: %s [--dwarf] <input_app.exe> <output_app.elf>\n", argv[0]);
+        return 1;
+    }
 
     FILE* fin = fopen(in_path, "rb");
     if (!fin) {
@@ -128,7 +200,9 @@ int main(int argc, char** argv) {
 
     size_t stubs_len = sizeof(g_stubs);
     size_t stubs_off = 0xE000 + shift;
-    size_t elf_size = stubs_off + stubs_len;
+    size_t load_size = stubs_off + stubs_len;
+    size_t extra_dwarf = emit_dwarf ? (sizeof(g_dwarf_abbrev) + sizeof(g_dwarf_info) + sizeof(g_dwarf_line) + sizeof(g_shstrtab) + 6 * sizeof(Elf64_Shdr) + 64) : 0;
+    size_t elf_size = load_size + extra_dwarf;
     uint8_t* elf_data = (uint8_t*)calloc(1, elf_size);
 
     // 1. Copy original binary data
@@ -160,12 +234,12 @@ int main(int argc, char** argv) {
     ehdr->e_version = 1;
     ehdr->e_entry = 0x40E000 + shift; // Entry point: syscall stubs bootstrap
     ehdr->e_phoff = 64;   // Program header immediately follows ELF header
-    ehdr->e_shoff = 0;    // No section header table needed
+    ehdr->e_shoff = 0;
     ehdr->e_flags = 0;
     ehdr->e_ehsize = sizeof(Elf64_Ehdr);
     ehdr->e_phentsize = sizeof(Elf64_Phdr);
     ehdr->e_phnum = 1;    // Single comprehensive PT_LOAD segment
-    ehdr->e_shentsize = 64;
+    ehdr->e_shentsize = sizeof(Elf64_Shdr);
     ehdr->e_shnum = 0;
     ehdr->e_shstrndx = 0;
 
@@ -176,9 +250,55 @@ int main(int argc, char** argv) {
     phdr->p_offset = 0;
     phdr->p_vaddr = 0x400000;
     phdr->p_paddr = 0x400000;
-    phdr->p_filesz = elf_size;
+    phdr->p_filesz = load_size;
     phdr->p_memsz = 0x100000; // 1 MB virtual address space (heap & stack headroom)
     phdr->p_align = 0x1000;   // 4 KB page alignment
+
+    // 5. Optional DWARF v4 debug sections (.debug_abbrev, .debug_info, .debug_line)
+    if (emit_dwarf) {
+        size_t cur = (load_size + 7) & ~(size_t)7;
+        size_t off_abbrev = cur;
+        memcpy(elf_data + cur, g_dwarf_abbrev, sizeof(g_dwarf_abbrev));
+        cur += sizeof(g_dwarf_abbrev);
+
+        size_t off_info = cur;
+        memcpy(elf_data + cur, g_dwarf_info, sizeof(g_dwarf_info));
+        cur += sizeof(g_dwarf_info);
+
+        size_t off_line = cur;
+        memcpy(elf_data + cur, g_dwarf_line, sizeof(g_dwarf_line));
+        cur += sizeof(g_dwarf_line);
+
+        size_t off_shstr = cur;
+        memcpy(elf_data + cur, g_shstrtab, sizeof(g_shstrtab));
+        cur += sizeof(g_shstrtab);
+
+        cur = (cur + 7) & ~(size_t)7;
+        size_t shoff = cur;
+        Elf64_Shdr* sh = (Elf64_Shdr*)(elf_data + shoff);
+        // [0] SHT_NULL
+        // [1] .text
+        sh[1].sh_name = 1; sh[1].sh_type = 1; sh[1].sh_flags = 6;
+        sh[1].sh_addr = 0x401000; sh[1].sh_offset = 0x1000;
+        sh[1].sh_size = 0xD000 + shift; sh[1].sh_addralign = 16;
+        // [2] .debug_abbrev
+        sh[2].sh_name = 7; sh[2].sh_type = 1; sh[2].sh_offset = off_abbrev;
+        sh[2].sh_size = sizeof(g_dwarf_abbrev); sh[2].sh_addralign = 1;
+        // [3] .debug_info
+        sh[3].sh_name = 21; sh[3].sh_type = 1; sh[3].sh_offset = off_info;
+        sh[3].sh_size = sizeof(g_dwarf_info); sh[3].sh_addralign = 1;
+        // [4] .debug_line
+        sh[4].sh_name = 33; sh[4].sh_type = 1; sh[4].sh_offset = off_line;
+        sh[4].sh_size = sizeof(g_dwarf_line); sh[4].sh_addralign = 1;
+        // [5] .shstrtab
+        sh[5].sh_name = 45; sh[5].sh_type = 3; sh[5].sh_offset = off_shstr;
+        sh[5].sh_size = sizeof(g_shstrtab); sh[5].sh_addralign = 1;
+
+        ehdr->e_shoff = shoff;
+        ehdr->e_shnum = 6;
+        ehdr->e_shstrndx = 5;
+        elf_size = shoff + 6 * sizeof(Elf64_Shdr);
+    }
 
     FILE* fout = fopen(out_path, "wb");
     if (!fout) {

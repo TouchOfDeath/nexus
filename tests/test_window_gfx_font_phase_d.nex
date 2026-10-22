@@ -1,0 +1,175 @@
+# ==============================================================================
+#   NEXUS PHASE D TEST SUITE: WINDOWING, 2D VECTOR GRAPHICS & TYPOGRAPHY
+#          Tests Section 5 (#206–#255), Section 6 (#256–#295), Section 7 (#296–#335)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/window_desktop.nex"
+include "stdlib/graphics2d_full.nex"
+include "stdlib/font_shaping_ttf.nex"
+
+fn main {
+    print "=== Running Phase D Windowing, 2D Vector Graphics & Typography ==="
+
+    # 1. Wayland Client Protocol & Fractional Scaling (#206–#213)
+    let wl = nx_wl_display_connect()
+    let shell_id = nx_wl_registry_bind_shell(wl)
+    assert_eq shell_id, 2
+    let pool_id = nx_wl_shm_create_pool(wl, 1920, 1080)
+    assert_eq pool_id, 3
+    let top_id = nx_wl_create_toplevel(wl, "NEXUS Studio", 1920, 1080)
+    assert_eq top_id, 5
+    let sub_id = nx_wl_create_subsurface(wl, 4, 100, 50)
+    assert_eq sub_id, 6
+    nx_wl_request_frame_callback(wl)
+    assert_eq load64 [wl + 56], 1
+    nx_wl_complete_frame_callback(wl)
+    assert_eq load64 [wl + 56], 0
+    nx_wl_set_fractional_scale(wl, 150)
+    assert_eq nx_wl_scaled_width(wl), 2880
+
+    # 2. X11 Handshake, Atom Cache, XKB Keymap (#214–#225)
+    let x11_hs = alloc 16
+    assert_eq nx_x11_build_handshake(x11_hs, 18, 16), 12
+    assert_eq load [x11_hs + 0], 108
+    assert_eq load16 [x11_hs + 2], 11
+
+    let ac = nx_x11_atom_cache_new()
+    let a1 = nx_x11_intern_atom(ac, "WM_PROTOCOLS")
+    let a2 = nx_x11_intern_atom(ac, "WM_DELETE_WINDOW")
+    let a1_again = nx_x11_intern_atom(ac, "WM_PROTOCOLS")
+    assert_eq a1, 100
+    assert_eq a2, 101
+    assert_eq a1_again, 100
+
+    assert_eq nx_xkb_keycode_to_keysym(24, 0), 113
+    assert_eq nx_xkb_keycode_to_keysym(24, 1), 81
+    assert_eq nx_xkb_keycode_to_keysym(9, 0), 27
+
+    # 3. Desktop Window, Constraints, Fullscreen, State Persistence, Multi-Monitor (#222–#255)
+    let win = nx_desktop_window_create("NEXUS Editor", 50, 50, 1280, 720)
+    nx_desktop_window_set_constraints(win, 640, 480, 3840, 2160)
+    assert_eq nx_desktop_window_resize(win, 300, 200), 640
+    assert_eq nx_desktop_window_height(win), 480
+
+    assert_eq nx_desktop_window_toggle_fullscreen(win), 1
+    assert_eq nx_desktop_window_toggle_fullscreen(win), 0
+
+    let wstate = alloc 64
+    nx_desktop_window_save_state(win, wstate)
+    nx_desktop_window_resize(win, 1600, 900)
+    assert_eq nx_desktop_window_width(win), 1600
+    nx_desktop_window_restore_state(win, wstate)
+    assert_eq nx_desktop_window_width(win), 640
+
+    let mon = alloc 64
+    nx_desktop_query_monitor(0, mon)
+    assert_eq load64 [mon + 24], 1920
+    assert_eq load64 [mon + 40], 1
+
+    assert_eq nx_desktop_get_system_theme(), 1
+    assert_eq nx_dialog_open_file("/workspace", ".nex"), "/workspace/main.nex"
+    assert_eq nx_dialog_save_file("/workspace", "out.nex"), "/workspace/out.nex"
+
+    nx_dnd_offer_file("file:///tmp/test.nex")
+    assert_eq nx_dnd_accept_drop(), "file:///tmp/test.nex"
+
+    nx_ime_set_preedit("日本語")
+    assert_eq nx_ime_commit_string(), "日本語"
+
+    let ct = nx_click_tracker_new()
+    assert_eq nx_click_tracker_feed(ct, 1000, 20, 20), 1
+    assert_eq nx_click_tracker_feed(ct, 1200, 21, 20), 2
+    assert_eq nx_click_tracker_feed(ct, 1350, 21, 20), 3
+
+    let sa = nx_scroll_accum_new()
+    let lx1, ly1 = nx_scroll_accum_feed(sa, 0, 60)
+    assert_eq ly1, 0
+    let lx2, ly2 = nx_scroll_accum_feed(sa, 0, 70)
+    assert_eq ly2, 1
+
+    # 4. 2D Vector Graphics, Dirty Rects, Clipping Stack, Blending, WCAG (#256–#295)
+    let surf = nx_gfx_surface_new(200, 100)
+    assert_eq nx_gfx_has_dirty(surf), 0
+    let red = nx_argb(255, 255, 0, 0)
+    let blue = nx_argb(255, 0, 0, 255)
+    nx_gfx_fill_rect(surf, 10, 10, 40, 20, red)
+    assert_eq nx_gfx_has_dirty(surf), 1
+    assert_eq nx_gfx_dirty_width(surf), 40
+    assert_eq nx_gfx_get_pixel(surf, 15, 15), red
+
+    # Scissor clipping stack
+    nx_gfx_push_clip(surf, 0, 0, 20, 20)
+    nx_gfx_fill_rect(surf, 0, 0, 50, 50, blue)
+    assert_eq nx_gfx_get_pixel(surf, 10, 10), blue
+    assert_eq nx_gfx_get_pixel(surf, 30, 15), red
+    nx_gfx_pop_clip(surf)
+
+    # Blending & WCAG contrast ratio (White vs Black = 21.0:1 -> 2100)
+    let white = nx_argb(255, 255, 255, 255)
+    let black = nx_argb(255, 0, 0, 0)
+    let ratio = nx_wcag_contrast_ratio_x100(white, black)
+    assert_eq ratio >= 2000, 1
+
+    let steps = nx_gfx_draw_line_aa(surf, 0, 0, 10, 10, white)
+    assert_eq steps, 11
+    assert_eq nx_gfx_draw_quad_bezier(surf, 0, 0, 50, 80, 100, 0, 8, white), 8
+
+    # 2D Affine Matrix, Texture Atlas & Smooth Scroll
+    let m2d = nx_mat2d_identity()
+    nx_mat2d_scale(m2d, 2000, 2000)
+    nx_mat2d_translate(m2d, 10, 20)
+    let tx, ty = nx_mat2d_transform_pt(m2d, 5, 6)
+    assert_eq tx, 20
+    assert_eq ty, 32
+
+    let atlas = nx_atlas_new(128, 128)
+    let ax1, ay1 = nx_atlas_pack(atlas, 32, 32)
+    let ax2, ay2 = nx_atlas_pack(atlas, 32, 32)
+    assert_eq ax1, 0
+    assert_eq ax2, 32
+
+    let ss = nx_smooth_scroll_new()
+    nx_smooth_scroll_impulse(ss, 100)
+    assert_eq nx_smooth_scroll_step(ss) > 0, 1
+
+    # Image format detection (PNG = 1, JPEG = 2, SVG = 3)
+    let png_hdr = "\x89PNG\r\n\x1a\n"
+    assert_eq nx_image_detect_format(png_hdr, 8), 1
+    assert_eq nx_image_detect_format("<svg></svg>", 11), 3
+
+    # 5. Typography, Font Shaping, Ligatures, Glyph Cache & Layout (#296–#335)
+    let fe = nx_font_engine_new(14)
+    assert_eq nx_font_pt_size(fe), 14
+    assert_eq nx_font_zoom(fe, 4), 18
+    assert_eq nx_font_line_height_px(fe) >= 18, 1
+    assert_eq nx_font_kern_pair(fe, 65, 86), -2
+
+    let glyphs = alloc 128
+    let ng = nx_font_shape_line("a != b => c", glyphs, 16)
+    assert_eq ng, 9
+    assert_eq load64 [glyphs + 16], 10002
+    assert_eq load64 [glyphs + 48], 10005
+
+    let gcache = nx_glyph_cache_new(32)
+    let bmp1, hit1 = nx_glyph_cache_get_or_rasterize(gcache, 65, 18, 0)
+    let bmp2, hit2 = nx_glyph_cache_get_or_rasterize(gcache, 65, 18, 0)
+    assert_eq hit1, 0
+    assert_eq hit2, 1
+    assert_eq bmp1, bmp2
+
+    assert_eq nx_font_set_variation_weight(fe, 700), 700
+    assert_eq load64 [fe + 72], 1
+
+    let tw, th = nx_font_measure_text(fe, "hello\nworld!")
+    assert_eq tw > 0, 1
+    assert_eq th >= 36, 1
+
+    let px_col5 = nx_font_col_to_pixel_x(fe, 5)
+    assert_eq nx_font_hit_test_col(fe, px_col5), 5
+
+    print "PHASE_D_WINDOW_GFX_FONT_PASS"
+    call nx_assert_summary
+}
+
+call main

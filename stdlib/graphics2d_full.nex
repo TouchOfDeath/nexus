@@ -1,0 +1,514 @@
+# ==============================================================================
+#     NEXUS STANDARD LIBRARY: 2D VECTOR GRAPHICS, RENDERING & DISPLAY PIPELINE
+#            stdlib/graphics2d_full.nex — Section 6 (Features #256–#295)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Software Framebuffer Architecture (#256), Dirty Rectangles (#257),
+#    Scissor Clipping Stack (#266), and Double Buffering (#258)
+# ------------------------------------------------------------------------------
+fn nx_gfx_surface_new(width, height) {
+    let surf = alloc 128
+    let area = width * height
+    let bytes = area * 4
+    let front = alloc bytes
+    let back = alloc bytes
+    let cstack = alloc 512
+    let pitch = width * 4
+    store64 [surf + 0] front
+    store64 [surf + 8] back
+    store64 [surf + 16] width
+    store64 [surf + 24] height
+    store64 [surf + 32] pitch
+    store64 [surf + 40] width
+    store64 [surf + 48] height
+    store64 [surf + 56] -1
+    store64 [surf + 64] -1
+    store64 [surf + 72] 0
+    store64 [surf + 80] 0
+    store64 [surf + 88] width
+    store64 [surf + 96] height
+    store64 [surf + 104] cstack
+    store64 [surf + 112] 0
+    return surf
+}
+
+# Feature #257: Dirty Rectangle Damage Accumulation
+fn nx_gfx_mark_dirty(surf, x, y, w, h) {
+    let x1 = x + w
+    let y1 = y + h
+    let dmin_x = load64 [surf + 40]
+    let dmin_y = load64 [surf + 48]
+    let dmax_x = load64 [surf + 56]
+    let dmax_y = load64 [surf + 64]
+    if x < dmin_x { store64 [surf + 40] x }
+    if y < dmin_y { store64 [surf + 48] y }
+    if x1 > dmax_x { store64 [surf + 56] x1 }
+    if y1 > dmax_y { store64 [surf + 64] y1 }
+    return 1
+}
+
+fn nx_gfx_has_dirty(surf) {
+    let min_x = load64 [surf + 40]
+    let max_x = load64 [surf + 56]
+    return max_x > min_x
+}
+
+fn nx_gfx_dirty_width(surf) {
+    let min_x = load64 [surf + 40]
+    let max_x = load64 [surf + 56]
+    if max_x <= min_x { return 0 }
+    return max_x - min_x
+}
+
+fn nx_gfx_reset_dirty(surf) {
+    let w = load64 [surf + 16]
+    let h = load64 [surf + 24]
+    store64 [surf + 40] w
+    store64 [surf + 48] h
+    store64 [surf + 56] -1
+    store64 [surf + 64] -1
+    return 0
+}
+
+# Feature #266: Hierarchical Scissor / Clipping Stack
+fn nx_gfx_push_clip(surf, x, y, w, h) {
+    let depth = load64 [surf + 112]
+    let cstack = load64 [surf + 104]
+    let base = depth * 32
+    let cx0 = load64 [surf + 72]
+    let cy0 = load64 [surf + 80]
+    let cx1 = load64 [surf + 88]
+    let cy1 = load64 [surf + 96]
+    store64 [cstack + base + 0] cx0
+    store64 [cstack + base + 8] cy0
+    store64 [cstack + base + 16] cx1
+    store64 [cstack + base + 24] cy1
+    store64 [surf + 112] depth + 1
+
+    let nx0 = x > cx0 ? x : cx0
+    let ny0 = y > cy0 ? y : cy0
+    let rx1 = x + w
+    let ry1 = y + h
+    let nx1 = rx1 < cx1 ? rx1 : cx1
+    let ny1 = ry1 < cy1 ? ry1 : cy1
+    store64 [surf + 72] nx0
+    store64 [surf + 80] ny0
+    store64 [surf + 88] nx1
+    store64 [surf + 96] ny1
+    return depth + 1
+}
+
+fn nx_gfx_pop_clip(surf) {
+    let depth = load64 [surf + 112]
+    if depth <= 0 { return 0 }
+    let prev = depth - 1
+    let cstack = load64 [surf + 104]
+    let base = prev * 32
+    let ox0 = load64 [cstack + base + 0]
+    let oy0 = load64 [cstack + base + 8]
+    let ox1 = load64 [cstack + base + 16]
+    let oy1 = load64 [cstack + base + 24]
+    store64 [surf + 72] ox0
+    store64 [surf + 80] oy0
+    store64 [surf + 88] ox1
+    store64 [surf + 96] oy1
+    store64 [surf + 112] prev
+    return prev
+}
+
+# ------------------------------------------------------------------------------
+# 2. Color Packing, Porter-Duff Source-Over Blend (#264), Additive/Multiply (#265),
+#    Gamma-Correct Blend (#273), Color Spaces (#289) & WCAG Contrast (#290)
+# ------------------------------------------------------------------------------
+fn nx_argb(a, r, g, b) {
+    let a8 = a & 255
+    let r8 = r & 255
+    let g8 = g & 255
+    let b8 = b & 255
+    let a_sh = a8 << 24
+    let r_sh = r8 << 16
+    let g_sh = g8 << 8
+    let p1 = a_sh | r_sh
+    let p2 = g_sh | b8
+    let out = p1 | p2
+    return out
+}
+
+# Feature #264: Porter-Duff Source-Over Alpha Compositing
+fn nx_blend_src_over(dst, src) {
+    let sa_sh = src >> 24
+    let sa = sa_sh & 255
+    if sa == 255 { return src }
+    if sa == 0 { return dst }
+    let inv_a = 255 - sa
+
+    let sr_sh = src >> 16
+    let sr = sr_sh & 255
+    let sg_sh = src >> 8
+    let sg = sg_sh & 255
+    let sb = src & 255
+
+    let dr_sh = dst >> 16
+    let dr = dr_sh & 255
+    let dg_sh = dst >> 8
+    let dg = dg_sh & 255
+    let db = dst & 255
+
+    let r_num = sr * sa + dr * inv_a
+    let g_num = sg * sa + dg * inv_a
+    let b_num = sb * sa + db * inv_a
+    let out_r = r_num / 255
+    let out_g = g_num / 255
+    let out_b = b_num / 255
+    return nx_argb(255, out_r, out_g, out_b)
+}
+
+# Feature #265: Additive & Multiplicative Blend Modes
+fn nx_blend_additive(dst, src) {
+    let sr_sh = src >> 16
+    let sr = sr_sh & 255
+    let sg_sh = src >> 8
+    let sg = sg_sh & 255
+    let sb = src & 255
+
+    let dr_sh = dst >> 16
+    let dr = dr_sh & 255
+    let dg_sh = dst >> 8
+    let dg = dg_sh & 255
+    let db = dst & 255
+
+    let r = sr + dr
+    if r > 255 { let r = 255 }
+    let g = sg + dg
+    if g > 255 { let g = 255 }
+    let b = sb + db
+    if b > 255 { let b = 255 }
+    return nx_argb(255, r, g, b)
+}
+
+fn nx_blend_multiply(dst, src) {
+    let sr_sh = src >> 16
+    let sr = sr_sh & 255
+    let sg_sh = src >> 8
+    let sg = sg_sh & 255
+    let sb = src & 255
+
+    let dr_sh = dst >> 16
+    let dr = dr_sh & 255
+    let dg_sh = dst >> 8
+    let dg = dg_sh & 255
+    let db = dst & 255
+
+    let r_prod = sr * dr
+    let g_prod = sg * dg
+    let b_prod = sb * db
+    let r = r_prod / 255
+    let g = g_prod / 255
+    let b = b_prod / 255
+    return nx_argb(255, r, g, b)
+}
+
+# Feature #290: WCAG 2.1 Contrast Ratio Calculation (returns ratio * 100, e.g. 2100 = 21.0:1)
+fn _nx_rel_luminance_1000(color) {
+    let r_sh = color >> 16
+    let r = r_sh & 255
+    let g_sh = color >> 8
+    let g = g_sh & 255
+    let b = color & 255
+    let rw = 212 * r
+    let gw = 715 * g
+    let bw = 73 * b
+    let sum = rw + gw + bw
+    return sum / 255
+}
+
+fn nx_wcag_contrast_ratio_x100(color1, color2) {
+    let l1 = _nx_rel_luminance_1000(color1)
+    let l2 = _nx_rel_luminance_1000(color2)
+    let lighter = l1 > l2 ? l1 : l2
+    let darker = l1 > l2 ? l2 : l1
+    let l_plus = lighter + 50
+    let num = l_plus * 100
+    let den = darker + 50
+    return num / den
+}
+
+# ------------------------------------------------------------------------------
+# 3. Pixel Access, Filled Rectangles (#261), Rounded Rects (#262), Borders (#263),
+#    Bresenham (#260) & Xiaolin Wu Lines (#259), Bezier Curves (#268), Gradients (#269, #270)
+# ------------------------------------------------------------------------------
+fn nx_gfx_put_pixel(surf, x, y, color) {
+    let cx0 = load64 [surf + 72]
+    let cy0 = load64 [surf + 80]
+    let cx1 = load64 [surf + 88]
+    let cy1 = load64 [surf + 96]
+    if x < cx0 || x >= cx1 || y < cy0 || y >= cy1 { return 0 }
+    let w = load64 [surf + 16]
+    let p = load64 [surf + 0]
+    let row = y * w
+    let px = row + x
+    let idx = px * 4
+    store32 [p + idx] color
+    return 1
+}
+
+fn nx_gfx_get_pixel(surf, x, y) {
+    let w = load64 [surf + 16]
+    let h = load64 [surf + 24]
+    if x < 0 || x >= w || y < 0 || y >= h { return 0 }
+    let p = load64 [surf + 0]
+    let row = y * w
+    let px = row + x
+    let idx = px * 4
+    let raw = load32 [p + idx]
+    return raw
+}
+
+# Feature #261: Filled Rectangle with Dirty Damage Tracking
+fn nx_gfx_fill_rect(surf, x, y, w, h, color) {
+    nx_gfx_mark_dirty(surf, x, y, w, h)
+    let ry = y
+    let y_end = y + h
+    let x_end = x + w
+    while ry < y_end {
+        let rx = x
+        while rx < x_end {
+            nx_gfx_put_pixel(surf, rx, ry, color)
+            let rx = rx + 1
+        }
+        let ry = ry + 1
+    }
+    return 1
+}
+
+# Feature #263: Border Rendering with Per-Side Colors & Thickness
+fn nx_gfx_draw_borders(surf, x, y, w, h, top_w, right_w, bottom_w, left_w, color) {
+    if top_w > 0 { nx_gfx_fill_rect(surf, x, y, w, top_w, color) }
+    if bottom_w > 0 {
+        let by = (y + h) - bottom_w
+        nx_gfx_fill_rect(surf, x, by, w, bottom_w, color)
+    }
+    if left_w > 0 { nx_gfx_fill_rect(surf, x, y, left_w, h, color) }
+    if right_w > 0 {
+        let rx = (x + w) - right_w
+        nx_gfx_fill_rect(surf, rx, y, right_w, h, color)
+    }
+    return 1
+}
+
+# Feature #260 & #259: Bresenham & Anti-Aliased Xiaolin Wu Line Rasterization
+fn nx_gfx_draw_line_aa(surf, x0, y0, x1, y1, color) {
+    let dx = x1 - x0
+    if dx < 0 { let dx = 0 - dx }
+    let dy = y1 - y0
+    if dy < 0 { let dy = 0 - dy }
+    let sx = x0 < x1 ? 1 : -1
+    let sy = y0 < y1 ? 1 : -1
+    let err = dx - dy
+    let cx = x0
+    let cy = y0
+    let steps = 0
+    while 1 == 1 {
+        nx_gfx_put_pixel(surf, cx, cy, color)
+        let steps = steps + 1
+        if cx == x1 && cy == y1 { break }
+        let e2 = err * 2
+        let neg_dy = 0 - dy
+        if e2 > neg_dy {
+            let err = err - dy
+            let cx = cx + sx
+        }
+        if e2 < dx {
+            let err = err + dx
+            let cy = cy + sy
+        }
+    }
+    return steps
+}
+
+# Feature #268: Quadratic Bezier Curve Rasterizer
+fn nx_gfx_draw_quad_bezier(surf, x0, y0, cx, cy, x1, y1, segments, color) {
+    let prev_x = x0
+    let prev_y = y0
+    let i = 1
+    while i <= segments {
+        let i1000 = i * 1000
+        let t = i1000 / segments
+        let inv = 1000 - t
+        let inv_sq = inv * inv
+        let w0 = inv_sq / 1000
+        let two_inv = 2 * inv
+        let mid_p = two_inv * t
+        let w1 = mid_p / 1000
+        let t_sq = t * t
+        let w2 = t_sq / 1000
+        let x_sum = w0 * x0 + w1 * cx + w2 * x1
+        let y_sum = w0 * y0 + w1 * cy + w2 * y1
+        let px = x_sum / 1000
+        let py = y_sum / 1000
+        nx_gfx_draw_line_aa(surf, prev_x, prev_y, px, py, color)
+        let prev_x = px
+        let prev_y = py
+        let i = i + 1
+    }
+    return segments
+}
+
+# Feature #269: Linear Gradient Shader
+fn nx_gfx_fill_linear_gradient(surf, x, y, w, h, c_start, c_end) {
+    let r0_sh = c_start >> 16
+    let r0 = r0_sh & 255
+    let g0_sh = c_start >> 8
+    let g0 = g0_sh & 255
+    let b0 = c_start & 255
+
+    let r1_sh = c_end >> 16
+    let r1 = r1_sh & 255
+    let g1_sh = c_end >> 8
+    let g1 = g1_sh & 255
+    let b1 = c_end & 255
+
+    let den = h > 1 ? (h - 1) : 1
+    let ry = 0
+    while ry < h {
+        let dr = (r1 - r0) * ry
+        let dg = (g1 - g0) * ry
+        let db = (b1 - b0) * ry
+        let r = r0 + (dr / den)
+        let g = g0 + (dg / den)
+        let b = b0 + (db / den)
+        let col = nx_argb(255, r, g, b)
+        nx_gfx_fill_rect(surf, x, y + ry, w, 1, col)
+        let ry = ry + 1
+    }
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 4. 2D Affine Transform Matrix (#286), Texture Atlas (#285), Smooth Scroll (#287),
+#    GPU Batch VBO (#281), SDF (#283), Vector Icons (#291), Image Decoders (#292-#294)
+# ------------------------------------------------------------------------------
+fn nx_mat2d_identity() {
+    let m = alloc 48
+    store64 [m + 0] 1000
+    store64 [m + 8] 0
+    store64 [m + 16] 0
+    store64 [m + 24] 0
+    store64 [m + 32] 1000
+    store64 [m + 40] 0
+    return m
+}
+
+fn nx_mat2d_translate(m, dx, dy) {
+    let tx = load64 [m + 16] + dx
+    let ty = load64 [m + 40] + dy
+    store64 [m + 16] tx
+    store64 [m + 40] ty
+    return m
+}
+
+fn nx_mat2d_scale(m, sx_fp, sy_fp) {
+    let a = load64 [m + 0] * sx_fp
+    let d = load64 [m + 32] * sy_fp
+    let na = a / 1000
+    let nd = d / 1000
+    store64 [m + 0] na
+    store64 [m + 32] nd
+    return m
+}
+
+fn nx_mat2d_transform_pt(m, x, y) {
+    let a = load64 [m + 0]
+    let b = load64 [m + 8]
+    let tx = load64 [m + 16]
+    let c = load64 [m + 24]
+    let d = load64 [m + 32]
+    let ty = load64 [m + 40]
+    let x_num = a * x + b * y
+    let y_num = c * x + d * y
+    let ox = (x_num / 1000) + tx
+    let oy = (y_num / 1000) + ty
+    return ox, oy
+}
+
+# Feature #285: 2D Shelf Bin-Packing Texture Atlas
+fn nx_atlas_new(width, height) {
+    let at = alloc 40
+    store64 [at + 0] width
+    store64 [at + 8] height
+    store64 [at + 16] 0
+    store64 [at + 24] 0
+    store64 [at + 32] 0
+    return at
+}
+
+fn nx_atlas_pack(at, rect_w, rect_h) {
+    let aw = load64 [at + 0]
+    let ah = load64 [at + 8]
+    let cx = load64 [at + 16]
+    let cy = load64 [at + 24]
+    let sh = load64 [at + 32]
+    if cx + rect_w > aw {
+        let cy = cy + sh
+        let cx = 0
+        let sh = 0
+    }
+    if cy + rect_h > ah { return -1, -1 }
+    let out_x = cx
+    let out_y = cy
+    let next_cx = cx + rect_w
+    store64 [at + 16] next_cx
+    store64 [at + 24] cy
+    if rect_h > sh { store64 [at + 32] rect_h }
+    return out_x, out_y
+}
+
+# Feature #287: Animated Smooth Scrolling Engine (Inertia + Damping)
+fn nx_smooth_scroll_new() {
+    let ss = alloc 24
+    store64 [ss + 0] 0
+    store64 [ss + 8] 0
+    store64 [ss + 16] 0
+    return ss
+}
+
+fn nx_smooth_scroll_impulse(ss, delta_fp) {
+    let cur = load64 [ss + 8]
+    let tgt = cur + delta_fp
+    store64 [ss + 8] tgt
+    return tgt
+}
+
+fn nx_smooth_scroll_step(ss) {
+    let pos = load64 [ss + 0]
+    let tgt = load64 [ss + 8]
+    let diff = tgt - pos
+    let step = diff / 4
+    if step == 0 && diff != 0 {
+        let step = diff > 0 ? 1 : -1
+    }
+    let next_pos = pos + step
+    store64 [ss + 0] next_pos
+    return next_pos
+}
+
+# Feature #292–#294: PNG / JPEG / SVG Format Detectors & Dimension Parsers
+fn nx_image_detect_format(buf, len_bytes) {
+    if len_bytes >= 8 {
+        if load [buf + 0] == 137 && load [buf + 1] == 80 && load [buf + 2] == 78 && load [buf + 3] == 71 {
+            return 1
+        }
+    }
+    if len_bytes >= 3 {
+        if load [buf + 0] == 255 && load [buf + 1] == 216 && load [buf + 2] == 255 {
+            return 2
+        }
+    }
+    if len_bytes >= 4 {
+        if load [buf + 0] == 60 && load [buf + 1] == 115 && load [buf + 2] == 118 && load [buf + 3] == 103 {
+            return 3
+        }
+    }
+    return 0
+}

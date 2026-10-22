@@ -1,0 +1,222 @@
+# ==============================================================================
+#   NEXUS PHASE C TEST SUITE: OS ABSTRACTION, CONCURRENCY & PROCESS MANAGEMENT
+#                      Tests Section 4 (Features #156–#205)
+# ==============================================================================
+
+include "stdlib/nstdlib.nex"
+include "stdlib/os_posix.nex"
+
+fn main {
+    print "=== Running Phase C OS Abstraction, Concurrency & Process Management ==="
+
+    # 1. Process & User Credentials (#197) + Working Directory (#196) + Resource Limits (#198)
+    let pid = nx_os_getpid()
+    let ppid = nx_os_getppid()
+    let tid = nx_os_gettid()
+    assert_eq pid > 0, 1
+    assert_eq ppid > 0, 1
+    assert_eq tid > 0, 1
+
+    let cwd = nx_os_getcwd()
+    assert_eq len cwd > 1, 1
+    assert_eq load [cwd + 0], 47
+
+    let nofile_cur = nx_os_getrlimit_cur(NX_RLIMIT_NOFILE)
+    let nofile_max = nx_os_getrlimit_max(NX_RLIMIT_NOFILE)
+    assert_eq nofile_cur >= 64, 1
+    assert_eq nofile_max >= nofile_cur, 1
+
+    # 2. Monotonic Clock (#179) & High-Precision Nanosleep (#180)
+    let t0 = nx_os_monotonic_ns()
+    nx_os_nanosleep(1000000)
+    let t1 = nx_os_monotonic_ns()
+    assert_eq t0 > 0, 1
+    assert_eq t1 > t0, 1
+
+    # 3. Anonymous Pipes (`pipe2` #157) & Descriptor Duplication (`dup2` #158)
+    let pipe_pair = nx_os_pipe2(0)
+    let rfd = nx_os_pipe_read_fd(pipe_pair)
+    let wfd = nx_os_pipe_write_fd(pipe_pair)
+    assert_eq rfd >= 3, 1
+    assert_eq wfd >= 3, 1
+
+    let msg = "NEXUS_PIPE_OK"
+    let nw = nx_os_fd_write(wfd, msg, 13)
+    assert_eq nw, 13
+
+    let rbuf = alloc 32
+    let nr = nx_os_fd_read(rfd, rbuf, 13)
+    store [rbuf + nr] 0
+    assert_eq nr, 13
+    assert_eq rbuf, "NEXUS_PIPE_OK"
+
+    let dup_rfd = nx_os_dup2(rfd, 90)
+    assert_eq dup_rfd, 90
+    nx_os_fd_close(90)
+    nx_os_fd_close(rfd)
+    nx_os_fd_close(wfd)
+
+    # 4. Non-Blocking Process Spawning (#156) & Exit Status Harvesting (`wait4` #161)
+    let cpid = nx_os_spawn_child_exit(42)
+    assert_eq cpid > 0, 1
+    let reaped_pid, exit_code = nx_os_waitpid(cpid, 0)
+    assert_eq reaped_pid, cpid
+    assert_eq exit_code, 42
+
+    # 5. Signal Registration (#163) & Signal Masking (#164)
+    assert_eq nx_os_sigaction_register(17, 5001), 0
+    assert_eq nx_os_sigaction_get(17), 5001
+    let old_mask = nx_os_sigprocmask(0, 0)
+    assert_eq old_mask >= 0, 1
+
+    # 6. PTY Allocation (#159), Window Size (#160) & Terminal Raw Mode (#199)
+    let pty = nx_os_openpty(24, 80)
+    assert_eq nx_os_pty_rows(pty), 24
+    assert_eq nx_os_pty_cols(pty), 80
+    nx_os_pty_set_winsize(pty, 50, 160, 1280, 800)
+    assert_eq nx_os_pty_rows(pty), 50
+    assert_eq nx_os_pty_cols(pty), 160
+    nx_os_fd_close(load64 [pty + 0])
+    nx_os_fd_close(load64 [pty + 8])
+
+    let tio = nx_termios_new_default()
+    assert_eq nx_termios_is_raw(tio), 0
+    nx_termios_enable_raw(tio)
+    assert_eq nx_termios_is_raw(tio), 1
+
+    # 7. Atomics (#172, #173), Futex Mutex (#167), Recursive Mutex (#168),
+    #    RwLock (#169), CondVar (#170), Semaphore (#171), Thread Join/Detach (#165, #166)
+    let a_cell = alloc 8
+    nx_atomic_store64(a_cell, 100, NX_MEM_ORDER_SEQ_CST)
+    assert_eq nx_atomic_load64(a_cell, NX_MEM_ORDER_ACQUIRE), 100
+    let prev_a = nx_atomic_fetch_add64(a_cell, 25, NX_MEM_ORDER_SEQ_CST)
+    assert_eq prev_a, 100
+    assert_eq nx_atomic_load64(a_cell, NX_MEM_ORDER_RELAXED), 125
+    assert_eq nx_atomic_cas64(a_cell, 125, 200, NX_MEM_ORDER_SEQ_CST), 1
+    assert_eq nx_atomic_cas64(a_cell, 125, 300, NX_MEM_ORDER_SEQ_CST), 0
+    assert_eq nx_atomic_load64(a_cell, NX_MEM_ORDER_SEQ_CST), 200
+
+    let mtx = nx_mutex_new()
+    assert_eq nx_mutex_lock(mtx), 1
+    assert_eq nx_mutex_trylock(mtx), 0
+    assert_eq nx_mutex_unlock(mtx), 0
+    assert_eq nx_mutex_trylock(mtx), 1
+    nx_mutex_unlock(mtx)
+
+    let rmtx = nx_rmutex_new()
+    assert_eq nx_rmutex_lock(rmtx), 1
+    assert_eq nx_rmutex_lock(rmtx), 2
+    assert_eq nx_rmutex_depth(rmtx), 2
+    assert_eq nx_rmutex_unlock(rmtx), 1
+    assert_eq nx_rmutex_unlock(rmtx), 0
+
+    let rw = nx_rwlock_new()
+    assert_eq nx_rwlock_read_lock(rw), 1
+    assert_eq nx_rwlock_read_lock(rw), 2
+    assert_eq nx_rwlock_write_lock(rw), 0
+    nx_rwlock_read_unlock(rw)
+    nx_rwlock_read_unlock(rw)
+    assert_eq nx_rwlock_write_lock(rw), 1
+    nx_rwlock_write_unlock(rw)
+
+    let cv = nx_condvar_new()
+    assert_eq nx_condvar_notify_one(cv), 1
+    assert_eq nx_condvar_notify_all(cv), 2
+
+    let sem = nx_semaphore_new(2)
+    assert_eq nx_semaphore_try_acquire(sem), 1
+    assert_eq nx_semaphore_try_acquire(sem), 1
+    assert_eq nx_semaphore_try_acquire(sem), 0
+    nx_semaphore_release(sem)
+    assert_eq nx_semaphore_available(sem), 1
+
+    let th = nx_thread_spawn_task(10, 32)
+    assert_eq nx_thread_join(th), 42
+    assert_eq nx_thread_detach(th), 0
+
+    # 8. MPSC Channel (#174) & SPSC Queue (#175)
+    let ch = nx_mpsc_new(8)
+    assert_eq nx_mpsc_send(ch, 701), 1
+    assert_eq nx_mpsc_send(ch, 702), 1
+    let v1, ok1 = nx_mpsc_recv(ch)
+    let v2, ok2 = nx_mpsc_recv(ch)
+    assert_eq ok1, 1
+    assert_eq v1, 701
+    assert_eq ok2, 1
+    assert_eq v2, 702
+
+    let spsc = nx_spsc_new(8)
+    nx_spsc_push(spsc, 900)
+    let sv, sok = nx_spsc_pop(spsc)
+    assert_eq sok, 1
+    assert_eq sv, 900
+
+    # 9. File Watcher (`inotify` #181–#183), Directory Traversal (`getdents64` #184),
+    #    `stat` (#185), `realpath` (#186), Atomic Save (#187), and `chmod` (#188)
+    let ifd = nx_fswatch_init()
+    assert_eq ifd >= 3, 1
+    let wd = nx_fswatch_add(ifd, "/tmp", NX_IN_MODIFY)
+    assert_eq wd >= 1, 1
+    nx_fswatch_rm(ifd, wd)
+    nx_os_fd_close(ifd)
+
+    let dir_entries = nx_os_dir_count_entries(".")
+    assert_eq dir_entries >= 3, 1
+
+    assert_eq nx_os_stat_is_dir("."), 1
+    assert_eq nx_os_stat_is_reg("."), 0
+
+    let atom_file = "/tmp/nexus_atomic_test.txt"
+    let aw = nx_os_atomic_write_file(atom_file, "ATOMIC_PAYLOAD_123")
+    assert_eq aw, 18
+    assert_eq nx_os_stat_size(atom_file), 18
+    assert_eq nx_os_stat_is_reg(atom_file), 1
+    assert_eq nx_os_chmod(atom_file, 493), 0
+
+    let rp = nx_os_realpath("./nexus")
+    assert_eq load [rp + 0], 47
+
+    # 10. Virtual Memory (`mmap`/`mprotect`/`madvise`/`munmap` #192–#194) & `memfd_create` (#191)
+    let vmem = nx_os_mmap_anon(4096)
+    assert_eq vmem > 0, 1
+    store64 [vmem + 0] 123456789
+    assert_eq load64 [vmem + 0], 123456789
+    assert_eq nx_os_madvise(vmem, 4096, NX_MADV_SEQUENTIAL), 0
+    assert_eq nx_os_mprotect(vmem, 4096, NX_PROT_READ + NX_PROT_WRITE), 0
+    assert_eq nx_os_munmap(vmem, 4096), 0
+
+    let mfd = nx_os_memfd_create("nexus_shm")
+    assert_eq mfd >= 3, 1
+    nx_os_fd_write(mfd, "SHM_OK", 6)
+    nx_os_fd_close(mfd)
+
+    # 11. Non-Blocking Socket (#189), DNS Resolver (#190), Event Mux (#177/#178),
+    #     Environment (#195), Clipboard (#200–#203), Notifications (#204), Inhibitor (#205)
+    let sfd = nx_os_socket_nonblock(NX_AF_UNIX, NX_SOCK_STREAM, 0)
+    assert_eq sfd >= 3, 1
+    nx_os_fd_close(sfd)
+
+    assert_eq nx_os_resolve_ipv4("localhost"), 2130706433
+    assert_eq nx_os_resolve_ipv4("10.0.0.1"), 167772161
+
+    let mux = nx_io_mux_new()
+    nx_io_mux_post_completion(mux, 404, 128)
+    assert_eq nx_io_mux_last_key(mux), 404
+    nx_os_fd_close(load64 [mux + 0])
+
+    nx_os_setenv("NEXUS_HOME", "/opt/nexus")
+    assert_eq nx_os_getenv("NEXUS_HOME"), "/opt/nexus"
+
+    nx_clipboard_set("copied_code_snippet", 0)
+    assert_eq nx_clipboard_get(0), "copied_code_snippet"
+
+    assert_eq nx_desktop_notify("NEXUS", "Build Complete", "0 errors"), 1
+    let cookie = nx_sleep_inhibit_acquire("Compiling project")
+    assert_eq cookie > 0, 1
+    assert_eq nx_sleep_inhibit_release(cookie), 1
+
+    print "PHASE_C_OS_CONCURRENCY_PASS"
+    call nx_assert_summary
+}
+
+call main
